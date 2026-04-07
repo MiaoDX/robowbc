@@ -1,0 +1,18 @@
+[workspace]
+members = [
+    "crates/robowbc-core",
+    "crates/robowbc-ort",
+    "crates/robowbc-registry",
+    "crates/robowbc-cli",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+version = "0.1.0"
+authors = ["RoboWBC Contributors"]
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"

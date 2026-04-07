@@ -1,0 +1,10 @@
+[package]
+name = "robowbc-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "robowbc"
+path = "src/main.rs"
