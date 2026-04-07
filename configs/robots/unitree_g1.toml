@@ -1,0 +1,139 @@
+# Unitree G1 29-DOF robot configuration.
+#
+# Joint ordering, PD gains, limits, and default standing pose sourced from
+# GEAR-SONIC C++ deployment code (NVlabs/GR00T-WholeBodyControl).
+# Joint limits from MuJoCo model (g1_29dof.xml).
+
+name = "unitree_g1"
+joint_count = 29
+
+joint_names = [
+    "left_hip_pitch_joint",
+    "left_hip_roll_joint",
+    "left_hip_yaw_joint",
+    "left_knee_joint",
+    "left_ankle_pitch_joint",
+    "left_ankle_roll_joint",
+    "right_hip_pitch_joint",
+    "right_hip_roll_joint",
+    "right_hip_yaw_joint",
+    "right_knee_joint",
+    "right_ankle_pitch_joint",
+    "right_ankle_roll_joint",
+    "waist_yaw_joint",
+    "waist_roll_joint",
+    "waist_pitch_joint",
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "left_wrist_roll_joint",
+    "left_wrist_pitch_joint",
+    "left_wrist_yaw_joint",
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint",
+    "right_wrist_pitch_joint",
+    "right_wrist_yaw_joint",
+]
+
+# PD gains from GEAR-SONIC policy_parameters.hpp (IsaacLab order).
+pd_gains = [
+    { kp = 15.826, kd = 6.299 },  # left_hip_pitch
+    { kp = 15.826, kd = 6.299 },  # left_hip_roll
+    { kp =  4.439, kd = 1.769 },  # left_hip_yaw
+    { kp = 15.826, kd = 6.299 },  # left_knee
+    { kp =  7.238, kd = 5.759 },  # left_ankle_pitch
+    { kp =  7.238, kd = 5.759 },  # left_ankle_roll
+    { kp = 15.826, kd = 6.299 },  # right_hip_pitch
+    { kp = 15.826, kd = 6.299 },  # right_hip_roll
+    { kp =  4.439, kd = 1.769 },  # right_hip_yaw
+    { kp = 15.826, kd = 6.299 },  # right_knee
+    { kp =  7.238, kd = 5.759 },  # right_ankle_pitch
+    { kp =  7.238, kd = 5.759 },  # right_ankle_roll
+    { kp =  4.439, kd = 1.769 },  # waist_yaw
+    { kp =  7.238, kd = 5.759 },  # waist_roll
+    { kp =  7.238, kd = 5.759 },  # waist_pitch
+    { kp =  3.619, kd = 2.880 },  # left_shoulder_pitch
+    { kp =  3.619, kd = 2.880 },  # left_shoulder_roll
+    { kp =  3.619, kd = 2.880 },  # left_shoulder_yaw
+    { kp =  3.619, kd = 2.880 },  # left_elbow
+    { kp =  3.619, kd = 2.880 },  # left_wrist_roll
+    { kp =  1.069, kd = 0.851 },  # left_wrist_pitch
+    { kp =  1.069, kd = 0.851 },  # left_wrist_yaw
+    { kp =  3.619, kd = 2.880 },  # right_shoulder_pitch
+    { kp =  3.619, kd = 2.880 },  # right_shoulder_roll
+    { kp =  3.619, kd = 2.880 },  # right_shoulder_yaw
+    { kp =  3.619, kd = 2.880 },  # right_elbow
+    { kp =  3.619, kd = 2.880 },  # right_wrist_roll
+    { kp =  1.069, kd = 0.851 },  # right_wrist_pitch
+    { kp =  1.069, kd = 0.851 },  # right_wrist_yaw
+]
+
+# Joint limits from g1_29dof.xml MuJoCo model (radians).
+joint_limits = [
+    { min = -2.5307, max =  2.8798 },  # left_hip_pitch
+    { min = -0.5236, max =  2.9671 },  # left_hip_roll
+    { min = -2.7576, max =  2.7576 },  # left_hip_yaw
+    { min = -0.0873, max =  2.8798 },  # left_knee
+    { min = -0.8727, max =  0.5236 },  # left_ankle_pitch
+    { min = -0.2618, max =  0.2618 },  # left_ankle_roll
+    { min = -2.5307, max =  2.8798 },  # right_hip_pitch
+    { min = -2.9671, max =  0.5236 },  # right_hip_roll
+    { min = -2.7576, max =  2.7576 },  # right_hip_yaw
+    { min = -0.0873, max =  2.8798 },  # right_knee
+    { min = -0.8727, max =  0.5236 },  # right_ankle_pitch
+    { min = -0.2618, max =  0.2618 },  # right_ankle_roll
+    { min = -2.6180, max =  2.6180 },  # waist_yaw
+    { min = -0.5200, max =  0.5200 },  # waist_roll
+    { min = -0.5200, max =  0.5200 },  # waist_pitch
+    { min = -3.0892, max =  2.6704 },  # left_shoulder_pitch
+    { min = -1.5882, max =  2.2515 },  # left_shoulder_roll
+    { min = -2.6180, max =  2.6180 },  # left_shoulder_yaw
+    { min = -1.0472, max =  2.0944 },  # left_elbow
+    { min = -1.9722, max =  1.9722 },  # left_wrist_roll
+    { min = -1.6144, max =  1.6144 },  # left_wrist_pitch
+    { min = -1.6144, max =  1.6144 },  # left_wrist_yaw
+    { min = -3.0892, max =  2.6704 },  # right_shoulder_pitch
+    { min = -2.2515, max =  1.5882 },  # right_shoulder_roll
+    { min = -2.6180, max =  2.6180 },  # right_shoulder_yaw
+    { min = -1.0472, max =  2.0944 },  # right_elbow
+    { min = -1.9722, max =  1.9722 },  # right_wrist_roll
+    { min = -1.6144, max =  1.6144 },  # right_wrist_pitch
+    { min = -1.6144, max =  1.6144 },  # right_wrist_yaw
+]
+
+# Default standing pose from GEAR-SONIC policy_parameters.hpp (radians).
+default_pose = [
+    -0.312,  # left_hip_pitch
+     0.0,    # left_hip_roll
+     0.0,    # left_hip_yaw
+     0.669,  # left_knee
+    -0.363,  # left_ankle_pitch
+     0.0,    # left_ankle_roll
+    -0.312,  # right_hip_pitch
+     0.0,    # right_hip_roll
+     0.0,    # right_hip_yaw
+     0.669,  # right_knee
+    -0.363,  # right_ankle_pitch
+     0.0,    # right_ankle_roll
+     0.0,    # waist_yaw
+     0.0,    # waist_roll
+     0.0,    # waist_pitch
+     0.2,    # left_shoulder_pitch
+     0.2,    # left_shoulder_roll
+     0.0,    # left_shoulder_yaw
+     0.6,    # left_elbow
+     0.0,    # left_wrist_roll
+     0.0,    # left_wrist_pitch
+     0.0,    # left_wrist_yaw
+     0.2,    # right_shoulder_pitch
+    -0.2,    # right_shoulder_roll
+     0.0,    # right_shoulder_yaw
+     0.6,    # right_elbow
+     0.0,    # right_wrist_roll
+     0.0,    # right_wrist_pitch
+     0.0,    # right_wrist_yaw
+]
