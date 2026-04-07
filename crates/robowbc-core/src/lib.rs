@@ -1,5 +1,7 @@
 //! Core interfaces and data types for RoboWBC.
 
+use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::time::Instant;
 
 /// Result type used across the RoboWBC core abstractions.
@@ -87,7 +89,7 @@ pub struct JointPositionTargets {
 }
 
 /// Robot hardware configuration used to validate policy compatibility.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RobotConfig {
     /// Human-readable robot identifier.
     pub name: String,
@@ -103,8 +105,67 @@ pub struct RobotConfig {
     pub default_pose: Vec<f32>,
 }
 
+impl RobotConfig {
+    /// Loads a [`RobotConfig`] from a TOML file on disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be read or the TOML is malformed.
+    pub fn from_toml_file(path: &Path) -> std::result::Result<Self, Box<dyn std::error::Error>> {
+        let contents = std::fs::read_to_string(path)?;
+        Self::from_toml_str(&contents)
+    }
+
+    /// Parses a [`RobotConfig`] from a TOML string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the TOML is malformed or fails validation.
+    pub fn from_toml_str(s: &str) -> std::result::Result<Self, Box<dyn std::error::Error>> {
+        let config: Self = toml::from_str(s)?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// Validates internal consistency of the configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if array lengths do not match `joint_count`.
+    pub fn validate(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let n = self.joint_count;
+        if self.joint_names.len() != n {
+            return Err(format!(
+                "joint_names length {} != joint_count {n}",
+                self.joint_names.len()
+            )
+            .into());
+        }
+        if self.pd_gains.len() != n {
+            return Err(
+                format!("pd_gains length {} != joint_count {n}", self.pd_gains.len()).into(),
+            );
+        }
+        if self.joint_limits.len() != n {
+            return Err(format!(
+                "joint_limits length {} != joint_count {n}",
+                self.joint_limits.len()
+            )
+            .into());
+        }
+        if self.default_pose.len() != n {
+            return Err(format!(
+                "default_pose length {} != joint_count {n}",
+                self.default_pose.len()
+            )
+            .into());
+        }
+        Ok(())
+    }
+}
+
 /// PD gains for one joint.
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PdGains {
     /// Proportional gain.
     pub kp: f32,
@@ -113,7 +174,7 @@ pub struct PdGains {
 }
 
 /// Joint angle limits for one joint.
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JointLimit {
     /// Lower bound in radians.
     pub min: f32,
@@ -230,6 +291,54 @@ mod tests {
         assert_eq!(robot.joint_count, robot.pd_gains.len());
         assert_eq!(robot.joint_count, robot.joint_limits.len());
         assert_eq!(robot.joint_count, robot.default_pose.len());
+    }
+
+    #[test]
+    fn robot_config_round_trips_through_toml() {
+        let robot = sample_robot();
+        let toml_str = toml::to_string(&robot).expect("serialization should succeed");
+        let loaded = RobotConfig::from_toml_str(&toml_str).expect("deserialization should succeed");
+        assert_eq!(robot, loaded);
+    }
+
+    #[test]
+    fn unitree_g1_config_loads_from_toml_file() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../configs/robots/unitree_g1.toml");
+        let config = RobotConfig::from_toml_file(&path).expect("G1 config should load");
+
+        assert_eq!(config.name, "unitree_g1");
+        assert_eq!(config.joint_count, 29);
+        assert_eq!(config.joint_names.len(), 29);
+        assert_eq!(config.pd_gains.len(), 29);
+        assert_eq!(config.joint_limits.len(), 29);
+        assert_eq!(config.default_pose.len(), 29);
+
+        // Verify first joint matches GEAR-SONIC reference values.
+        assert_eq!(config.joint_names[0], "left_hip_pitch_joint");
+        assert!((config.pd_gains[0].kp - 15.826).abs() < 1e-3);
+        assert!((config.pd_gains[0].kd - 6.299).abs() < 1e-3);
+        assert!((config.default_pose[0] - (-0.312)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn robot_config_validate_rejects_mismatched_lengths() {
+        let mut robot = sample_robot();
+        robot.joint_count = 3;
+        assert!(robot.validate().is_err());
+    }
+
+    #[test]
+    fn robot_config_from_toml_str_rejects_invalid() {
+        let bad_toml = r#"
+            name = "bad"
+            joint_count = 2
+            joint_names = ["a"]
+            pd_gains = [{ kp = 1.0, kd = 0.1 }]
+            joint_limits = [{ min = -1.0, max = 1.0 }]
+            default_pose = [0.0]
+        "#;
+        assert!(RobotConfig::from_toml_str(bad_toml).is_err());
     }
 
     #[test]
