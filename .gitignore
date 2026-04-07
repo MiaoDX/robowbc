@@ -1,0 +1,9 @@
+# Auto-generated files
+/target/
+*.onnx
+*.pt
+*.engine
+__pycache__/
+*.pyc
+.env
+
