@@ -805,8 +805,11 @@ name = "robowbc-ort"
 version = "0.1.0"
 dependencies = [
  "criterion",
+ "inventory",
  "ndarray 0.16.1",
  "ort",
+ "robowbc-core",
+ "robowbc-registry",
  "serde",
  "thiserror",
  "toml",

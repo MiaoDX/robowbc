@@ -21,8 +21,13 @@
 use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
 use ort::value::Tensor;
+use robowbc_core::{
+    JointPositionTargets, Observation, Result as CoreResult, RobotConfig, WbcCommand,
+};
+use robowbc_registry::{RegistryPolicy, WbcRegistration};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 /// Errors produced by the ONNX Runtime backend.
 #[derive(Debug, thiserror::Error)]
@@ -388,10 +393,173 @@ impl std::fmt::Debug for OrtBackend {
     }
 }
 
+/// Configuration for a `GEAR-SONIC` policy composed from three ONNX models.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GearSonicConfig {
+    /// Encoder model configuration.
+    pub encoder: OrtConfig,
+    /// Decoder model configuration.
+    pub decoder: OrtConfig,
+    /// Planner model configuration.
+    pub planner: OrtConfig,
+    /// Robot configuration used to validate output vector dimensions.
+    pub robot: RobotConfig,
+}
+
+/// A chain-style implementation of the `GEAR-SONIC` policy.
+///
+/// The policy runs:
+/// `motion_tokens -> encoder -> planner -> decoder -> joint position targets`.
+/// The most recent encoder output is cached to support planner models that may
+/// require temporal continuity.
+pub struct GearSonicPolicy {
+    encoder: Mutex<OrtBackend>,
+    decoder: Mutex<OrtBackend>,
+    planner: Mutex<OrtBackend>,
+    robot: RobotConfig,
+    encoder_cache: Mutex<Option<Vec<f32>>>,
+}
+
+impl GearSonicPolicy {
+    /// Builds a policy instance from explicit model and robot configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`robowbc_core::WbcError::InferenceFailed`] when any ONNX model
+    /// session fails to initialize.
+    pub fn new(config: GearSonicConfig) -> CoreResult<Self> {
+        let encoder = OrtBackend::new(&config.encoder)
+            .map_err(|e| robowbc_core::WbcError::InferenceFailed(e.to_string()))?;
+        let decoder = OrtBackend::new(&config.decoder)
+            .map_err(|e| robowbc_core::WbcError::InferenceFailed(e.to_string()))?;
+        let planner = OrtBackend::new(&config.planner)
+            .map_err(|e| robowbc_core::WbcError::InferenceFailed(e.to_string()))?;
+
+        Ok(Self {
+            encoder: Mutex::new(encoder),
+            decoder: Mutex::new(decoder),
+            planner: Mutex::new(planner),
+            robot: config.robot,
+            encoder_cache: Mutex::new(None),
+        })
+    }
+
+    fn first_input_name(backend: &OrtBackend) -> CoreResult<&str> {
+        backend.input_names().first().map(String::as_str).ok_or(
+            robowbc_core::WbcError::InferenceFailed("model has no inputs".to_owned()),
+        )
+    }
+
+    fn run_single_input_model(
+        backend: &mut OrtBackend,
+        input_data: &[f32],
+    ) -> CoreResult<Vec<f32>> {
+        let input_name = Self::first_input_name(backend)?.to_owned();
+        let input_len = i64::try_from(input_data.len()).map_err(|_| {
+            robowbc_core::WbcError::InferenceFailed("input shape overflow".to_owned())
+        })?;
+        let outputs = backend
+            .run(&[(&input_name, input_data, &[1, input_len])])
+            .map_err(|e| robowbc_core::WbcError::InferenceFailed(e.to_string()))?;
+
+        outputs
+            .into_iter()
+            .next()
+            .ok_or(robowbc_core::WbcError::InferenceFailed(
+                "model returned no outputs".to_owned(),
+            ))
+    }
+}
+
+impl robowbc_core::WbcPolicy for GearSonicPolicy {
+    fn predict(&self, obs: &Observation) -> CoreResult<JointPositionTargets> {
+        if obs.joint_positions.len() != self.robot.joint_count {
+            return Err(robowbc_core::WbcError::InvalidObservation(
+                "joint_positions length does not match robot.joint_count",
+            ));
+        }
+
+        let motion_tokens = match &obs.command {
+            WbcCommand::MotionTokens(tokens) if !tokens.is_empty() => tokens.as_slice(),
+            WbcCommand::MotionTokens(_) => {
+                return Err(robowbc_core::WbcError::InvalidObservation(
+                    "motion token command must not be empty",
+                ))
+            }
+            _ => {
+                return Err(robowbc_core::WbcError::UnsupportedCommand(
+                    "GearSonicPolicy requires WbcCommand::MotionTokens",
+                ))
+            }
+        };
+
+        let mut encoder = self.encoder.lock().map_err(|_| {
+            robowbc_core::WbcError::InferenceFailed("encoder mutex poisoned".to_owned())
+        })?;
+        let encoder_out = Self::run_single_input_model(&mut encoder, motion_tokens)?;
+        drop(encoder);
+
+        let planner_input = {
+            let mut cache = self.encoder_cache.lock().map_err(|_| {
+                robowbc_core::WbcError::InferenceFailed("encoder cache mutex poisoned".to_owned())
+            })?;
+            let mut merged = cache.clone().unwrap_or_default();
+            merged.extend_from_slice(&encoder_out);
+            *cache = Some(encoder_out);
+            merged
+        };
+
+        let mut planner = self.planner.lock().map_err(|_| {
+            robowbc_core::WbcError::InferenceFailed("planner mutex poisoned".to_owned())
+        })?;
+        let planner_out = Self::run_single_input_model(&mut planner, &planner_input)?;
+        drop(planner);
+
+        let mut decoder = self.decoder.lock().map_err(|_| {
+            robowbc_core::WbcError::InferenceFailed("decoder mutex poisoned".to_owned())
+        })?;
+        let joint_targets = Self::run_single_input_model(&mut decoder, &planner_out)?;
+
+        if joint_targets.len() != self.robot.joint_count {
+            return Err(robowbc_core::WbcError::InvalidTargets(
+                "decoder output length does not match robot.joint_count",
+            ));
+        }
+
+        Ok(JointPositionTargets {
+            positions: joint_targets,
+            timestamp: obs.timestamp,
+        })
+    }
+
+    fn control_frequency_hz(&self) -> u32 {
+        50
+    }
+
+    fn supported_robots(&self) -> &[RobotConfig] {
+        std::slice::from_ref(&self.robot)
+    }
+}
+
+impl RegistryPolicy for GearSonicPolicy {
+    fn from_config(config: &toml::Value) -> CoreResult<Self> {
+        let parsed: GearSonicConfig = config.clone().try_into().map_err(|e| {
+            robowbc_core::WbcError::InferenceFailed(format!("invalid gear_sonic config: {e}"))
+        })?;
+        Self::new(parsed)
+    }
+}
+
+inventory::submit! {
+    WbcRegistration::new::<GearSonicPolicy>("gear_sonic")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use robowbc_core::{WbcCommand, WbcPolicy};
     use std::path::PathBuf;
+    use std::time::Instant;
 
     fn fixture_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
@@ -403,6 +571,32 @@ mod tests {
 
     fn has_test_model() -> bool {
         identity_model_path().exists()
+    }
+
+    fn test_ort_config(model_path: PathBuf) -> OrtConfig {
+        OrtConfig {
+            model_path,
+            execution_provider: ExecutionProvider::Cpu,
+            optimization_level: OptimizationLevel::Extended,
+            num_threads: 1,
+        }
+    }
+
+    fn test_robot_config(joint_count: usize) -> RobotConfig {
+        RobotConfig {
+            name: "unitree_g1_test".to_owned(),
+            joint_count,
+            joint_names: (0..joint_count).map(|i| format!("j{i}")).collect(),
+            pd_gains: vec![robowbc_core::PdGains { kp: 1.0, kd: 0.1 }; joint_count],
+            joint_limits: vec![
+                robowbc_core::JointLimit {
+                    min: -1.0,
+                    max: 1.0
+                };
+                joint_count
+            ],
+            default_pose: vec![0.0; joint_count],
+        }
     }
 
     // --- Error path tests (no model needed) ---
@@ -580,5 +774,67 @@ mod tests {
         let debug_str = format!("{backend:?}");
         assert!(debug_str.contains("input"));
         assert!(debug_str.contains("output"));
+    }
+
+    #[test]
+    fn gear_sonic_policy_predicts_with_three_identity_models() {
+        if !has_test_model() {
+            eprintln!(
+                "skipping: test model not found at {:?}",
+                identity_model_path()
+            );
+            return;
+        }
+
+        let config = GearSonicConfig {
+            encoder: test_ort_config(identity_model_path()),
+            decoder: test_ort_config(identity_model_path()),
+            planner: test_ort_config(identity_model_path()),
+            robot: test_robot_config(4),
+        };
+
+        let policy = GearSonicPolicy::new(config).expect("policy should build");
+        let obs = Observation {
+            joint_positions: vec![0.0, 0.0, 0.0, 0.0],
+            joint_velocities: vec![0.0, 0.0, 0.0, 0.0],
+            gravity_vector: [0.0, 0.0, -1.0],
+            command: WbcCommand::MotionTokens(vec![0.25, -0.25, 0.5, -0.5]),
+            timestamp: Instant::now(),
+        };
+
+        let targets = policy.predict(&obs).expect("prediction should succeed");
+        assert_eq!(targets.positions, vec![0.25, -0.25, 0.5, -0.5]);
+    }
+
+    #[test]
+    fn gear_sonic_policy_rejects_non_motion_command() {
+        if !has_test_model() {
+            eprintln!(
+                "skipping: test model not found at {:?}",
+                identity_model_path()
+            );
+            return;
+        }
+
+        let config = GearSonicConfig {
+            encoder: test_ort_config(identity_model_path()),
+            decoder: test_ort_config(identity_model_path()),
+            planner: test_ort_config(identity_model_path()),
+            robot: test_robot_config(4),
+        };
+
+        let policy = GearSonicPolicy::new(config).expect("policy should build");
+        let obs = Observation {
+            joint_positions: vec![0.0; 4],
+            joint_velocities: vec![0.0; 4],
+            gravity_vector: [0.0, 0.0, -1.0],
+            command: WbcCommand::JointTargets(vec![0.0; 4]),
+            timestamp: Instant::now(),
+        };
+
+        let err = policy
+            .predict(&obs)
+            .expect_err("non-motion command should fail");
+        assert!(matches!(err, robowbc_core::WbcError::UnsupportedCommand(_)));
     }
 }
