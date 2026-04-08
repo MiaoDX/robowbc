@@ -1,6 +1,8 @@
 # Auto-generated files
 /target/
 *.onnx
+# Allow small test fixture models
+!crates/robowbc-ort/tests/fixtures/*.onnx
 *.pt
 *.engine
 __pycache__/
