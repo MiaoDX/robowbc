@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+description = "Communication layer for humanoid whole-body control"
 
 [lib]
 path = "src/lib.rs"
@@ -11,4 +12,13 @@ path = "src/lib.rs"
 [dependencies]
 robowbc-core = { path = "../robowbc-core" }
 serde = { workspace = true }
-thiserror = "1"
+thiserror = "2"
+toml = { workspace = true }
+tokio = { version = "1", features = ["time"] }
+zenoh = "1.8"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }
+
+[lints]
+workspace = true

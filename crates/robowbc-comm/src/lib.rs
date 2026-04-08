@@ -1,8 +1,16 @@
 //! Communication layer for robot I/O.
 //!
-//! This crate defines a zenoh-compatible transport abstraction plus a stable
-//! 50 Hz control-loop runner. A concrete transport can connect to real zenoh
-//! sessions, while tests can use the in-memory transport included here.
+//! This crate defines a transport abstraction plus a stable 50 Hz
+//! control-loop runner. Concrete transports include:
+//!
+//! - [`InMemoryTransport`] — for tests and simulation
+//! - [`zenoh_comm::CommNode`] — real zenoh pub/sub for hardware I/O
+//!
+//! The [`wire`] module handles binary encoding of joint-state and command
+//! messages for the Unitree G1 DDS bridge.
+
+pub mod wire;
+pub mod zenoh_comm;
 
 use robowbc_core::{JointPositionTargets, Observation, Result as CoreResult, WbcCommand, WbcError};
 use serde::{Deserialize, Serialize};
@@ -71,7 +79,7 @@ pub struct ImuSample {
 }
 
 /// Errors produced by communication components.
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Debug, thiserror::Error)]
 pub enum CommError {
     /// No joint state sample was available when requested.
     #[error("joint state unavailable")]
@@ -87,13 +95,41 @@ pub enum CommError {
     InvalidConfig { reason: &'static str },
 }
 
+impl PartialEq for CommError {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::JointStateUnavailable, Self::JointStateUnavailable)
+            | (Self::ImuUnavailable, Self::ImuUnavailable) => true,
+            (Self::PublishFailed { reason: a }, Self::PublishFailed { reason: b }) => a == b,
+            (Self::InvalidConfig { reason: a }, Self::InvalidConfig { reason: b }) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for CommError {}
+
 /// Transport contract for robot communication backends.
 pub trait RobotTransport {
     /// Receives latest joint state sample.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommError`] if no sample is available.
     fn recv_joint_state(&mut self) -> Result<JointState, CommError>;
+
     /// Receives latest IMU sample.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommError`] if no sample is available.
     fn recv_imu(&mut self) -> Result<ImuSample, CommError>;
+
     /// Publishes joint position targets.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommError`] if the command cannot be sent.
     fn send_joint_targets(&mut self, targets: &JointPositionTargets) -> Result<(), CommError>;
 }
 
@@ -149,6 +185,10 @@ impl RobotTransport for InMemoryTransport {
 }
 
 /// Runs a single control-loop tick: read state + imu, invoke policy callback, publish targets.
+///
+/// # Errors
+///
+/// Returns [`CommError`] if transport I/O or the policy callback fails.
 pub fn run_control_tick<T, F>(
     transport: &mut T,
     command: WbcCommand,
@@ -179,6 +219,11 @@ where
 /// Runs a fixed-rate control loop for `ticks` iterations.
 ///
 /// Returns the achieved frequency in hertz.
+///
+/// # Errors
+///
+/// Returns [`CommError`] if the frequency is invalid or a tick fails.
+#[allow(clippy::needless_pass_by_value)]
 pub fn run_fixed_rate_loop<T, F>(
     transport: &mut T,
     config: &CommConfig,
@@ -203,8 +248,8 @@ where
         let cycle_start = Instant::now();
         run_control_tick(transport, command.clone(), &mut policy_fn)?;
         let elapsed = cycle_start.elapsed();
-        if elapsed < period {
-            thread::sleep(period - elapsed);
+        if let Some(remaining) = period.checked_sub(elapsed) {
+            thread::sleep(remaining);
         }
     }
 
@@ -215,10 +260,15 @@ where
         });
     }
 
+    #[allow(clippy::cast_precision_loss)]
     Ok((ticks as f64) / total)
 }
 
 /// Validates target vector dimensionality before publishing to hardware.
+///
+/// # Errors
+///
+/// Returns [`WbcError::InvalidTargets`] if the position count does not match.
 pub fn validate_target_dim(
     targets: &JointPositionTargets,
     joint_count: usize,
