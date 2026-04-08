@@ -4,6 +4,21 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
+description = "ONNX Runtime inference backend for RoboWBC"
 
 [lib]
 path = "src/lib.rs"
+
+[dependencies]
+ndarray = "0.16"
+ort = { version = "2.0.0-rc.12", default-features = true }
+serde = { workspace = true }
+thiserror = "2"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+toml = { workspace = true }
+
+[[bench]]
+name = "inference"
+harness = false
