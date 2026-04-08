@@ -54,6 +54,17 @@ pub enum OrtError {
         actual: usize,
     },
 
+    /// Input tensor shape contains a negative dimension.
+    #[error("invalid shape for input '{name}': negative dimension {dimension} at index {index}")]
+    InvalidShape {
+        /// Input tensor name.
+        name: String,
+        /// Index of the offending dimension.
+        index: usize,
+        /// The negative dimension value.
+        dimension: i64,
+    },
+
     /// Inference execution failed inside ONNX Runtime.
     #[error("inference failed: {reason}")]
     InferenceFailed {
@@ -217,8 +228,9 @@ impl OrtBackend {
     ///
     /// # Errors
     ///
-    /// Returns [`OrtError::ShapeMismatch`] if a data slice length does not match
-    /// its declared shape, or [`OrtError::InferenceFailed`] if execution fails.
+    /// Returns [`OrtError::InvalidShape`] if a shape contains negative dimensions,
+    /// [`OrtError::ShapeMismatch`] if a data slice length does not match its
+    /// declared shape, or [`OrtError::InferenceFailed`] if execution fails.
     pub fn run(&mut self, inputs: &[(&str, &[f32], &[i64])]) -> Result<Vec<Vec<f32>>, OrtError> {
         let input_values = Self::build_input_values(inputs)?;
 
@@ -293,7 +305,30 @@ impl OrtBackend {
         inputs
             .iter()
             .map(|(name, data, shape)| {
-                let expected_len: usize = shape.iter().map(|&d| d as usize).product();
+                let mut expected_len: usize = 1;
+                for (index, &dimension) in shape.iter().enumerate() {
+                    if dimension < 0 {
+                        return Err(OrtError::InvalidShape {
+                            name: (*name).to_owned(),
+                            index,
+                            dimension,
+                        });
+                    }
+
+                    let dimension =
+                        usize::try_from(dimension).map_err(|_| OrtError::InvalidShape {
+                            name: (*name).to_owned(),
+                            index,
+                            dimension,
+                        })?;
+                    expected_len = expected_len.checked_mul(dimension).ok_or_else(|| {
+                        OrtError::InferenceFailed {
+                            reason: format!(
+                                "input '{name}' shape {shape:?} overflows usize element count"
+                            ),
+                        }
+                    })?;
+                }
                 if data.len() != expected_len {
                     return Err(OrtError::ShapeMismatch {
                         name: (*name).to_owned(),
@@ -428,6 +463,22 @@ mod tests {
         assert!(
             matches!(result, Err(OrtError::ShapeMismatch { .. })),
             "expected ShapeMismatch, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn negative_dimension_is_rejected_before_inference() {
+        let result = OrtBackend::build_input_values(&[("input", &[1.0, 2.0], &[1, -2])]);
+        assert!(
+            matches!(
+                result,
+                Err(OrtError::InvalidShape {
+                    ref name,
+                    index: 1,
+                    dimension: -2
+                }) if name == "input"
+            ),
+            "expected InvalidShape for negative dimension, got: {result:?}"
         );
     }
 
