@@ -10,14 +10,17 @@ description = "ONNX Runtime inference backend for RoboWBC"
 path = "src/lib.rs"
 
 [dependencies]
+inventory = "0.3"
 ndarray = "0.16"
 ort = { version = "2.0.0-rc.12", default-features = true }
+robowbc-core = { path = "../robowbc-core" }
+robowbc-registry = { path = "../robowbc-registry" }
 serde = { workspace = true }
 thiserror = "2"
+toml = { workspace = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
-toml = { workspace = true }
 
 [[bench]]
 name = "inference"
