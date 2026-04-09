@@ -2,6 +2,7 @@
 members = [
     "crates/robowbc-core",
     "crates/robowbc-ort",
+    "crates/robowbc-pyo3",
     "crates/robowbc-registry",
     "crates/robowbc-comm",
     "crates/robowbc-cli",
