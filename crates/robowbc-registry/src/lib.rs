@@ -171,6 +171,7 @@ mod tests {
                     pd_gains: vec![],
                     joint_limits: vec![],
                     default_pose: vec![0.0, 0.0],
+                    model_path: None,
                 }],
             })
         }

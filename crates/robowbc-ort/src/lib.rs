@@ -596,6 +596,7 @@ mod tests {
                 joint_count
             ],
             default_pose: vec![0.0; joint_count],
+            model_path: None,
         }
     }
 

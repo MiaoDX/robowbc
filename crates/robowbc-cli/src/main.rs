@@ -354,6 +354,7 @@ mod tests {
                 },
             ],
             default_pose: vec![0.0, 0.0, 0.0, 0.0],
+            model_path: None,
         };
 
         let mut cfg_map = toml::map::Map::new();
