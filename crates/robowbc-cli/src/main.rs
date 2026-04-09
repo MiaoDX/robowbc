@@ -1,7 +1,7 @@
 use robowbc_comm::{
     run_control_tick, CommConfig, CommError, ImuSample, JointState, RobotTransport,
 };
-use robowbc_core::{JointPositionTargets, RobotConfig, WbcCommand, WbcPolicy};
+use robowbc_core::{JointPositionTargets, RobotConfig, Twist, WbcCommand, WbcPolicy};
 use robowbc_registry::{RegistryError, WbcRegistry};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
@@ -32,6 +32,10 @@ struct RobotSection {
 struct RuntimeConfig {
     #[serde(default = "default_motion_tokens")]
     motion_tokens: Vec<f32>,
+    /// Velocity command `[vx, vy, yaw_rate]`. When set, uses
+    /// `WbcCommand::Velocity` instead of `WbcCommand::MotionTokens`.
+    #[serde(default)]
+    velocity: Option<[f32; 3]>,
     #[serde(default)]
     max_ticks: Option<usize>,
 }
@@ -44,6 +48,7 @@ impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
             motion_tokens: default_motion_tokens(),
+            velocity: None,
             max_ticks: Some(200),
         }
     }
@@ -168,11 +173,9 @@ fn run_control_loop(
     if comm.frequency_hz == 0 {
         return Err("comm.frequency_hz must be > 0".to_owned());
     }
-    if runtime.motion_tokens.is_empty() {
-        return Err("runtime.motion_tokens must not be empty".to_owned());
-    }
 
     let _ = std::any::TypeId::of::<robowbc_ort::GearSonicPolicy>();
+    let _ = std::any::TypeId::of::<robowbc_ort::DecoupledWbcPolicy>();
 
     let running = Arc::new(AtomicBool::new(true));
     {
@@ -184,7 +187,17 @@ fn run_control_loop(
     }
 
     let mut transport = SyntheticTransport::new(robot.joint_count);
-    let command = WbcCommand::MotionTokens(runtime.motion_tokens.clone());
+    let command = if let Some([vx, vy, yaw]) = runtime.velocity {
+        WbcCommand::Velocity(Twist {
+            linear: [vx, vy, 0.0],
+            angular: [0.0, 0.0, yaw],
+        })
+    } else {
+        if runtime.motion_tokens.is_empty() {
+            return Err("runtime.motion_tokens must not be empty".to_owned());
+        }
+        WbcCommand::MotionTokens(runtime.motion_tokens.clone())
+    };
     let period = Duration::from_secs_f64(1.0 / f64::from(comm.frequency_hz));
 
     let started_at = Instant::now();
@@ -387,6 +400,7 @@ mod tests {
         };
         let runtime = RuntimeConfig {
             motion_tokens: vec![0.2, -0.1, 0.4, 0.7],
+            velocity: None,
             max_ticks: Some(1),
         };
 
