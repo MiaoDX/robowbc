@@ -2361,6 +2361,7 @@ dependencies = [
 name = "robowbc-comm"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "robowbc-core",
  "serde",
  "thiserror 2.0.18",
