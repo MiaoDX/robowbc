@@ -1,0 +1,16 @@
+name = "unitree_g1_mock"
+joint_count = 4
+joint_names = ["j0", "j1", "j2", "j3"]
+pd_gains = [
+  { kp = 15.0, kd = 1.0 },
+  { kp = 15.0, kd = 1.0 },
+  { kp = 15.0, kd = 1.0 },
+  { kp = 15.0, kd = 1.0 },
+]
+joint_limits = [
+  { min = -1.0, max = 1.0 },
+  { min = -1.0, max = 1.0 },
+  { min = -1.0, max = 1.0 },
+  { min = -1.0, max = 1.0 },
+]
+default_pose = [0.0, 0.0, 0.0, 0.0]

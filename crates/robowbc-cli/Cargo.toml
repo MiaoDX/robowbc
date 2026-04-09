@@ -8,3 +8,12 @@ authors.workspace = true
 [[bin]]
 name = "robowbc"
 path = "src/main.rs"
+
+[dependencies]
+robowbc-comm = { path = "../robowbc-comm" }
+robowbc-core = { path = "../robowbc-core" }
+robowbc-ort = { path = "../robowbc-ort" }
+robowbc-registry = { path = "../robowbc-registry" }
+serde = { workspace = true, features = ["derive"] }
+toml = { workspace = true }
+ctrlc = "3"
