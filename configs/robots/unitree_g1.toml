@@ -6,6 +6,7 @@
 
 name = "unitree_g1"
 joint_count = 29
+model_path = "assets/robots/unitree_g1/g1_29dof.xml"
 
 joint_names = [
     "left_hip_pitch_joint",

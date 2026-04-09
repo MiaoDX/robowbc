@@ -1,7 +1,7 @@
 //! Core interfaces and data types for RoboWBC.
 
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 /// Result type used across the RoboWBC core abstractions.
@@ -103,6 +103,9 @@ pub struct RobotConfig {
     pub joint_limits: Vec<JointLimit>,
     /// Default standing pose in radians.
     pub default_pose: Vec<f32>,
+    /// Optional path to a URDF or MJCF model file for kinematic data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_path: Option<PathBuf>,
 }
 
 impl RobotConfig {
@@ -262,6 +265,7 @@ mod tests {
                 },
             ],
             default_pose: vec![0.0, -0.2],
+            model_path: None,
         }
     }
 
@@ -364,5 +368,150 @@ mod tests {
         assert_eq!(output.timestamp, now);
         assert_eq!(policy.control_frequency_hz(), 50);
         assert_eq!(policy.supported_robots().len(), 1);
+    }
+
+    #[test]
+    fn unitree_g1_model_path_resolves() {
+        let config_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../configs/robots/unitree_g1.toml");
+        let config = RobotConfig::from_toml_file(&config_path).expect("G1 config should load");
+
+        let model_path = config
+            .model_path
+            .as_ref()
+            .expect("model_path should be set");
+        let resolved = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(model_path);
+        assert!(
+            resolved.exists(),
+            "MJCF model file should exist at {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn unitree_g1_toml_joints_match_mjcf_actuator_order() {
+        let config_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../configs/robots/unitree_g1.toml");
+        let config = RobotConfig::from_toml_file(&config_path).expect("G1 config should load");
+
+        let model_path = config
+            .model_path
+            .as_ref()
+            .expect("model_path should be set");
+        let mjcf_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(model_path);
+        let mjcf = std::fs::read_to_string(&mjcf_path).expect("MJCF file should be readable");
+
+        // Extract actuator joint references in order from MJCF.
+        // Each <motor ... joint="<joint_name>" .../> defines the actuator ordering.
+        let mjcf_joints: Vec<String> = mjcf
+            .lines()
+            .filter(|line| line.contains("<motor "))
+            .filter_map(|line| {
+                let joint_start = line.find("joint=\"")? + 7;
+                let joint_end = line[joint_start..].find('"')? + joint_start;
+                Some(line[joint_start..joint_end].to_owned())
+            })
+            .collect();
+
+        assert_eq!(
+            mjcf_joints.len(),
+            config.joint_count,
+            "MJCF actuator count should match joint_count"
+        );
+        assert_eq!(
+            mjcf_joints, config.joint_names,
+            "MJCF actuator joint ordering should match TOML joint_names"
+        );
+    }
+
+    #[test]
+    fn unitree_g1_toml_limits_match_mjcf() {
+        let config_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../configs/robots/unitree_g1.toml");
+        let config = RobotConfig::from_toml_file(&config_path).expect("G1 config should load");
+
+        let model_path = config
+            .model_path
+            .as_ref()
+            .expect("model_path should be set");
+        let mjcf_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(model_path);
+        let mjcf = std::fs::read_to_string(&mjcf_path).expect("MJCF file should be readable");
+
+        // Build a map of joint_name -> (min, max) from MJCF <joint> elements.
+        // Some <joint> elements span multiple lines, so collapse the XML first.
+        let collapsed = mjcf.replace('\n', " ");
+        let mut mjcf_limits: std::collections::HashMap<String, (f32, f32)> =
+            std::collections::HashMap::new();
+        let mut search_start = 0;
+        while let Some(pos) = collapsed[search_start..].find("<joint ") {
+            let abs_pos = search_start + pos;
+            let end_pos = match collapsed[abs_pos..].find("/>") {
+                Some(e) => abs_pos + e + 2,
+                None => break,
+            };
+            let element = &collapsed[abs_pos..end_pos];
+            search_start = end_pos;
+
+            let name = (|| {
+                let start = element.find("name=\"")? + 6;
+                let end = element[start..].find('"')? + start;
+                Some(element[start..end].to_owned())
+            })();
+            let range = (|| {
+                let start = element.find("range=\"")? + 7;
+                let end = element[start..].find('"')? + start;
+                let parts: Vec<&str> = element[start..end].split_whitespace().collect();
+                let min: f32 = parts.first()?.parse().ok()?;
+                let max: f32 = parts.get(1)?.parse().ok()?;
+                Some((min, max))
+            })();
+            if let (Some(name), Some(range)) = (name, range) {
+                mjcf_limits.insert(name, range);
+            }
+        }
+
+        let tolerance = 1e-3;
+        for (i, joint_name) in config.joint_names.iter().enumerate() {
+            let (mjcf_min, mjcf_max) = mjcf_limits
+                .get(joint_name)
+                .unwrap_or_else(|| panic!("joint '{joint_name}' not found in MJCF"));
+            let toml_limit = &config.joint_limits[i];
+
+            assert!(
+                (toml_limit.min - mjcf_min).abs() < tolerance,
+                "joint '{joint_name}' min: TOML={} MJCF={mjcf_min}",
+                toml_limit.min
+            );
+            assert!(
+                (toml_limit.max - mjcf_max).abs() < tolerance,
+                "joint '{joint_name}' max: TOML={} MJCF={mjcf_max}",
+                toml_limit.max
+            );
+        }
+    }
+
+    #[test]
+    fn model_path_not_serialized_when_none() {
+        let robot = sample_robot();
+        let toml_str = toml::to_string(&robot).expect("serialization should succeed");
+        assert!(
+            !toml_str.contains("model_path"),
+            "model_path should not appear in TOML when None"
+        );
+    }
+
+    #[test]
+    fn model_path_round_trips_through_toml() {
+        let mut robot = sample_robot();
+        robot.model_path = Some(PathBuf::from("assets/robots/unitree_g1/g1_29dof.xml"));
+        let toml_str = toml::to_string(&robot).expect("serialization should succeed");
+        assert!(toml_str.contains("model_path"));
+        let loaded = RobotConfig::from_toml_str(&toml_str).expect("deserialization should succeed");
+        assert_eq!(robot, loaded);
     }
 }
