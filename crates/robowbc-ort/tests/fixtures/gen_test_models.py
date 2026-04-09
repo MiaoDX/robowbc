@@ -38,7 +38,21 @@ def gen_relu_model(path: str) -> None:
     print(f"wrote {path} ({os.path.getsize(path)} bytes)")
 
 
+def gen_dynamic_identity_model(path: str) -> None:
+    """Create an Identity model with dynamic second dimension: input [1,N] -> output [1,N]."""
+    X = helper.make_tensor_value_info("input", TensorProto.FLOAT, [1, None])
+    Y = helper.make_tensor_value_info("output", TensorProto.FLOAT, [1, None])
+    node = helper.make_node("Identity", ["input"], ["output"])
+    graph = helper.make_graph([node], "test_dynamic_identity", [X], [Y])
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 13)])
+    model.ir_version = 7
+    onnx.checker.check_model(model)
+    onnx.save(model, path)
+    print(f"wrote {path} ({os.path.getsize(path)} bytes)")
+
+
 if __name__ == "__main__":
     script_dir = os.path.dirname(os.path.abspath(__file__))
     gen_identity_model(os.path.join(script_dir, "test_identity.onnx"))
     gen_relu_model(os.path.join(script_dir, "test_relu.onnx"))
+    gen_dynamic_identity_model(os.path.join(script_dir, "test_dynamic_identity.onnx"))

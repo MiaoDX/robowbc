@@ -18,6 +18,9 @@
 //! let outputs = backend.run(&[("input", &[1.0_f32; 4], &[1, 4])]).unwrap();
 //! ```
 
+pub mod decoupled;
+pub use decoupled::{DecoupledWbcConfig, DecoupledWbcPolicy};
+
 use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
 use ort::value::Tensor;
