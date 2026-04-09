@@ -3,6 +3,7 @@ members = [
     "crates/robowbc-core",
     "crates/robowbc-ort",
     "crates/robowbc-registry",
+    "crates/robowbc-comm",
     "crates/robowbc-cli",
 ]
 resolver = "2"
