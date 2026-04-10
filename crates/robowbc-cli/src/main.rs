@@ -12,6 +12,12 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "sim")]
+use robowbc_sim::{MujocoConfig, MujocoTransport};
+
+#[cfg(feature = "vis")]
+use robowbc_vis::{RerunConfig, RerunVisualizer};
+
 #[derive(Debug, Deserialize)]
 struct PolicySection {
     name: String,
@@ -62,6 +68,15 @@ struct AppConfig {
     comm: CommConfig,
     #[serde(default)]
     runtime: RuntimeConfig,
+    /// MuJoCo simulation config. When present and the `sim` feature is
+    /// enabled, the control loop uses [`MujocoTransport`] instead of the
+    /// synthetic transport.
+    #[cfg(feature = "sim")]
+    sim: Option<MujocoConfig>,
+    /// Rerun visualization config. When present and the `vis` feature is
+    /// enabled, the control loop streams data to a Rerun viewer.
+    #[cfg(feature = "vis")]
+    vis: Option<RerunConfig>,
 }
 
 #[derive(Debug)]
@@ -164,29 +179,13 @@ fn build_policy(app: &AppConfig) -> Result<(Box<dyn WbcPolicy>, RobotConfig), St
     Ok((policy, robot))
 }
 
-fn run_control_loop(
-    policy: Box<dyn WbcPolicy>,
-    robot: RobotConfig,
+fn run_control_loop_inner<T: RobotTransport>(
+    transport: &mut T,
+    policy: &dyn WbcPolicy,
     comm: &CommConfig,
     runtime: &RuntimeConfig,
-) -> Result<Metrics, String> {
-    if comm.frequency_hz == 0 {
-        return Err("comm.frequency_hz must be > 0".to_owned());
-    }
-
-    let _ = std::any::TypeId::of::<robowbc_ort::GearSonicPolicy>();
-    let _ = std::any::TypeId::of::<robowbc_ort::DecoupledWbcPolicy>();
-
-    let running = Arc::new(AtomicBool::new(true));
-    {
-        let signal = Arc::clone(&running);
-        ctrlc::set_handler(move || {
-            signal.store(false, Ordering::SeqCst);
-        })
-        .map_err(|e| format!("failed to install Ctrl+C handler: {e}"))?;
-    }
-
-    let mut transport = SyntheticTransport::new(robot.joint_count);
+    running: &AtomicBool,
+) -> Result<(usize, usize, Duration), String> {
     let command = if let Some([vx, vy, yaw]) = runtime.velocity {
         WbcCommand::Velocity(Twist {
             linear: [vx, vy, 0.0],
@@ -200,7 +199,6 @@ fn run_control_loop(
     };
     let period = Duration::from_secs_f64(1.0 / f64::from(comm.frequency_hz));
 
-    let started_at = Instant::now();
     let mut ticks: usize = 0;
     let mut dropped_frames: usize = 0;
     let mut inference_total = Duration::ZERO;
@@ -213,7 +211,7 @@ fn run_control_loop(
         }
 
         let cycle_start = Instant::now();
-        run_control_tick(&mut transport, command.clone(), |obs| {
+        run_control_tick(transport, command.clone(), |obs| {
             let infer_start = Instant::now();
             let output = policy.predict(&obs);
             inference_total += infer_start.elapsed();
@@ -231,6 +229,74 @@ fn run_control_loop(
         }
     }
 
+    Ok((ticks, dropped_frames, inference_total))
+}
+
+fn run_control_loop(
+    policy: Box<dyn WbcPolicy>,
+    robot: RobotConfig,
+    comm: &CommConfig,
+    runtime: &RuntimeConfig,
+    #[cfg(feature = "sim")] sim_config: Option<MujocoConfig>,
+    #[cfg(feature = "vis")] vis_config: Option<RerunConfig>,
+) -> Result<Metrics, String> {
+    if comm.frequency_hz == 0 {
+        return Err("comm.frequency_hz must be > 0".to_owned());
+    }
+
+    let _ = std::any::TypeId::of::<robowbc_ort::GearSonicPolicy>();
+    let _ = std::any::TypeId::of::<robowbc_ort::DecoupledWbcPolicy>();
+
+    let running = Arc::new(AtomicBool::new(true));
+    {
+        let signal = Arc::clone(&running);
+        ctrlc::set_handler(move || {
+            signal.store(false, Ordering::SeqCst);
+        })
+        .map_err(|e| format!("failed to install Ctrl+C handler: {e}"))?;
+    }
+
+    // Optionally initialise Rerun visualizer.
+    #[cfg(feature = "vis")]
+    let _visualizer: Option<RerunVisualizer> = match vis_config {
+        Some(ref cfg) => {
+            let vis = RerunVisualizer::new(cfg, &robot.joint_names)
+                .map_err(|e| format!("failed to start Rerun visualizer: {e}"))?;
+            println!("rerun visualizer started (app_id={})", cfg.app_id);
+            Some(vis)
+        }
+        None => None,
+    };
+
+    let started_at = Instant::now();
+
+    // Run with MuJoCo transport when the `sim` feature is active and a sim
+    // section is present, otherwise fall back to the synthetic transport.
+    #[cfg(feature = "sim")]
+    let (ticks, dropped_frames, inference_total, sent_count) = {
+        if let Some(sim_cfg) = sim_config {
+            let mut transport = MujocoTransport::new(sim_cfg, robot.clone())
+                .map_err(|e| format!("mujoco init failed: {e}"))?;
+            println!("mujoco simulation transport active");
+            let (ticks, dropped, inf) =
+                run_control_loop_inner(&mut transport, &*policy, comm, runtime, &running)?;
+            (ticks, dropped, inf, ticks)
+        } else {
+            let mut transport = SyntheticTransport::new(robot.joint_count);
+            let (ticks, dropped, inf) =
+                run_control_loop_inner(&mut transport, &*policy, comm, runtime, &running)?;
+            (ticks, dropped, inf, transport.sent_commands())
+        }
+    };
+
+    #[cfg(not(feature = "sim"))]
+    let (ticks, dropped_frames, inference_total, sent_count) = {
+        let mut transport = SyntheticTransport::new(robot.joint_count);
+        let (ticks, dropped, inf) =
+            run_control_loop_inner(&mut transport, &*policy, comm, runtime, &running)?;
+        (ticks, dropped, inf, transport.sent_commands())
+    };
+
     let run_time_secs = started_at.elapsed().as_secs_f64();
     if run_time_secs <= f64::EPSILON {
         return Err("loop exited too quickly to compute metrics".to_owned());
@@ -244,8 +310,7 @@ fn run_control_loop(
     let average_inference_ms = (inference_total.as_secs_f64() * 1_000.0) / (ticks as f64);
 
     println!(
-        "runtime metrics: ticks={ticks}, sent_commands={}, avg_inference_ms={average_inference_ms:.3}, achieved_hz={achieved_frequency_hz:.2}, dropped_frames={dropped_frames}",
-        transport.sent_commands()
+        "runtime metrics: ticks={ticks}, sent_commands={sent_count}, avg_inference_ms={average_inference_ms:.3}, achieved_hz={achieved_frequency_hz:.2}, dropped_frames={dropped_frames}",
     );
 
     Ok(Metrics {
@@ -283,7 +348,16 @@ fn main() {
         }
     };
 
-    match run_control_loop(policy, robot, &app.comm, &app.runtime) {
+    match run_control_loop(
+        policy,
+        robot,
+        &app.comm,
+        &app.runtime,
+        #[cfg(feature = "sim")]
+        app.sim,
+        #[cfg(feature = "vis")]
+        app.vis,
+    ) {
         Ok(metrics) => {
             println!(
                 "shutdown complete: ticks={}, avg_inference_ms={:.3}, achieved_hz={:.2}, dropped_frames={}",
@@ -404,7 +478,17 @@ mod tests {
             max_ticks: Some(1),
         };
 
-        let metrics = run_control_loop(policy, robot, &comm, &runtime).expect("loop should run");
+        let metrics = run_control_loop(
+            policy,
+            robot,
+            &comm,
+            &runtime,
+            #[cfg(feature = "sim")]
+            None,
+            #[cfg(feature = "vis")]
+            None,
+        )
+        .expect("loop should run");
         assert_eq!(metrics.ticks, 1);
     }
 }

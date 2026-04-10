@@ -9,11 +9,18 @@ authors.workspace = true
 name = "robowbc"
 path = "src/main.rs"
 
+[features]
+default = []
+sim = ["dep:robowbc-sim", "robowbc-sim/mujoco"]
+vis = ["dep:robowbc-vis", "robowbc-vis/rerun"]
+
 [dependencies]
 robowbc-comm = { path = "../robowbc-comm" }
 robowbc-core = { path = "../robowbc-core" }
 robowbc-ort = { path = "../robowbc-ort" }
 robowbc-registry = { path = "../robowbc-registry" }
+robowbc-sim = { path = "../robowbc-sim", optional = true }
+robowbc-vis = { path = "../robowbc-vis", optional = true }
 serde = { workspace = true, features = ["derive"] }
 toml = { workspace = true }
 ctrlc = "3"
