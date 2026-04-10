@@ -1,0 +1,27 @@
+[package]
+name = "robowbc-sim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "MuJoCo simulation transport for humanoid whole-body control"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+mujoco = ["dep:mujoco-rs"]
+
+[dependencies]
+robowbc-core = { path = "../robowbc-core" }
+robowbc-comm = { path = "../robowbc-comm" }
+serde = { workspace = true }
+thiserror = "2"
+mujoco-rs = { version = "3", optional = true }
+
+[dev-dependencies]
+toml = { workspace = true }
+
+[lints]
+workspace = true

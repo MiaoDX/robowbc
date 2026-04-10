@@ -1,0 +1,27 @@
+[package]
+name = "robowbc-vis"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Rerun visualization for humanoid whole-body control"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = []
+rerun = ["dep:rerun"]
+
+[dependencies]
+robowbc-core = { path = "../robowbc-core" }
+robowbc-comm = { path = "../robowbc-comm" }
+serde = { workspace = true }
+thiserror = "2"
+rerun = { version = "0.31", optional = true }
+
+[dev-dependencies]
+toml = { workspace = true }
+
+[lints]
+workspace = true
