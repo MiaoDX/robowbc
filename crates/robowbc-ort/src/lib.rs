@@ -421,16 +421,30 @@ pub struct GearSonicConfig {
 
 /// A chain-style implementation of the `GEAR-SONIC` policy.
 ///
-/// The policy runs:
-/// `motion_tokens -> encoder -> planner -> decoder -> joint position targets`.
-/// The most recent encoder output is cached to support planner models that may
-/// require temporal continuity.
+/// Implements the NVIDIA GEAR-SONIC 3-model inference pipeline:
+///
+/// 1. **Encoder** (`model_encoder.onnx`) — encodes the current proprioceptive
+///    state (`joint_positions ‖ joint_velocities ‖ gravity_vector`) into a
+///    latent vector.
+/// 2. **Planner** (`planner_sonic.onnx`) — concatenates the latent with the
+///    motion-token goal command and produces an action latent.
+/// 3. **Decoder** (`model_decoder.onnx`) — decodes the action latent into joint
+///    position targets.
+///
+/// For a Unitree G1 (29 DOF) the expected tensor shapes are:
+/// - encoder input  : `[1, 61]` (29 pos + 29 vel + 3 gravity)
+/// - encoder output : `[1, D_latent]` (e.g. 128)
+/// - planner input  : `[1, D_latent + T]` where T = number of motion tokens
+/// - planner output : `[1, D_latent]`
+/// - decoder input  : `[1, D_latent]`
+/// - decoder output : `[1, 29]`
+///
+/// Download real checkpoints with `scripts/download_gear_sonic_models.sh`.
 pub struct GearSonicPolicy {
     encoder: Mutex<OrtBackend>,
     decoder: Mutex<OrtBackend>,
     planner: Mutex<OrtBackend>,
     robot: RobotConfig,
-    encoder_cache: Mutex<Option<Vec<f32>>>,
 }
 
 impl GearSonicPolicy {
@@ -453,7 +467,6 @@ impl GearSonicPolicy {
             decoder: Mutex::new(decoder),
             planner: Mutex::new(planner),
             robot: config.robot,
-            encoder_cache: Mutex::new(None),
         })
     }
 
@@ -491,6 +504,11 @@ impl robowbc_core::WbcPolicy for GearSonicPolicy {
                 "joint_positions length does not match robot.joint_count",
             ));
         }
+        if obs.joint_velocities.len() != self.robot.joint_count {
+            return Err(robowbc_core::WbcError::InvalidObservation(
+                "joint_velocities length does not match robot.joint_count",
+            ));
+        }
 
         let motion_tokens = match &obs.command {
             WbcCommand::MotionTokens(tokens) if !tokens.is_empty() => tokens.as_slice(),
@@ -506,32 +524,39 @@ impl robowbc_core::WbcPolicy for GearSonicPolicy {
             }
         };
 
+        // Step 1: encode proprioceptive state → latent vector.
+        // Input layout: [joint_positions | joint_velocities | gravity_vector]
+        // For G1 (29 DOF): [29 + 29 + 3] = 61 floats → encoder → D_latent floats.
+        let mut proprio_state =
+            Vec::with_capacity(obs.joint_positions.len() + obs.joint_velocities.len() + 3);
+        proprio_state.extend_from_slice(&obs.joint_positions);
+        proprio_state.extend_from_slice(&obs.joint_velocities);
+        proprio_state.extend_from_slice(&obs.gravity_vector);
+
         let mut encoder = self.encoder.lock().map_err(|_| {
             robowbc_core::WbcError::InferenceFailed("encoder mutex poisoned".to_owned())
         })?;
-        let encoder_out = Self::run_single_input_model(&mut encoder, motion_tokens)?;
+        let latent = Self::run_single_input_model(&mut encoder, &proprio_state)?;
         drop(encoder);
 
-        let planner_input = {
-            let mut cache = self.encoder_cache.lock().map_err(|_| {
-                robowbc_core::WbcError::InferenceFailed("encoder cache mutex poisoned".to_owned())
-            })?;
-            let mut merged = cache.clone().unwrap_or_default();
-            merged.extend_from_slice(&encoder_out);
-            *cache = Some(encoder_out);
-            merged
-        };
+        // Step 2: plan — concatenate latent with motion-token goal command.
+        // Input layout: [latent | motion_tokens]
+        // The motion tokens encode the desired trajectory goal produced by GEAR.
+        let mut planner_input = Vec::with_capacity(latent.len() + motion_tokens.len());
+        planner_input.extend_from_slice(&latent);
+        planner_input.extend_from_slice(motion_tokens);
 
         let mut planner = self.planner.lock().map_err(|_| {
             robowbc_core::WbcError::InferenceFailed("planner mutex poisoned".to_owned())
         })?;
-        let planner_out = Self::run_single_input_model(&mut planner, &planner_input)?;
+        let action_latent = Self::run_single_input_model(&mut planner, &planner_input)?;
         drop(planner);
 
+        // Step 3: decode action latent → joint position targets.
         let mut decoder = self.decoder.lock().map_err(|_| {
             robowbc_core::WbcError::InferenceFailed("decoder mutex poisoned".to_owned())
         })?;
-        let joint_targets = Self::run_single_input_model(&mut decoder, &planner_out)?;
+        let joint_targets = Self::run_single_input_model(&mut decoder, &action_latent)?;
 
         if joint_targets.len() != self.robot.joint_count {
             return Err(robowbc_core::WbcError::InvalidTargets(
@@ -792,7 +817,28 @@ mod tests {
     }
 
     #[test]
-    fn gear_sonic_policy_predicts_with_three_identity_models() {
+    fn gear_sonic_policy_builds_with_identity_models() {
+        if !has_test_model() {
+            eprintln!(
+                "skipping: test model not found at {:?}",
+                identity_model_path()
+            );
+            return;
+        }
+
+        // Verify that GearSonicPolicy::new succeeds when all three model paths exist.
+        let config = GearSonicConfig {
+            encoder: test_ort_config(identity_model_path()),
+            decoder: test_ort_config(identity_model_path()),
+            planner: test_ort_config(identity_model_path()),
+            robot: test_robot_config(4),
+        };
+        let policy = GearSonicPolicy::new(config).expect("policy should build");
+        assert_eq!(policy.control_frequency_hz(), 50);
+    }
+
+    #[test]
+    fn gear_sonic_policy_rejects_mismatched_joint_velocities() {
         if !has_test_model() {
             eprintln!(
                 "skipping: test model not found at {:?}",
@@ -807,18 +853,23 @@ mod tests {
             planner: test_ort_config(identity_model_path()),
             robot: test_robot_config(4),
         };
-
         let policy = GearSonicPolicy::new(config).expect("policy should build");
+
+        // joint_velocities length mismatch (3 instead of 4)
         let obs = Observation {
-            joint_positions: vec![0.0, 0.0, 0.0, 0.0],
-            joint_velocities: vec![0.0, 0.0, 0.0, 0.0],
+            joint_positions: vec![0.0; 4],
+            joint_velocities: vec![0.0; 3],
             gravity_vector: [0.0, 0.0, -1.0],
-            command: WbcCommand::MotionTokens(vec![0.25, -0.25, 0.5, -0.5]),
+            command: WbcCommand::MotionTokens(vec![0.1]),
             timestamp: Instant::now(),
         };
-
-        let targets = policy.predict(&obs).expect("prediction should succeed");
-        assert_eq!(targets.positions, vec![0.25, -0.25, 0.5, -0.5]);
+        let err = policy
+            .predict(&obs)
+            .expect_err("velocity mismatch should fail");
+        assert!(
+            matches!(err, robowbc_core::WbcError::InvalidObservation(_)),
+            "expected InvalidObservation, got: {err}"
+        );
     }
 
     #[test]
@@ -851,5 +902,85 @@ mod tests {
             .predict(&obs)
             .expect_err("non-motion command should fail");
         assert!(matches!(err, robowbc_core::WbcError::UnsupportedCommand(_)));
+    }
+
+    /// Integration test against real GEAR-SONIC ONNX checkpoints.
+    ///
+    /// Run with:
+    /// ```
+    /// bash scripts/download_gear_sonic_models.sh
+    /// cargo test -p robowbc-ort -- --ignored gear_sonic_real_model_inference
+    /// ```
+    #[test]
+    #[ignore = "requires real GEAR-SONIC ONNX models; run scripts/download_gear_sonic_models.sh first"]
+    fn gear_sonic_real_model_inference() {
+        use robowbc_core::WbcPolicy;
+
+        let model_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../models/gear-sonic");
+
+        let encoder_path = model_dir.join("model_encoder.onnx");
+        let decoder_path = model_dir.join("model_decoder.onnx");
+        let planner_path = model_dir.join("planner_sonic.onnx");
+        let robot_config_path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs/robots/unitree_g1.toml");
+
+        for path in [&encoder_path, &decoder_path, &planner_path] {
+            assert!(
+                path.exists(),
+                "model not found: {path:?} — run scripts/download_gear_sonic_models.sh"
+            );
+        }
+
+        let robot = robowbc_core::RobotConfig::from_toml_file(&robot_config_path)
+            .expect("robot config should load");
+
+        let config = GearSonicConfig {
+            encoder: OrtConfig {
+                model_path: encoder_path,
+                execution_provider: ExecutionProvider::Cpu,
+                optimization_level: OptimizationLevel::Extended,
+                num_threads: 1,
+            },
+            decoder: OrtConfig {
+                model_path: decoder_path,
+                execution_provider: ExecutionProvider::Cpu,
+                optimization_level: OptimizationLevel::Extended,
+                num_threads: 1,
+            },
+            planner: OrtConfig {
+                model_path: planner_path,
+                execution_provider: ExecutionProvider::Cpu,
+                optimization_level: OptimizationLevel::Extended,
+                num_threads: 1,
+            },
+            robot: robot.clone(),
+        };
+
+        let policy = GearSonicPolicy::new(config).expect("policy should build from real models");
+
+        // Construct a standing-pose observation with a neutral velocity command.
+        // Motion tokens here are placeholder zeros — replace with GEAR planner output
+        // for a meaningful trajectory command.
+        let obs = Observation {
+            joint_positions: robot.default_pose.clone(),
+            joint_velocities: vec![0.0; robot.joint_count],
+            gravity_vector: [0.0, 0.0, -9.81],
+            command: WbcCommand::MotionTokens(vec![0.0; 4]),
+            timestamp: Instant::now(),
+        };
+
+        let targets = policy
+            .predict(&obs)
+            .expect("real model inference should succeed");
+
+        assert_eq!(
+            targets.positions.len(),
+            robot.joint_count,
+            "decoder output must match robot DOF"
+        );
+        // All joint targets should be finite (no NaN / inf from model).
+        for (i, &pos) in targets.positions.iter().enumerate() {
+            assert!(pos.is_finite(), "joint target {i} is not finite: {pos}");
+        }
     }
 }
