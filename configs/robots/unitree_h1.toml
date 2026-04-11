@@ -1,0 +1,103 @@
+# Unitree H1 19-DOF robot configuration.
+#
+# Joint ordering follows Unitree H1 SDK2 motor IDs 0–18.
+# PD gains sourced from ExBody2 / unitree_rl_gym H1 training configs.
+# Joint limits sourced from unitree_mujoco h1/h1.xml (radians).
+# Default pose is the standard H1 standing pose used in WBC deployments.
+#
+# Hardware: Unitree H1 humanoid, ~47 kg, 1.8 m height.
+# Relevant policies: HOVER (NVIDIA, #12), ExBody2.
+
+name = "unitree_h1"
+joint_count = 19
+
+joint_names = [
+    "left_hip_yaw_joint",
+    "left_hip_roll_joint",
+    "left_hip_pitch_joint",
+    "left_knee_joint",
+    "left_ankle_joint",
+    "right_hip_yaw_joint",
+    "right_hip_roll_joint",
+    "right_hip_pitch_joint",
+    "right_knee_joint",
+    "right_ankle_joint",
+    "torso_joint",
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+]
+
+# PD gains (Nm/rad, Nm·s/rad) from ExBody2 / unitree_rl_gym H1 config.
+pd_gains = [
+    { kp = 150.0, kd = 2.0 },   # left_hip_yaw
+    { kp = 150.0, kd = 2.0 },   # left_hip_roll
+    { kp = 200.0, kd = 4.0 },   # left_hip_pitch
+    { kp = 200.0, kd = 4.0 },   # left_knee
+    { kp =  40.0, kd = 2.0 },   # left_ankle
+    { kp = 150.0, kd = 2.0 },   # right_hip_yaw
+    { kp = 150.0, kd = 2.0 },   # right_hip_roll
+    { kp = 200.0, kd = 4.0 },   # right_hip_pitch
+    { kp = 200.0, kd = 4.0 },   # right_knee
+    { kp =  40.0, kd = 2.0 },   # right_ankle
+    { kp = 200.0, kd = 4.0 },   # torso_joint
+    { kp =  40.0, kd = 2.0 },   # left_shoulder_pitch
+    { kp =  40.0, kd = 2.0 },   # left_shoulder_roll
+    { kp =  40.0, kd = 2.0 },   # left_shoulder_yaw
+    { kp =  40.0, kd = 2.0 },   # left_elbow
+    { kp =  40.0, kd = 2.0 },   # right_shoulder_pitch
+    { kp =  40.0, kd = 2.0 },   # right_shoulder_roll
+    { kp =  40.0, kd = 2.0 },   # right_shoulder_yaw
+    { kp =  40.0, kd = 2.0 },   # right_elbow
+]
+
+# Joint limits from unitree_mujoco h1/h1.xml (radians).
+joint_limits = [
+    { min = -0.43, max =  0.43 },   # left_hip_yaw
+    { min = -0.43, max =  0.43 },   # left_hip_roll
+    { min = -1.57, max =  1.57 },   # left_hip_pitch
+    { min = -0.26, max =  2.05 },   # left_knee
+    { min = -0.87, max =  0.52 },   # left_ankle
+    { min = -0.43, max =  0.43 },   # right_hip_yaw
+    { min = -0.43, max =  0.43 },   # right_hip_roll
+    { min = -1.57, max =  1.57 },   # right_hip_pitch
+    { min = -0.26, max =  2.05 },   # right_knee
+    { min = -0.87, max =  0.52 },   # right_ankle
+    { min = -2.35, max =  2.35 },   # torso_joint
+    { min = -2.87, max =  2.87 },   # left_shoulder_pitch
+    { min = -0.34, max =  3.11 },   # left_shoulder_roll
+    { min = -1.30, max =  1.30 },   # left_shoulder_yaw
+    { min = -1.25, max =  2.61 },   # left_elbow
+    { min = -2.87, max =  2.87 },   # right_shoulder_pitch
+    { min = -3.11, max =  0.34 },   # right_shoulder_roll
+    { min = -1.30, max =  1.30 },   # right_shoulder_yaw
+    { min = -1.25, max =  2.61 },   # right_elbow
+]
+
+# Default standing pose (radians) — knees slightly bent, arms at sides.
+default_pose = [
+     0.0,   # left_hip_yaw
+     0.0,   # left_hip_roll
+    -0.4,   # left_hip_pitch
+     0.8,   # left_knee
+    -0.4,   # left_ankle
+     0.0,   # right_hip_yaw
+     0.0,   # right_hip_roll
+    -0.4,   # right_hip_pitch
+     0.8,   # right_knee
+    -0.4,   # right_ankle
+     0.0,   # torso_joint
+     0.3,   # left_shoulder_pitch
+     0.2,   # left_shoulder_roll
+     0.0,   # left_shoulder_yaw
+     0.5,   # left_elbow
+     0.3,   # right_shoulder_pitch
+    -0.2,   # right_shoulder_roll
+     0.0,   # right_shoulder_yaw
+     0.5,   # right_elbow
+]
