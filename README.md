@@ -74,6 +74,17 @@ RoboWBC is grounded in recent whole-body control research and is designed to pro
 
 These works motivate RoboWBC's core abstraction: policy-specific model internals, but a shared runtime contract (`Observation` in, joint-position targets out).
 
+
+## Download GEAR-SONIC ONNX Models
+
+RoboWBC includes a helper script to fetch NVIDIA's public GEAR-SONIC checkpoints from HuggingFace:
+
+```bash
+./scripts/download_gear_sonic_models.sh
+```
+
+By default, files are written to `models/gear-sonic/` and line up with `configs/sonic_g1.toml`.
+
 ## Architecture
 
 ```rust
