@@ -326,6 +326,29 @@ mod tests {
     }
 
     #[test]
+    fn unitree_h1_config_loads_from_toml_file() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../configs/robots/unitree_h1.toml");
+        let config = RobotConfig::from_toml_file(&path).expect("H1 config should load");
+
+        assert_eq!(config.name, "unitree_h1");
+        assert_eq!(config.joint_count, 19);
+        assert_eq!(config.joint_names.len(), 19);
+        assert_eq!(config.pd_gains.len(), 19);
+        assert_eq!(config.joint_limits.len(), 19);
+        assert_eq!(config.default_pose.len(), 19);
+
+        // Verify first joint matches Unitree H1 SDK2 motor ID 0.
+        assert_eq!(config.joint_names[0], "left_hip_yaw_joint");
+        assert!((config.pd_gains[0].kp - 150.0).abs() < 1e-3);
+        assert!((config.pd_gains[0].kd - 2.0).abs() < 1e-3);
+        // Torso joint (index 10) separates legs from arms.
+        assert_eq!(config.joint_names[10], "torso_joint");
+        // No MJCF bundled — model_path is absent.
+        assert!(config.model_path.is_none());
+    }
+
+    #[test]
     fn robot_config_validate_rejects_mismatched_lengths() {
         let mut robot = sample_robot();
         robot.joint_count = 3;
