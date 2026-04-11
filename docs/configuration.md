@@ -50,9 +50,42 @@ motion_tokens = [0.05, -0.1, 0.2, 0.0]
 max_ticks = 200
 ```
 
+## Switching policies
+
+Change only `policy.name` (and the matching `[policy.config.*]` keys) to switch between WBC implementations at runtime. No code changes required.
+
+### `decoupled_wbc` example
+
+```toml
+[policy]
+name = "decoupled_wbc"
+
+[policy.config.rl_model]
+model_path = "models/decoupled/locomotion.onnx"
+execution_provider = { type = "cpu" }
+optimization_level = "extended"
+num_threads = 1
+
+[policy.config]
+lower_body_joints = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+upper_body_joints  = [12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
+control_frequency_hz = 50
+
+[robot]
+config_path = "configs/robots/unitree_g1.toml"
+
+[communication]
+frequency_hz = 50
+
+[runtime]
+velocity = [0.2, 0.0, 0.1]
+```
+
+See `configs/decoupled_g1.toml` for a complete working example using mock ONNX fixtures.
+
 ## Validation rules
 
-- `policy.name` must be non-empty
+- `policy.name` must be non-empty; must match a name registered in the policy registry
 - `comm.frequency_hz` / `communication.frequency_hz` must be greater than zero
 - `inference.backend` currently supports only `ort`
 - `inference.device` must be non-empty

@@ -223,6 +223,11 @@ fn validate_config(config: &AppConfig) -> Result<(), String> {
 
 const TEMPLATE_CONFIG: &str = r#"# RoboWBC configuration template.
 # Use this file as a starting point, then change policy/config paths.
+#
+# To switch policies, change policy.name and update [policy.config.*] to
+# match the new policy's required fields.  Available policies:
+#   gear_sonic     — 3-model ONNX pipeline (encoder/planner/decoder)
+#   decoupled_wbc  — RL lower-body + analytical IK upper-body (see configs/decoupled_g1.toml)
 
 [policy]
 name = "gear_sonic"
@@ -356,6 +361,7 @@ fn run_control_loop(
     robot: RobotConfig,
     comm: &CommConfig,
     runtime: &RuntimeConfig,
+    running: Arc<AtomicBool>,
     #[cfg(feature = "sim")] sim_config: Option<MujocoConfig>,
     #[cfg(feature = "vis")] vis_config: Option<RerunConfig>,
 ) -> Result<Metrics, String> {
@@ -365,15 +371,6 @@ fn run_control_loop(
 
     let _ = std::any::TypeId::of::<robowbc_ort::GearSonicPolicy>();
     let _ = std::any::TypeId::of::<robowbc_ort::DecoupledWbcPolicy>();
-
-    let running = Arc::new(AtomicBool::new(true));
-    {
-        let signal = Arc::clone(&running);
-        ctrlc::set_handler(move || {
-            signal.store(false, Ordering::SeqCst);
-        })
-        .map_err(|e| format!("failed to install Ctrl+C handler: {e}"))?;
-    }
 
     // Optionally initialise Rerun visualizer.
     #[cfg(feature = "vis")]
@@ -486,11 +483,23 @@ fn main() {
         }
     };
 
+    let running = Arc::new(AtomicBool::new(true));
+    {
+        let signal = Arc::clone(&running);
+        if let Err(e) = ctrlc::set_handler(move || {
+            signal.store(false, Ordering::SeqCst);
+        }) {
+            eprintln!("failed to install Ctrl+C handler: {e}");
+            std::process::exit(1);
+        }
+    }
+
     match run_control_loop(
         policy,
         robot,
         &app.comm,
         &app.runtime,
+        running,
         #[cfg(feature = "sim")]
         app.sim,
         #[cfg(feature = "vis")]
@@ -603,6 +612,98 @@ device = "cpu"
     }
 
     #[test]
+    fn loop_runs_with_decoupled_wbc() {
+        // Verify that changing policy.name to "decoupled_wbc" in the config
+        // routes through a completely different WbcPolicy implementation.
+        let rl_model_path = fixture("test_dynamic_identity.onnx");
+        assert!(rl_model_path.exists());
+
+        let robot = RobotConfig {
+            name: "unitree_g1_test".to_owned(),
+            joint_count: 4,
+            joint_names: vec![
+                "j0".to_owned(),
+                "j1".to_owned(),
+                "j2".to_owned(),
+                "j3".to_owned(),
+            ],
+            pd_gains: vec![
+                robowbc_core::PdGains { kp: 1.0, kd: 0.1 },
+                robowbc_core::PdGains { kp: 1.0, kd: 0.1 },
+                robowbc_core::PdGains { kp: 1.0, kd: 0.1 },
+                robowbc_core::PdGains { kp: 1.0, kd: 0.1 },
+            ],
+            joint_limits: vec![
+                robowbc_core::JointLimit {
+                    min: -1.0,
+                    max: 1.0,
+                },
+                robowbc_core::JointLimit {
+                    min: -1.0,
+                    max: 1.0,
+                },
+                robowbc_core::JointLimit {
+                    min: -1.0,
+                    max: 1.0,
+                },
+                robowbc_core::JointLimit {
+                    min: -1.0,
+                    max: 1.0,
+                },
+            ],
+            default_pose: vec![0.0, 0.0, 0.0, 0.0],
+            model_path: None,
+        };
+
+        let mut cfg_map = toml::map::Map::new();
+        let mut rl_model = toml::map::Map::new();
+        rl_model.insert(
+            "model_path".to_owned(),
+            toml::Value::String(rl_model_path.to_string_lossy().to_string()),
+        );
+        cfg_map.insert("rl_model".to_owned(), toml::Value::Table(rl_model));
+        cfg_map.insert(
+            "lower_body_joints".to_owned(),
+            toml::Value::Array(vec![toml::Value::Integer(0), toml::Value::Integer(1)]),
+        );
+        cfg_map.insert(
+            "upper_body_joints".to_owned(),
+            toml::Value::Array(vec![toml::Value::Integer(2), toml::Value::Integer(3)]),
+        );
+        let cfg = toml::Value::Table(cfg_map);
+        let full_cfg = insert_robot_into_policy(cfg, &robot).expect("robot should be inserted");
+
+        // Use "decoupled_wbc" as the policy name — this is the policy switch.
+        let policy =
+            WbcRegistry::build("decoupled_wbc", &full_cfg).expect("decoupled_wbc should build");
+
+        let comm = CommConfig {
+            frequency_hz: 50,
+            ..CommConfig::default()
+        };
+        // DecoupledWbcPolicy requires WbcCommand::Velocity.
+        let runtime = RuntimeConfig {
+            motion_tokens: vec![0.0],
+            velocity: Some([0.2, 0.0, 0.1]),
+            max_ticks: Some(1),
+        };
+
+        let metrics = run_control_loop(
+            policy,
+            robot,
+            &comm,
+            &runtime,
+            Arc::new(AtomicBool::new(true)),
+            #[cfg(feature = "sim")]
+            None,
+            #[cfg(feature = "vis")]
+            None,
+        )
+        .expect("decoupled_wbc loop should run");
+        assert_eq!(metrics.ticks, 1);
+    }
+
+    #[test]
     fn loop_runs_with_identity_models() {
         let encoder_path = fixture("test_identity.onnx");
         let decoder_path = fixture("test_identity.onnx");
@@ -685,6 +786,7 @@ device = "cpu"
             robot,
             &comm,
             &runtime,
+            Arc::new(AtomicBool::new(true)),
             #[cfg(feature = "sim")]
             None,
             #[cfg(feature = "vis")]
