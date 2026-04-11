@@ -373,6 +373,8 @@ fn run_control_loop(
     let _ = std::any::TypeId::of::<robowbc_ort::DecoupledWbcPolicy>();
     let _ = std::any::TypeId::of::<robowbc_ort::WbcAgilePolicy>();
     let _ = std::any::TypeId::of::<robowbc_ort::HoverPolicy>();
+    let _ = std::any::TypeId::of::<robowbc_ort::BfmZeroPolicy>();
+    let _ = std::any::TypeId::of::<robowbc_ort::WholeBodyVlaPolicy>();
 
     // Optionally initialise Rerun visualizer.
     #[cfg(feature = "vis")]

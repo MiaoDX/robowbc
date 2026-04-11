@@ -1,0 +1,46 @@
+# BFM-Zero policy on Unitree G1 (29 DOF).
+#
+# BFM-Zero is a CMU reinforcement-learning whole-body controller.
+# License: CC BY-NC 4.0  (non-commercial use only).
+# Hardware: Unitree G1 (29 DOF).
+#
+# ## Obtaining the model
+#
+# BFM-Zero does not yet ship a pre-built ONNX checkpoint. To export one:
+#
+#   git clone https://github.com/... bfm-zero
+#   cd bfm-zero
+#   python export_onnx.py \
+#       --checkpoint checkpoints/bfm_zero_g1.pt \
+#       --output models/bfm_zero_g1.onnx
+#
+# Then update `policy.config.model.model_path` below.
+#
+# ## Running
+#
+#   robowbc run --config configs/bfm_zero_g1.toml
+
+[policy]
+name = "bfm_zero"
+
+[policy.config.model]
+model_path = "models/bfm_zero/bfm_zero_g1.onnx"
+execution_provider = { type = "cpu" }
+optimization_level = "extended"
+num_threads = 1
+
+# Switch to CUDA once the model is validated on CPU:
+# execution_provider = { type = "cuda", device_id = 0 }
+
+[robot]
+config_path = "configs/robots/unitree_g1.toml"
+
+[comm]
+frequency_hz = 50
+topics = { joint_state = "unitree/g1/joint_state", imu = "unitree/g1/imu", joint_target_command = "unitree/g1/command/joint_position" }
+
+[runtime]
+# BFM-Zero uses a velocity command: [vx m/s, vy m/s, yaw_rate rad/s].
+# The runtime section uses the `velocity` field to select WbcCommand::Velocity.
+velocity = [0.3, 0.0, 0.0]
+max_ticks = 200

@@ -1,0 +1,58 @@
+# WholeBodyVLA policy on AGIBOT X2.
+#
+# WholeBodyVLA (OpenDriveLab) is a VLA-conditioned whole-body controller.
+# The VLA layer outputs end-effector SE3 poses which are converted to joint
+# targets by the WBC model in this config.
+# Hardware: AGIBOT X2 (humanoid, ~23 DOF actuated).
+#
+# ## VLA → WBC interface
+#
+#   VLA model  →  SE3 poses per end-effector  →  WholeBodyVlaPolicy  →  joint targets
+#
+# The policy expects WbcCommand::KinematicPose with link names:
+#   - "left_wrist"  (left arm end-effector)
+#   - "right_wrist" (right arm end-effector)
+#   - "left_hand"   (optional, for dexterous manipulation)
+#   - "right_hand"  (optional, for dexterous manipulation)
+#
+# ## Obtaining the model
+#
+# WholeBodyVLA does not yet ship a pre-built ONNX checkpoint.
+# After training with the WholeBodyVLA repository:
+#
+#   python export_onnx.py \
+#       --checkpoint checkpoints/wholebody_vla_x2.pt \
+#       --output models/wholebody_vla_x2.onnx \
+#       --num_ee_links 4
+#
+# Then update `policy.config.model.model_path` below.
+#
+# ## Running
+#
+#   robowbc run --config configs/wholebody_vla_x2.toml
+
+[policy]
+name = "wholebody_vla"
+
+[policy.config.model]
+model_path = "models/wholebody_vla/wholebody_vla_x2.onnx"
+execution_provider = { type = "cpu" }
+optimization_level = "extended"
+num_threads = 1
+
+# Number of end-effector links whose SE3 poses are fed into the WBC model.
+# Each link contributes 7 floats [x, y, z, qx, qy, qz, qw].
+num_ee_links = 4
+
+[robot]
+config_path = "configs/robots/agibot_x2.toml"
+
+[comm]
+frequency_hz = 50
+topics = { joint_state = "agibot/x2/joint_state", imu = "agibot/x2/imu", joint_target_command = "agibot/x2/command/joint_position" }
+
+[runtime]
+# WholeBodyVLA uses KinematicPose commands produced by the VLA layer.
+# For testing without a running VLA, supply a zero velocity fallback:
+velocity = [0.0, 0.0, 0.0]
+max_ticks = 200

@@ -355,6 +355,7 @@ mod tests {
     #[allow(clippy::cast_precision_loss)]
     fn test_obs(robot: &RobotConfig) -> Observation {
         let n = robot.joint_count;
+        #[allow(clippy::cast_precision_loss)]
         Observation {
             joint_positions: (0..n).map(|i| i as f32 * 0.1).collect(),
             joint_velocities: vec![0.0; n],
