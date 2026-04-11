@@ -266,6 +266,7 @@ mod tests {
             ],
             default_pose: (0..joint_count).map(|i| 0.1 * i as f32).collect(),
             model_path: None,
+            joint_velocity_limits: None,
         }
     }
 

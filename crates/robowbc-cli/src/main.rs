@@ -1,5 +1,6 @@
 use robowbc_comm::{
     run_control_tick, CommConfig, CommError, ImuSample, JointState, RobotTransport,
+    UnitreeG1Config, UnitreeG1Transport,
 };
 use robowbc_core::{JointPositionTargets, RobotConfig, Twist, WbcCommand, WbcPolicy};
 use robowbc_registry::{RegistryError, WbcRegistry};
@@ -79,6 +80,11 @@ struct AppConfig {
     /// enabled, the control loop streams data to a Rerun viewer.
     #[cfg(feature = "vis")]
     vis: Option<RerunConfig>,
+    /// Unitree G1 hardware transport config. When present, the control loop
+    /// connects to the real robot via a zenoh bridge instead of using the
+    /// synthetic or MuJoCo transport.
+    #[serde(default)]
+    hardware: Option<UnitreeG1Config>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -362,6 +368,7 @@ fn run_control_loop(
     comm: &CommConfig,
     runtime: &RuntimeConfig,
     running: Arc<AtomicBool>,
+    hardware: Option<UnitreeG1Config>,
     #[cfg(feature = "sim")] sim_config: Option<MujocoConfig>,
     #[cfg(feature = "vis")] vis_config: Option<RerunConfig>,
 ) -> Result<Metrics, String> {
@@ -388,11 +395,18 @@ fn run_control_loop(
 
     let started_at = Instant::now();
 
-    // Run with MuJoCo transport when the `sim` feature is active and a sim
-    // section is present, otherwise fall back to the synthetic transport.
+    // Transport priority: hardware → sim (if feature enabled) → synthetic.
     #[cfg(feature = "sim")]
     let (ticks, dropped_frames, inference_total, sent_count) = {
-        if let Some(sim_cfg) = sim_config {
+        if let Some(hw_cfg) = hardware {
+            let mut transport =
+                UnitreeG1Transport::connect(hw_cfg, robot.clone(), comm.frequency_hz)
+                    .map_err(|e| format!("hardware transport connect failed: {e}"))?;
+            println!("unitree g1 hardware transport active");
+            let (ticks, dropped, inf) =
+                run_control_loop_inner(&mut transport, &*policy, comm, runtime, &running)?;
+            (ticks, dropped, inf, ticks)
+        } else if let Some(sim_cfg) = sim_config {
             let mut transport = MujocoTransport::new(sim_cfg, robot.clone())
                 .map_err(|e| format!("mujoco init failed: {e}"))?;
             println!("mujoco simulation transport active");
@@ -409,10 +423,20 @@ fn run_control_loop(
 
     #[cfg(not(feature = "sim"))]
     let (ticks, dropped_frames, inference_total, sent_count) = {
-        let mut transport = SyntheticTransport::new(robot.joint_count);
-        let (ticks, dropped, inf) =
-            run_control_loop_inner(&mut transport, &*policy, comm, runtime, &running)?;
-        (ticks, dropped, inf, transport.sent_commands())
+        if let Some(hw_cfg) = hardware {
+            let mut transport =
+                UnitreeG1Transport::connect(hw_cfg, robot.clone(), comm.frequency_hz)
+                    .map_err(|e| format!("hardware transport connect failed: {e}"))?;
+            println!("unitree g1 hardware transport active");
+            let (ticks, dropped, inf) =
+                run_control_loop_inner(&mut transport, &*policy, comm, runtime, &running)?;
+            (ticks, dropped, inf, ticks)
+        } else {
+            let mut transport = SyntheticTransport::new(robot.joint_count);
+            let (ticks, dropped, inf) =
+                run_control_loop_inner(&mut transport, &*policy, comm, runtime, &running)?;
+            (ticks, dropped, inf, transport.sent_commands())
+        }
     };
 
     let run_time_secs = started_at.elapsed().as_secs_f64();
@@ -502,6 +526,7 @@ fn main() {
         &app.comm,
         &app.runtime,
         running,
+        app.hardware,
         #[cfg(feature = "sim")]
         app.sim,
         #[cfg(feature = "vis")]
@@ -603,6 +628,7 @@ device = "cpu"
                 device: "cpu".to_owned(),
             },
             runtime: RuntimeConfig::default(),
+            hardware: None,
             #[cfg(feature = "sim")]
             sim: None,
             #[cfg(feature = "vis")]
@@ -747,6 +773,7 @@ device = "cpu"
             ],
             default_pose: vec![0.0, 0.0, 0.0, 0.0],
             model_path: None,
+            joint_velocity_limits: None,
         };
 
         let mut cfg_map = toml::map::Map::new();
@@ -789,6 +816,7 @@ device = "cpu"
             &comm,
             &runtime,
             Arc::new(AtomicBool::new(true)),
+            None,
             #[cfg(feature = "sim")]
             None,
             #[cfg(feature = "vis")]

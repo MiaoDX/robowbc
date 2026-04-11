@@ -106,6 +106,41 @@ joint_limits = [
     { min = -1.6144, max =  1.6144 },  # right_wrist_yaw
 ]
 
+# Per-joint maximum velocity limits (rad/s). Used by hardware transports for
+# safety clamping. Values are conservative (≈50 % of actuator max velocity)
+# to prevent damage on the real robot during policy initialisation.
+joint_velocity_limits = [
+    10.0,  # left_hip_pitch
+    10.0,  # left_hip_roll
+     7.0,  # left_hip_yaw
+    10.0,  # left_knee
+     7.0,  # left_ankle_pitch
+     7.0,  # left_ankle_roll
+    10.0,  # right_hip_pitch
+    10.0,  # right_hip_roll
+     7.0,  # right_hip_yaw
+    10.0,  # right_knee
+     7.0,  # right_ankle_pitch
+     7.0,  # right_ankle_roll
+     7.0,  # waist_yaw
+     7.0,  # waist_roll
+     7.0,  # waist_pitch
+     7.0,  # left_shoulder_pitch
+     7.0,  # left_shoulder_roll
+     7.0,  # left_shoulder_yaw
+     7.0,  # left_elbow
+     5.0,  # left_wrist_roll
+     5.0,  # left_wrist_pitch
+     5.0,  # left_wrist_yaw
+     7.0,  # right_shoulder_pitch
+     7.0,  # right_shoulder_roll
+     7.0,  # right_shoulder_yaw
+     7.0,  # right_elbow
+     5.0,  # right_wrist_roll
+     5.0,  # right_wrist_pitch
+     5.0,  # right_wrist_yaw
+]
+
 # Default standing pose from GEAR-SONIC policy_parameters.hpp (radians).
 default_pose = [
     -0.312,  # left_hip_pitch

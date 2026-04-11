@@ -136,7 +136,10 @@ impl ZenohConfig {
 /// Subscribes to joint-state updates on `{prefix}/lowstate` and publishes
 /// joint-position commands to `{prefix}/lowcmd`.
 pub struct CommNode {
-    session: zenoh::Session,
+    /// The underlying zenoh session. Exposed so callers can perform custom
+    /// put/get operations (e.g., publishing synthetic low-state payloads in
+    /// integration tests).
+    pub session: zenoh::Session,
     state_subscriber:
         zenoh::pubsub::Subscriber<zenoh::handlers::FifoChannelHandler<zenoh::sample::Sample>>,
     config: ZenohConfig,
