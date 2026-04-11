@@ -9,6 +9,11 @@ members = [
     "crates/robowbc-cli",
     "crates/robowbc-pyo3",
 ]
+# robowbc-py is a standalone maturin project excluded from the workspace to
+# prevent pyo3 feature-flag conflicts: extension-module (robowbc-py) and
+# auto-initialize (robowbc-pyo3) are mutually exclusive in Cargo's feature
+# unification model. The python-sdk CI job builds it with `maturin develop`.
+exclude = ["crates/robowbc-py"]
 resolver = "2"
 
 [workspace.package]

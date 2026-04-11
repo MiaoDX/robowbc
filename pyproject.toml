@@ -1,0 +1,25 @@
+[build-system]
+requires = ["maturin>=1.4,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "robowbc"
+version = "0.1.0"
+description = "Unified inference runtime for humanoid whole-body control policies"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+keywords = ["robotics", "humanoid", "whole-body-control", "inference", "onnx"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+manifest-path = "crates/robowbc-py/Cargo.toml"
+module-name = "robowbc"
