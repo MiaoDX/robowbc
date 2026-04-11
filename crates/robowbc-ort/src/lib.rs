@@ -18,8 +18,12 @@
 //! let outputs = backend.run(&[("input", &[1.0_f32; 4], &[1, 4])]).unwrap();
 //! ```
 
+pub mod bfm_zero;
 pub mod decoupled;
+pub mod wholebody_vla;
+pub use bfm_zero::{BfmZeroConfig, BfmZeroPolicy};
 pub use decoupled::{DecoupledWbcConfig, DecoupledWbcPolicy};
+pub use wholebody_vla::{WholeBodyVlaConfig, WholeBodyVlaPolicy};
 
 pub mod wbc_agile;
 pub use wbc_agile::{WbcAgileConfig, WbcAgilePolicy};

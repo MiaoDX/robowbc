@@ -1,0 +1,131 @@
+# AGIBOT X2 robot configuration — placeholder values.
+#
+# AGIBOT X2 is a full-size humanoid robot (OpenDriveLab / AGIBOT).
+# ~10,000 units shipped as of 2025. Primary platform for WholeBodyVLA.
+#
+# ⚠️  TODO: Replace these placeholder values with official AGIBOT X2 specs.
+#     Contact AGIBOT or refer to their open-source SDK for exact joint names,
+#     PD gains, and limits once publicly available.
+#
+# Joint ordering follows the AGIBOT X2 SDK motor ID convention (estimated):
+#   0–5   : left leg  (hip_yaw, hip_roll, hip_pitch, knee, ankle_pitch, ankle_roll)
+#   6–11  : right leg (hip_yaw, hip_roll, hip_pitch, knee, ankle_pitch, ankle_roll)
+#   12    : waist_yaw
+#   13–18 : left arm  (shoulder_pitch, shoulder_roll, shoulder_yaw, elbow, wrist_pitch, wrist_yaw)
+#   19–24 : right arm (shoulder_pitch, shoulder_roll, shoulder_yaw, elbow, wrist_pitch, wrist_yaw)
+#
+# Estimated DOF: 25 (excluding head and finger DOF)
+
+name = "agibot_x2"
+joint_count = 25
+
+joint_names = [
+    # Left leg
+    "left_hip_yaw_joint",
+    "left_hip_roll_joint",
+    "left_hip_pitch_joint",
+    "left_knee_joint",
+    "left_ankle_pitch_joint",
+    "left_ankle_roll_joint",
+    # Right leg
+    "right_hip_yaw_joint",
+    "right_hip_roll_joint",
+    "right_hip_pitch_joint",
+    "right_knee_joint",
+    "right_ankle_pitch_joint",
+    "right_ankle_roll_joint",
+    # Waist
+    "waist_yaw_joint",
+    # Left arm
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "left_wrist_pitch_joint",
+    "left_wrist_yaw_joint",
+    # Right arm
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_pitch_joint",
+    "right_wrist_yaw_joint",
+]
+
+# Placeholder PD gains — update with values from AGIBOT X2 SDK.
+# Legs: stiffer gains; arms: softer gains for manipulation.
+pd_gains = [
+    # Left leg
+    { kp = 80.0, kd = 2.0 },   # left_hip_yaw
+    { kp = 80.0, kd = 2.0 },   # left_hip_roll
+    { kp = 80.0, kd = 2.0 },   # left_hip_pitch
+    { kp = 80.0, kd = 2.0 },   # left_knee
+    { kp = 40.0, kd = 1.5 },   # left_ankle_pitch
+    { kp = 40.0, kd = 1.5 },   # left_ankle_roll
+    # Right leg
+    { kp = 80.0, kd = 2.0 },   # right_hip_yaw
+    { kp = 80.0, kd = 2.0 },   # right_hip_roll
+    { kp = 80.0, kd = 2.0 },   # right_hip_pitch
+    { kp = 80.0, kd = 2.0 },   # right_knee
+    { kp = 40.0, kd = 1.5 },   # right_ankle_pitch
+    { kp = 40.0, kd = 1.5 },   # right_ankle_roll
+    # Waist
+    { kp = 40.0, kd = 1.0 },   # waist_yaw
+    # Left arm
+    { kp = 30.0, kd = 1.0 },   # left_shoulder_pitch
+    { kp = 30.0, kd = 1.0 },   # left_shoulder_roll
+    { kp = 20.0, kd = 0.5 },   # left_shoulder_yaw
+    { kp = 20.0, kd = 0.5 },   # left_elbow
+    { kp = 10.0, kd = 0.3 },   # left_wrist_pitch
+    { kp = 10.0, kd = 0.3 },   # left_wrist_yaw
+    # Right arm
+    { kp = 30.0, kd = 1.0 },   # right_shoulder_pitch
+    { kp = 30.0, kd = 1.0 },   # right_shoulder_roll
+    { kp = 20.0, kd = 0.5 },   # right_shoulder_yaw
+    { kp = 20.0, kd = 0.5 },   # right_elbow
+    { kp = 10.0, kd = 0.3 },   # right_wrist_pitch
+    { kp = 10.0, kd = 0.3 },   # right_wrist_yaw
+]
+
+# Placeholder joint limits — update with values from AGIBOT X2 datasheet.
+joint_limits = [
+    # Left leg
+    { min = -0.52, max =  0.52 },   # left_hip_yaw      ±30°
+    { min = -0.52, max =  0.52 },   # left_hip_roll      ±30°
+    { min = -0.87, max =  1.22 },   # left_hip_pitch     -50°/+70°
+    { min =  0.00, max =  2.44 },   # left_knee          0–140°
+    { min = -0.87, max =  0.52 },   # left_ankle_pitch   -50°/+30°
+    { min = -0.35, max =  0.35 },   # left_ankle_roll    ±20°
+    # Right leg
+    { min = -0.52, max =  0.52 },   # right_hip_yaw
+    { min = -0.52, max =  0.52 },   # right_hip_roll
+    { min = -0.87, max =  1.22 },   # right_hip_pitch
+    { min =  0.00, max =  2.44 },   # right_knee
+    { min = -0.87, max =  0.52 },   # right_ankle_pitch
+    { min = -0.35, max =  0.35 },   # right_ankle_roll
+    # Waist
+    { min = -1.57, max =  1.57 },   # waist_yaw          ±90°
+    # Left arm
+    { min = -3.14, max =  3.14 },   # left_shoulder_pitch  ±180°
+    { min = -1.57, max =  3.14 },   # left_shoulder_roll
+    { min = -3.14, max =  3.14 },   # left_shoulder_yaw    ±180°
+    { min = -2.44, max =  0.00 },   # left_elbow
+    { min = -1.57, max =  1.57 },   # left_wrist_pitch     ±90°
+    { min = -1.57, max =  1.57 },   # left_wrist_yaw       ±90°
+    # Right arm
+    { min = -3.14, max =  3.14 },   # right_shoulder_pitch
+    { min = -3.14, max =  1.57 },   # right_shoulder_roll
+    { min = -3.14, max =  3.14 },   # right_shoulder_yaw
+    { min = -2.44, max =  0.00 },   # right_elbow
+    { min = -1.57, max =  1.57 },   # right_wrist_pitch
+    { min = -1.57, max =  1.57 },   # right_wrist_yaw
+]
+
+# Neutral standing pose (all zeros = natural standing).
+default_pose = [
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0,   # left leg
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0,   # right leg
+    0.0,                              # waist
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0,   # left arm
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0,   # right arm
+]
