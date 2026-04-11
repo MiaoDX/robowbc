@@ -64,8 +64,10 @@ impl Default for RuntimeConfig {
 struct AppConfig {
     policy: PolicySection,
     robot: RobotSection,
-    #[serde(default)]
+    #[serde(default, alias = "communication")]
     comm: CommConfig,
+    #[serde(default)]
+    inference: InferenceSection,
     #[serde(default)]
     runtime: RuntimeConfig,
     /// MuJoCo simulation config. When present and the `sim` feature is
@@ -77,6 +79,31 @@ struct AppConfig {
     /// enabled, the control loop streams data to a Rerun viewer.
     #[cfg(feature = "vis")]
     vis: Option<RerunConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct InferenceSection {
+    #[serde(default = "default_inference_backend")]
+    backend: String,
+    #[serde(default = "default_inference_device")]
+    device: String,
+}
+
+fn default_inference_backend() -> String {
+    "ort".to_owned()
+}
+
+fn default_inference_device() -> String {
+    "cpu".to_owned()
+}
+
+impl Default for InferenceSection {
+    fn default() -> Self {
+        Self {
+            backend: default_inference_backend(),
+            device: default_inference_device(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -138,12 +165,34 @@ struct Metrics {
     achieved_frequency_hz: f64,
 }
 
-fn parse_args(args: &[String]) -> Result<PathBuf, String> {
+enum CliCommand {
+    Run { config_path: PathBuf },
+    Init { output_path: PathBuf },
+}
+
+fn parse_args(args: &[String]) -> Result<CliCommand, String> {
     if args.len() == 4 && args[1] == "run" && args[2] == "--config" {
-        return Ok(PathBuf::from(&args[3]));
+        return Ok(CliCommand::Run {
+            config_path: PathBuf::from(&args[3]),
+        });
     }
 
-    Err("usage: robowbc run --config <path/to/sonic_g1.toml>".to_owned())
+    if args.len() == 2 && args[1] == "init" {
+        return Ok(CliCommand::Init {
+            output_path: PathBuf::from("robowbc.template.toml"),
+        });
+    }
+
+    if args.len() == 4 && args[1] == "init" && args[2] == "--output" {
+        return Ok(CliCommand::Init {
+            output_path: PathBuf::from(&args[3]),
+        });
+    }
+
+    Err(
+        "usage: robowbc run --config <path/to/config.toml>\n       robowbc init [--output <path/to/template.toml>]"
+            .to_owned(),
+    )
 }
 
 fn load_app_config(path: &Path) -> Result<AppConfig, String> {
@@ -151,6 +200,76 @@ fn load_app_config(path: &Path) -> Result<AppConfig, String> {
         .map_err(|e| format!("failed to read config {}: {e}", path.display()))?;
     toml::from_str(&raw)
         .map_err(|e| format!("failed to parse config {} as TOML: {e}", path.display()))
+}
+
+fn validate_config(config: &AppConfig) -> Result<(), String> {
+    if config.policy.name.trim().is_empty() {
+        return Err("policy.name must not be empty".to_owned());
+    }
+    if config.comm.frequency_hz == 0 {
+        return Err("comm.frequency_hz must be greater than 0".to_owned());
+    }
+    if config.inference.backend != "ort" {
+        return Err(format!(
+            "inference.backend '{}' is not supported yet; expected 'ort'",
+            config.inference.backend
+        ));
+    }
+    if config.inference.device.trim().is_empty() {
+        return Err("inference.device must not be empty".to_owned());
+    }
+    Ok(())
+}
+
+const TEMPLATE_CONFIG: &str = r#"# RoboWBC configuration template.
+# Use this file as a starting point, then change policy/config paths.
+
+[policy]
+name = "gear_sonic"
+
+[policy.config.encoder]
+model_path = "crates/robowbc-ort/tests/fixtures/test_identity.onnx"
+execution_provider = { type = "cpu" }
+optimization_level = "extended"
+num_threads = 1
+
+[policy.config.decoder]
+model_path = "crates/robowbc-ort/tests/fixtures/test_identity.onnx"
+execution_provider = { type = "cpu" }
+optimization_level = "extended"
+num_threads = 1
+
+[policy.config.planner]
+model_path = "crates/robowbc-ort/tests/fixtures/test_identity.onnx"
+execution_provider = { type = "cpu" }
+optimization_level = "extended"
+num_threads = 1
+
+[robot]
+config_path = "configs/robots/unitree_g1_mock.toml"
+
+[communication]
+frequency_hz = 50
+topics = { joint_state = "unitree/g1/joint_state", imu = "unitree/g1/imu", joint_target_command = "unitree/g1/command/joint_position" }
+
+[inference]
+backend = "ort"
+device = "cpu"
+
+[runtime]
+motion_tokens = [0.05, -0.1, 0.2, 0.0]
+max_ticks = 1
+"#;
+
+fn write_template(path: &Path) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("failed to create directory {}: {e}", parent.display()))?;
+        }
+    }
+    std::fs::write(path, TEMPLATE_CONFIG)
+        .map_err(|e| format!("failed to write template config {}: {e}", path.display()))
 }
 
 fn insert_robot_into_policy(
@@ -324,12 +443,26 @@ fn run_control_loop(
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
-    let config_path = match parse_args(&args) {
-        Ok(path) => path,
+    let command = match parse_args(&args) {
+        Ok(command) => command,
         Err(err) => {
             eprintln!("{err}");
             std::process::exit(2);
         }
+    };
+
+    if let CliCommand::Init { output_path } = command {
+        if let Err(err) = write_template(&output_path) {
+            eprintln!("{err}");
+            std::process::exit(1);
+        }
+        println!("wrote template config to {}", output_path.display());
+        return;
+    }
+
+    let config_path = match command {
+        CliCommand::Run { config_path } => config_path,
+        CliCommand::Init { .. } => unreachable!("init command already handled"),
     };
 
     let app = match load_app_config(&config_path) {
@@ -339,6 +472,11 @@ fn main() {
             std::process::exit(1);
         }
     };
+
+    if let Err(err) = validate_config(&app) {
+        eprintln!("invalid config: {err}");
+        std::process::exit(1);
+    }
 
     let (policy, robot) = match build_policy(&app) {
         Ok(value) => value,
@@ -397,7 +535,71 @@ mod tests {
         ];
 
         let parsed = parse_args(&args).expect("args should parse");
-        assert_eq!(parsed, PathBuf::from("configs/sonic_g1.toml"));
+        match parsed {
+            CliCommand::Run { config_path } => {
+                assert_eq!(config_path, PathBuf::from("configs/sonic_g1.toml"));
+            }
+            CliCommand::Init { .. } => panic!("expected run command"),
+        }
+    }
+
+    #[test]
+    fn args_parse_init_default_output() {
+        let args = vec!["robowbc".to_owned(), "init".to_owned()];
+        let parsed = parse_args(&args).expect("init should parse");
+        match parsed {
+            CliCommand::Init { output_path } => {
+                assert_eq!(output_path, PathBuf::from("robowbc.template.toml"));
+            }
+            CliCommand::Run { .. } => panic!("expected init command"),
+        }
+    }
+
+    #[test]
+    fn accepts_communication_alias() {
+        let config = r#"
+[policy]
+name = "gear_sonic"
+
+[robot]
+config_path = "configs/robots/unitree_g1_mock.toml"
+
+[communication]
+frequency_hz = 60
+
+[inference]
+backend = "ort"
+device = "cpu"
+"#;
+
+        let parsed: AppConfig = toml::from_str(config).expect("config should parse");
+        assert_eq!(parsed.comm.frequency_hz, 60);
+    }
+
+    #[test]
+    fn validate_config_rejects_unknown_inference_backend() {
+        let config = AppConfig {
+            policy: PolicySection {
+                name: "gear_sonic".to_owned(),
+                config: default_policy_table(),
+            },
+            robot: RobotSection {
+                config_path: PathBuf::from("configs/robots/unitree_g1_mock.toml"),
+            },
+            comm: CommConfig::default(),
+            inference: InferenceSection {
+                backend: "pyo3".to_owned(),
+                device: "cpu".to_owned(),
+            },
+            runtime: RuntimeConfig::default(),
+            #[cfg(feature = "sim")]
+            sim: None,
+            #[cfg(feature = "vis")]
+            vis: None,
+        };
+
+        let err = validate_config(&config).expect_err("backend should be rejected");
+        assert!(err.contains("not supported yet"));
     }
 
     #[test]
