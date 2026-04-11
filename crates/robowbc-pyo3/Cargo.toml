@@ -1,0 +1,23 @@
+[package]
+name = "robowbc-pyo3"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "PyO3 Python inference backend for RoboWBC"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+inventory = "0.3"
+numpy = "0.23"
+pyo3 = { version = "0.23", features = ["auto-initialize"] }
+robowbc-core = { path = "../robowbc-core" }
+robowbc-registry = { path = "../robowbc-registry" }
+serde = { workspace = true }
+thiserror = "2"
+toml = { workspace = true }
+
+[lints]
+workspace = true

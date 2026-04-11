@@ -7,6 +7,7 @@ members = [
     "crates/robowbc-sim",
     "crates/robowbc-vis",
     "crates/robowbc-cli",
+    "crates/robowbc-pyo3",
 ]
 resolver = "2"
 
