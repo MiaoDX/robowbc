@@ -43,3 +43,58 @@ jobs:
 
       - name: Build docs
         run: mdbook build
+
+  python-sdk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install maturin
+        run: pip install maturin
+
+      - name: Build robowbc wheel (maturin develop)
+        run: maturin develop --release
+
+      - name: Python smoke test
+        run: |
+          python - <<'EOF'
+          from robowbc import Observation, Registry
+
+          # Verify policy list is non-empty
+          names = Registry.list_policies()
+          assert len(names) > 0, f"expected at least one policy, got: {names}"
+          print("Registered policies:", names)
+
+          # Verify Observation construction
+          obs = Observation(
+              joint_positions=[0.0] * 4,
+              joint_velocities=[0.0] * 4,
+              gravity_vector=[0.0, 0.0, -1.0],
+              command_type="motion_tokens",
+              command_data=[0.1, 0.2],
+          )
+          assert obs.joint_positions == [0.0] * 4
+          assert obs.command_type == "motion_tokens"
+          print("Observation:", obs)
+
+          # Verify build_from_str raises on unknown policy
+          try:
+              Registry.build_from_str('[policy]\nname = "no_such_policy"')
+              assert False, "should have raised"
+          except RuntimeError as e:
+              assert "unknown policy" in str(e).lower(), f"unexpected error: {e}"
+
+          print("All smoke tests passed.")
+          EOF
