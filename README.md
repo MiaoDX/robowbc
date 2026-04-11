@@ -58,6 +58,22 @@ This uniformity makes a thin abstraction layer both possible and natural.
 | [HumanPlus](https://github.com/MarkFzp/humanplus) | Stanford | PyTorch | ❌ | Custom H1 | Planned |
 | [ExBody](https://github.com/chengxuxin/expressive-humanoid) | Unitree collab | PyTorch | ❌ | H1 | Planned |
 
+## Related Work (WBC Literature)
+
+RoboWBC is grounded in recent whole-body control research and is designed to provide a common deployment interface across these lines of work:
+
+- **GEAR-SONIC** (NVIDIA) — universal whole-body control for Unitree G1 with ONNX/TensorRT deployment support.
+- **BFM-Zero** (CMU) — open humanoid WBC effort centered on Unitree G1 with strong sim-to-real emphasis.
+- **WholeBodyVLA** (OpenDriveLab) — end-to-end VLA + WBC integration direction for whole-body behavior.
+- **LeVERB** — language-conditioned humanoid behavior generation with a downstream WBC execution interface.
+- **HugWBC** — generalized WBC policy formulation targeting broad humanoid skill coverage.
+- **SoFTA** (CMU LeCAR Lab) — dual-rate asymmetric upper/lower body control (100 Hz arms, 50 Hz legs).
+- **WBC-AGILE** (NVIDIA) — modular RL-based WBC training/deployment task suite for G1/T1-class robots.
+- **HOVER** (NVIDIA) — multi-mode humanoid policy with decoupled upper/lower-body command structure.
+- **WBC Survey** — broad landscape reference: [arXiv:2506.20487](https://arxiv.org/abs/2506.20487).
+
+These works motivate RoboWBC's core abstraction: policy-specific model internals, but a shared runtime contract (`Observation` in, joint-position targets out).
+
 ## Architecture
 
 ```rust
