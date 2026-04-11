@@ -2,25 +2,25 @@
 name = "gear_sonic"
 
 [policy.config.encoder]
-model_path = "crates/robowbc-ort/tests/fixtures/test_identity.onnx"
+model_path = "models/gear-sonic/model_encoder.onnx"
 execution_provider = { type = "cpu" }
 optimization_level = "extended"
 num_threads = 1
 
 [policy.config.decoder]
-model_path = "crates/robowbc-ort/tests/fixtures/test_identity.onnx"
+model_path = "models/gear-sonic/model_decoder.onnx"
 execution_provider = { type = "cpu" }
 optimization_level = "extended"
 num_threads = 1
 
 [policy.config.planner]
-model_path = "crates/robowbc-ort/tests/fixtures/test_identity.onnx"
+model_path = "models/gear-sonic/planner_sonic.onnx"
 execution_provider = { type = "cpu" }
 optimization_level = "extended"
 num_threads = 1
 
 [robot]
-config_path = "configs/robots/unitree_g1_mock.toml"
+config_path = "configs/robots/unitree_g1.toml"
 
 [comm]
 frequency_hz = 50
@@ -28,4 +28,4 @@ topics = { joint_state = "unitree/g1/joint_state", imu = "unitree/g1/imu", joint
 
 [runtime]
 motion_tokens = [0.05, -0.1, 0.2, 0.0]
-max_ticks = 1
+max_ticks = 200
