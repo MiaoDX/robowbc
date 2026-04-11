@@ -24,6 +24,9 @@ pub use decoupled::{DecoupledWbcConfig, DecoupledWbcPolicy};
 pub mod wbc_agile;
 pub use wbc_agile::{WbcAgileConfig, WbcAgilePolicy};
 
+pub mod hover;
+pub use hover::{HoverConfig, HoverPolicy};
+
 use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
 use ort::value::Tensor;
