@@ -29,3 +29,18 @@ topics = { joint_state = "unitree/g1/joint_state", imu = "unitree/g1/imu", joint
 [runtime]
 motion_tokens = [0.05, -0.1, 0.2, 0.0]
 max_ticks = 200
+
+# Hardware transport for real Unitree G1.
+#
+# To run against real hardware:
+#   1. Start the zenoh-ros2dds bridge on the G1 network side:
+#        zenoh-bridge-ros2dds -c config_g1.json5
+#   2. Set zenoh_locator to the bridge IP, e.g. "tcp/192.168.123.18:7447".
+#   3. Uncomment and set the [hardware] section below.
+#   4. Run: robowbc run --config configs/sonic_g1.toml
+#
+# Omit this section to use simulation (robowbc-sim) or the synthetic transport.
+#
+# [hardware]
+# zenoh_locator = "tcp/192.168.123.18:7447"
+# recv_timeout_ms = 100

@@ -61,6 +61,7 @@ fn test_robot_config(joint_count: usize) -> RobotConfig {
         ],
         default_pose: vec![0.0; joint_count],
         model_path: None,
+        joint_velocity_limits: None,
     }
 }
 

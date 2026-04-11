@@ -106,6 +106,10 @@ pub struct RobotConfig {
     /// Optional path to a URDF or MJCF model file for kinematic data.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_path: Option<PathBuf>,
+    /// Per-joint maximum absolute velocity in rad/s. Used by hardware transports
+    /// for safety clamping. When `None`, velocity limiting is not applied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub joint_velocity_limits: Option<Vec<f32>>,
 }
 
 impl RobotConfig {
@@ -162,6 +166,15 @@ impl RobotConfig {
                 self.default_pose.len()
             )
             .into());
+        }
+        if let Some(ref vel_limits) = self.joint_velocity_limits {
+            if vel_limits.len() != n {
+                return Err(format!(
+                    "joint_velocity_limits length {} != joint_count {n}",
+                    vel_limits.len()
+                )
+                .into());
+            }
         }
         Ok(())
     }
@@ -266,6 +279,7 @@ mod tests {
             ],
             default_pose: vec![0.0, -0.2],
             model_path: None,
+            joint_velocity_limits: None,
         }
     }
 

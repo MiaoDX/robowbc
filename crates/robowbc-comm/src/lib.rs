@@ -9,8 +9,13 @@
 //! The [`wire`] module handles binary encoding of joint-state and command
 //! messages for the Unitree G1 DDS bridge.
 
+pub mod unitree;
 pub mod wire;
 pub mod zenoh_comm;
+
+pub use unitree::{
+    clamp_position_targets, clamp_velocity_targets, UnitreeG1Config, UnitreeG1Transport,
+};
 
 use robowbc_core::{JointPositionTargets, Observation, Result as CoreResult, WbcCommand, WbcError};
 use serde::{Deserialize, Serialize};
