@@ -1,0 +1,50 @@
+# HOVER policy configuration for Unitree H1.
+#
+# HOVER (NVIDIA, 2024) is a multi-modal WBC policy that uses a sparsity mask
+# to select among 15+ control modes with a single ONNX model.
+#
+# This config selects locomotion mode (indices 0–2 active: vx, vy, yaw_rate).
+# Change `mode_mask` to enable body-pose mode (indices 3–5) or other modes.
+#
+# Model download: trained weights are not publicly distributed.
+# To export your own HOVER model from the NVIDIA HOVER codebase:
+#   1. Train in Isaac Lab: python train.py --task HoverH1
+#   2. Export to ONNX: python export_onnx.py --checkpoint <path> --output models/hover/
+# Expected model I/O shape:
+#   input:  [1, 2*n + 3 + 2*command_dim]  (n = 19 for H1, command_dim = 15)
+#   output: [1, n]  (19 joint position targets)
+
+[policy]
+name = "hover"
+
+[policy.config]
+command_dim = 15
+control_frequency_hz = 50
+
+# Locomotion mode mask: vx (0), vy (1), yaw_rate (2) active; all others zero.
+# To switch to body-pose mode, set indices 3–5 to 1.0 and indices 0–2 to 0.0.
+mode_mask = [
+  1.0, 1.0, 1.0,   # locomotion: vx, vy, yaw_rate
+  0.0, 0.0, 0.0,   # body pose:  height, roll, yaw
+  0.0, 0.0, 0.0,   # foot pos L: x, y, z
+  0.0, 0.0, 0.0,   # foot pos R: x, y, z
+  0.0, 0.0, 0.0,   # reserved
+]
+
+[policy.config.model]
+model_path = "models/hover/hover_h1.onnx"
+execution_provider = { type = "cpu" }
+optimization_level = "extended"
+num_threads = 4
+
+[robot]
+config_path = "configs/robots/unitree_h1.toml"
+
+[comm]
+frequency_hz = 50
+topics = { joint_state = "unitree/h1/joint_state", imu = "unitree/h1/imu", joint_target_command = "unitree/h1/command/joint_position" }
+
+[runtime]
+# Velocity command in locomotion mode: [vx, vy, yaw_rate] (m/s, m/s, rad/s).
+velocity = [0.3, 0.0, 0.0]
+max_ticks = 200

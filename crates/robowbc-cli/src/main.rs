@@ -372,6 +372,7 @@ fn run_control_loop(
     let _ = std::any::TypeId::of::<robowbc_ort::GearSonicPolicy>();
     let _ = std::any::TypeId::of::<robowbc_ort::DecoupledWbcPolicy>();
     let _ = std::any::TypeId::of::<robowbc_ort::WbcAgilePolicy>();
+    let _ = std::any::TypeId::of::<robowbc_ort::HoverPolicy>();
 
     // Optionally initialise Rerun visualizer.
     #[cfg(feature = "vis")]
