@@ -7,6 +7,7 @@
 # User Guide
 
 - [Getting Started](getting-started.md)
+- [Python SDK](python-sdk.md)
 - [Configuration Reference](configuration.md)
 
 # Tutorials
