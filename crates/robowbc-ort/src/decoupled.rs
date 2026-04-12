@@ -136,13 +136,10 @@ impl robowbc_core::WbcPolicy for DecoupledWbcPolicy {
             ));
         }
 
-        let twist = match &obs.command {
-            WbcCommand::Velocity(t) => t,
-            _ => {
-                return Err(WbcError::UnsupportedCommand(
-                    "DecoupledWbcPolicy requires WbcCommand::Velocity",
-                ))
-            }
+        let WbcCommand::Velocity(twist) = &obs.command else {
+            return Err(WbcError::UnsupportedCommand(
+                "DecoupledWbcPolicy requires WbcCommand::Velocity",
+            ));
         };
 
         // Run RL model for lower body.
@@ -209,7 +206,7 @@ impl std::fmt::Debug for DecoupledWbcPolicy {
             .field("lower_body_joints", &self.lower_body_joints)
             .field("upper_body_joints", &self.upper_body_joints)
             .field("control_frequency_hz", &self.control_frequency_hz)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -251,6 +248,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::cast_precision_loss)]
     fn test_robot_config(joint_count: usize) -> RobotConfig {
         RobotConfig {
             name: "test_robot".to_owned(),
@@ -447,12 +445,12 @@ mod tests {
 
     #[test]
     fn registry_build_decoupled_wbc() {
+        use robowbc_registry::WbcRegistry;
+
         if !has_dynamic_model() {
             eprintln!("skipping: dynamic model not found");
             return;
         }
-
-        use robowbc_registry::WbcRegistry;
 
         let robot = test_robot_config(4);
         let mut cfg_map = toml::map::Map::new();
@@ -491,12 +489,12 @@ mod tests {
     ///   upper body — indices 10–18 (torso + arm joints, held at default pose)
     #[test]
     fn decoupled_wbc_runs_on_unitree_h1() {
+        const N: usize = 19;
+
         if !has_dynamic_model() {
             eprintln!("skipping: dynamic model not found");
             return;
         }
-
-        const N: usize = 19;
         let lower: Vec<usize> = (0..10).collect();
         let upper: Vec<usize> = (10..N).collect();
 

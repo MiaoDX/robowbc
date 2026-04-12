@@ -24,3 +24,6 @@ robowbc-vis = { path = "../robowbc-vis", optional = true }
 serde = { workspace = true, features = ["derive"] }
 toml = { workspace = true }
 ctrlc = "3"
+
+[lints]
+workspace = true

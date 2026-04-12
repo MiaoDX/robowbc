@@ -8,6 +8,9 @@ authors.workspace = true
 [lib]
 path = "src/lib.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 inventory = "0.3"
 robowbc-core = { path = "../robowbc-core" }

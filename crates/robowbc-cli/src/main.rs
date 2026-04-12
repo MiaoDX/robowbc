@@ -82,7 +82,7 @@ struct AppConfig {
     vis: Option<RerunConfig>,
     /// Unitree G1 hardware transport config. When present, the control loop
     /// connects to the real robot via a zenoh bridge instead of using the
-    /// synthetic or MuJoCo transport.
+    /// synthetic or `MuJoCo` transport.
     #[serde(default)]
     hardware: Option<UnitreeG1Config>,
 }
@@ -134,6 +134,7 @@ impl SyntheticTransport {
 }
 
 impl RobotTransport for SyntheticTransport {
+    #[allow(clippy::cast_precision_loss)]
     fn recv_joint_state(&mut self) -> Result<JointState, CommError> {
         let t = self.step as f32 * 0.01;
         let positions = (0..self.joint_count)
@@ -355,7 +356,7 @@ fn run_control_loop_inner<T: RobotTransport>(
         if elapsed > period {
             dropped_frames = dropped_frames.saturating_add(1);
         } else {
-            thread::sleep(period - elapsed);
+            thread::sleep(period.saturating_sub(elapsed));
         }
     }
 
@@ -363,11 +364,11 @@ fn run_control_loop_inner<T: RobotTransport>(
 }
 
 fn run_control_loop(
-    policy: Box<dyn WbcPolicy>,
-    robot: RobotConfig,
+    policy: &dyn WbcPolicy,
+    robot: &RobotConfig,
     comm: &CommConfig,
     runtime: &RuntimeConfig,
-    running: Arc<AtomicBool>,
+    running: &AtomicBool,
     hardware: Option<UnitreeG1Config>,
     #[cfg(feature = "sim")] sim_config: Option<MujocoConfig>,
     #[cfg(feature = "vis")] vis_config: Option<RerunConfig>,
@@ -406,19 +407,19 @@ fn run_control_loop(
                     .map_err(|e| format!("hardware transport connect failed: {e}"))?;
             println!("unitree g1 hardware transport active");
             let (ticks, dropped, inf) =
-                run_control_loop_inner(&mut transport, &*policy, comm, runtime, &running)?;
+                run_control_loop_inner(&mut transport, policy, comm, runtime, running)?;
             (ticks, dropped, inf, ticks)
         } else if let Some(sim_cfg) = sim_config {
             let mut transport = MujocoTransport::new(sim_cfg, robot.clone())
                 .map_err(|e| format!("mujoco init failed: {e}"))?;
             println!("mujoco simulation transport active");
             let (ticks, dropped, inf) =
-                run_control_loop_inner(&mut transport, &*policy, comm, runtime, &running)?;
+                run_control_loop_inner(&mut transport, policy, comm, runtime, running)?;
             (ticks, dropped, inf, ticks)
         } else {
             let mut transport = SyntheticTransport::new(robot.joint_count);
             let (ticks, dropped, inf) =
-                run_control_loop_inner(&mut transport, &*policy, comm, runtime, &running)?;
+                run_control_loop_inner(&mut transport, policy, comm, runtime, running)?;
             (ticks, dropped, inf, transport.sent_commands())
         }
     };
@@ -431,12 +432,12 @@ fn run_control_loop(
                     .map_err(|e| format!("hardware transport connect failed: {e}"))?;
             println!("unitree g1 hardware transport active");
             let (ticks, dropped, inf) =
-                run_control_loop_inner(&mut transport, &*policy, comm, runtime, &running)?;
+                run_control_loop_inner(&mut transport, policy, comm, runtime, running)?;
             (ticks, dropped, inf, ticks)
         } else {
             let mut transport = SyntheticTransport::new(robot.joint_count);
             let (ticks, dropped, inf) =
-                run_control_loop_inner(&mut transport, &*policy, comm, runtime, &running)?;
+                run_control_loop_inner(&mut transport, policy, comm, runtime, running)?;
             (ticks, dropped, inf, transport.sent_commands())
         }
     };
@@ -450,7 +451,9 @@ fn run_control_loop(
         return Err("loop executed zero ticks".to_owned());
     }
 
+    #[allow(clippy::cast_precision_loss)]
     let achieved_frequency_hz = (ticks as f64) / run_time_secs;
+    #[allow(clippy::cast_precision_loss)]
     let average_inference_ms = (inference_total.as_secs_f64() * 1_000.0) / (ticks as f64);
 
     println!(
@@ -523,11 +526,11 @@ fn main() {
     }
 
     match run_control_loop(
-        policy,
-        robot,
+        &*policy,
+        &robot,
         &app.comm,
         &app.runtime,
-        running,
+        &running,
         app.hardware,
         #[cfg(feature = "sim")]
         app.sim,
@@ -720,11 +723,11 @@ device = "cpu"
         };
 
         let metrics = run_control_loop(
-            policy,
-            robot,
+            &*policy,
+            &robot,
             &comm,
             &runtime,
-            Arc::new(AtomicBool::new(true)),
+            &AtomicBool::new(true),
             None,
             #[cfg(feature = "sim")]
             None,
