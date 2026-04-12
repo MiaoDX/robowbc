@@ -1,0 +1,38 @@
+# Decoupled WBC policy configuration for Unitree H1.
+#
+# Demonstrates that the WbcPolicy abstraction runs unchanged on a second
+# hardware platform (H1, 19 DOF) compared to the G1 reference platform.
+#
+# Lower body (10 joints, indices 0–9): both hips + knees + ankles — driven
+# by the RL locomotion model.
+# Upper body (9 joints, indices 10–18): torso + both shoulders + elbows —
+# held at the H1 default standing pose (analytical IK baseline).
+#
+# Replace `model_path` with a real H1-trained checkpoint before use on
+# hardware. The path below points at the dynamic-identity test fixture for
+# local smoke-testing without a real model.
+
+[policy]
+name = "decoupled_wbc"
+
+[policy.config.rl_model]
+model_path = "crates/robowbc-ort/tests/fixtures/test_dynamic_identity.onnx"
+execution_provider = { type = "cpu" }
+optimization_level = "extended"
+num_threads = 1
+
+[policy.config]
+lower_body_joints = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+upper_body_joints = [10, 11, 12, 13, 14, 15, 16, 17, 18]
+control_frequency_hz = 50
+
+[robot]
+config_path = "configs/robots/unitree_h1.toml"
+
+[comm]
+frequency_hz = 50
+topics = { joint_state = "unitree/h1/joint_state", imu = "unitree/h1/imu", joint_target_command = "unitree/h1/command/joint_position" }
+
+[runtime]
+velocity = [0.2, 0.0, 0.0]
+max_ticks = 1

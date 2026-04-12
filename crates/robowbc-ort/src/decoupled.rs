@@ -480,4 +480,83 @@ mod tests {
 
         assert_eq!(policy.control_frequency_hz(), 50);
     }
+
+    /// Verify that `DecoupledWbcPolicy` runs on Unitree H1 (19 DOF) using the
+    /// dynamic-identity fixture model.  This satisfies issue #14 acceptance
+    /// criterion 2: "at least one policy runs on the new hardware."
+    ///
+    /// Joint split mirrors `configs/decoupled_h1.toml`:
+    ///   lower body — indices 0–9  (10 leg joints)
+    ///   upper body — indices 10–18 (torso + arm joints, held at default pose)
+    #[test]
+    fn decoupled_wbc_runs_on_unitree_h1() {
+        if !has_dynamic_model() {
+            eprintln!("skipping: dynamic model not found");
+            return;
+        }
+
+        const N: usize = 19;
+        let lower: Vec<usize> = (0..10).collect();
+        let upper: Vec<usize> = (10..N).collect();
+
+        let robot = RobotConfig {
+            name: "unitree_h1_test".to_owned(),
+            joint_count: N,
+            joint_names: (0..N).map(|i| format!("h1_joint_{i}")).collect(),
+            pd_gains: vec![PdGains { kp: 150.0, kd: 2.0 }; N],
+            joint_limits: vec![
+                JointLimit {
+                    min: -1.57,
+                    max: 1.57
+                };
+                N
+            ],
+            default_pose: vec![0.0; N],
+            model_path: None,
+        };
+
+        let config = DecoupledWbcConfig {
+            rl_model: test_ort_config(dynamic_model_path()),
+            robot,
+            lower_body_joints: lower.clone(),
+            upper_body_joints: upper,
+            control_frequency_hz: 50,
+        };
+
+        let policy = DecoupledWbcPolicy::new(config).expect("H1 policy should build");
+
+        let obs = Observation {
+            joint_positions: vec![0.1; N],
+            joint_velocities: vec![0.0; N],
+            gravity_vector: [0.0, 0.0, -1.0],
+            command: WbcCommand::Velocity(Twist {
+                linear: [0.3, 0.0, 0.0],
+                angular: [0.0, 0.0, 0.0],
+            }),
+            timestamp: Instant::now(),
+        };
+
+        let targets = policy.predict(&obs).expect("H1 prediction should succeed");
+
+        assert_eq!(
+            targets.positions.len(),
+            N,
+            "output must cover all {N} H1 joints"
+        );
+        // Lower body (indices 0–9): identity model echoes input; first element
+        // of RL input is joint_positions[0] = 0.1.
+        assert!(
+            (targets.positions[0] - 0.1).abs() < 1e-5,
+            "lower-body target[0] should echo joint_positions[0]"
+        );
+        // Upper body (indices 10–18): default pose = 0.0 (held analytically).
+        assert!(
+            (targets.positions[10] - 0.0).abs() < 1e-6,
+            "upper-body target[10] should equal default pose"
+        );
+
+        assert_eq!(policy.control_frequency_hz(), 50);
+        assert_eq!(policy.supported_robots().len(), 1);
+        assert_eq!(policy.supported_robots()[0].joint_count, N);
+    }
 }

@@ -26,6 +26,7 @@ fn sample_imu() -> ImuSample {
     }
 }
 
+#[allow(clippy::unnecessary_wraps)]
 fn passthrough_policy(obs: Observation) -> robowbc_core::Result<JointPositionTargets> {
     Ok(JointPositionTargets {
         positions: obs.joint_positions,
