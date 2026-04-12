@@ -734,5 +734,4 @@ device = "cpu"
         .expect("decoupled_wbc loop should run");
         assert_eq!(metrics.ticks, 1);
     }
-
 }

@@ -145,28 +145,57 @@ fn bench_dynamic_identity_scaling(c: &mut Criterion) {
 // ---------------------------------------------------------------------------
 
 fn bench_gear_sonic_predict(c: &mut Criterion) {
-    let model_path = identity_model();
-    if !model_path.exists() {
-        eprintln!(
-            "skipping gear_sonic benchmark: model not found at {}",
-            model_path.display()
-        );
-        return;
+    // GearSonicPolicy requires real ONNX checkpoints because the encoder
+    // receives proprioceptive state (n+n+3 floats) and the decoder must output
+    // exactly n floats. Test-fixture identity models cannot satisfy both
+    // constraints simultaneously.
+    //
+    // Set GEAR_SONIC_MODEL_DIR to a directory containing
+    // model_encoder.onnx, model_decoder.onnx, and planner_sonic.onnx.
+    let model_dir = match std::env::var("GEAR_SONIC_MODEL_DIR") {
+        Ok(d) => PathBuf::from(d),
+        Err(_) => {
+            eprintln!("skipping gear_sonic benchmark: GEAR_SONIC_MODEL_DIR not set");
+            return;
+        }
+    };
+    let encoder_path = model_dir.join("model_encoder.onnx");
+    let decoder_path = model_dir.join("model_decoder.onnx");
+    let planner_path = model_dir.join("planner_sonic.onnx");
+    for p in [&encoder_path, &decoder_path, &planner_path] {
+        if !p.exists() {
+            eprintln!(
+                "skipping gear_sonic benchmark: model not found at {}",
+                p.display()
+            );
+            return;
+        }
     }
 
+    // Load robot config to determine joint_count for the observation.
+    let robot_config_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs/robots/unitree_g1.toml");
+    let robot = if robot_config_path.exists() {
+        robowbc_core::RobotConfig::from_toml_file(&robot_config_path)
+            .expect("robot config should load")
+    } else {
+        test_robot_config(29)
+    };
+    let n = robot.joint_count;
+
     let config = GearSonicConfig {
-        encoder: test_ort_config(model_path.clone()),
-        decoder: test_ort_config(model_path.clone()),
-        planner: test_ort_config(model_path),
-        robot: test_robot_config(4),
+        encoder: test_ort_config(encoder_path),
+        decoder: test_ort_config(decoder_path),
+        planner: test_ort_config(planner_path),
+        robot,
     };
     let policy = GearSonicPolicy::new(config).expect("policy should build");
 
     let obs = Observation {
-        joint_positions: vec![0.0; 4],
-        joint_velocities: vec![0.0; 4],
+        joint_positions: vec![0.0; n],
+        joint_velocities: vec![0.0; n],
         gravity_vector: [0.0, 0.0, -1.0],
-        command: WbcCommand::MotionTokens(vec![0.25, -0.25, 0.5, -0.5]),
+        command: WbcCommand::MotionTokens(vec![0.0; 4]),
         timestamp: Instant::now(),
     };
 
