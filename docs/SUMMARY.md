@@ -26,3 +26,12 @@
 
 - [Roadmap](roadmap-2026-q2.md)
 - [Ecosystem Strategy](ecosystem-strategy.md)
+
+# Community
+
+- [GR00T-WBC Integration Guide](community/groot-wbc-integration.md)
+- [LeRobot RFC](community/lerobot-rfc.md)
+- [Blog Post Drafts](community/blog-posts.md)
+- [Awesome List Submissions](community/awesome-submissions.md)
+- [Rust Community Outreach](community/rust-community.md)
+- [Academic Engagement](community/academic-engagement.md)
