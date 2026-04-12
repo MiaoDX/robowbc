@@ -17,7 +17,14 @@ pub struct RerunVisualizer {
 }
 
 impl RerunVisualizer {
-    /// Creates a new visualizer and opens the Rerun viewer.
+    /// Creates a new visualizer.
+    ///
+    /// Mode selection (checked in order):
+    /// 1. If [`RerunConfig::save_path`] is set → writes a `.rrd` file
+    ///    (headless, no display required — suitable for CI).
+    /// 2. Else if [`RerunConfig::spawn_viewer`] is `true` → spawns a local
+    ///    Rerun viewer process.
+    /// 3. Otherwise → connects to an already-running viewer via TCP.
     ///
     /// # Errors
     ///
@@ -25,7 +32,11 @@ impl RerunVisualizer {
     pub fn new(config: &RerunConfig, joint_names: &[String]) -> Result<Self, VisError> {
         let builder = RecordingStreamBuilder::new(&config.app_id);
 
-        let rec = if config.spawn_viewer {
+        let rec = if let Some(ref path) = config.save_path {
+            builder.save(path).map_err(|e| VisError::InitFailed {
+                reason: format!("failed to open recording file {}: {e}", path.display()),
+            })?
+        } else if config.spawn_viewer {
             builder.spawn().map_err(|e| VisError::InitFailed {
                 reason: format!("failed to spawn viewer: {e}"),
             })?

@@ -58,6 +58,67 @@ This uniformity makes a thin abstraction layer both possible and natural.
 | [HumanPlus](https://github.com/MarkFzp/humanplus) | Stanford | PyTorch | ❌ | Custom H1 | Planned |
 | [ExBody](https://github.com/chengxuxin/expressive-humanoid) | Unitree collab | PyTorch | ❌ | H1 | Planned |
 
+## Visualization
+
+RoboWBC ships a [Rerun](https://rerun.io)-backed visualizer (`robowbc-vis`) that streams per-tick data for any running policy:
+
+| Channel | Path in Rerun |
+|---------|---------------|
+| Actual joint positions | `joints/actual/<name>` |
+| Actual joint velocities | `joints/velocity/<name>` |
+| Policy joint targets | `joints/target/<name>` |
+| Inference latency | `metrics/inference_latency_ms` |
+| Control loop frequency | `metrics/control_frequency_hz` |
+
+### Quick start
+
+Add a `[vis]` section to any config file and rebuild with the `vis` feature:
+
+```bash
+cargo run --bin robowbc --features robowbc-cli/vis -- run --config configs/decoupled_g1.toml
+```
+
+**Live viewer** — spawns a Rerun window automatically:
+
+```toml
+[vis]
+app_id  = "robowbc"
+spawn_viewer = true
+```
+
+**Headless / save to file** — no display required, works in CI or SSH sessions:
+
+```toml
+[vis]
+app_id       = "robowbc"
+spawn_viewer = false
+save_path    = "recording.rrd"
+```
+
+Open the saved file:
+
+```bash
+rerun recording.rrd          # local Rerun install
+# or paste the file URL into https://app.rerun.io
+```
+
+### CI-generated snapshots
+
+Every CI run on this repository records a headless `.rrd` snapshot of the `decoupled_wbc` policy (200 ticks, no model downloads required). Download the artifact named **`policy-snapshots`** from any [GitHub Actions run](../../actions/workflows/ci.yml) and open it with Rerun to see joint position targets, velocities, and inference latency over time.
+
+### Comparing policies
+
+Run each policy config with a shared `save_path` prefix, then open the files together:
+
+```bash
+# record two policies
+cargo run --bin robowbc --features robowbc-cli/vis -- run --config configs/decoupled_g1.toml
+# edit [vis] save_path between runs, then:
+rerun decoupled_wbc.rrd gear_sonic.rrd
+```
+
+Rerun's timeline lets you scrub both recordings side-by-side to compare target trajectories and latency characteristics.
+
 ## Related Work (WBC Literature)
 
 RoboWBC is grounded in recent whole-body control research and is designed to provide a common deployment interface across these lines of work:

@@ -9,24 +9,44 @@
 //!
 //! # Example
 //!
+//! **Live viewer (spawns a local Rerun window):**
 //! ```toml
 //! [vis]
 //! app_id = "robowbc"
 //! spawn_viewer = true
 //! ```
+//!
+//! **Headless / CI (saves a `.rrd` recording file):**
+//! ```toml
+//! [vis]
+//! app_id = "robowbc"
+//! spawn_viewer = false
+//! save_path = "snapshot.rrd"
+//! ```
+//!
+//! Open a saved recording with `rerun snapshot.rrd` or via
+//! <https://app.rerun.io> (paste the file URL in the viewer).
+
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 /// Configuration for the Rerun visualizer.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct RerunConfig {
     /// Rerun application identifier shown in the viewer title bar.
     #[serde(default = "default_app_id")]
     pub app_id: String,
     /// When `true`, spawns a new Rerun viewer process on startup.
-    /// When `false`, connects to an already-running viewer.
+    /// When `false` and [`save_path`](Self::save_path) is `None`,
+    /// connects to an already-running viewer via TCP.
     #[serde(default = "default_spawn_viewer")]
     pub spawn_viewer: bool,
+    /// Write the recording to this `.rrd` file instead of streaming to a
+    /// viewer.  Enables headless operation — useful for CI and offline review.
+    /// When set, [`spawn_viewer`](Self::spawn_viewer) is ignored.
+    #[serde(default)]
+    pub save_path: Option<PathBuf>,
 }
 
 fn default_app_id() -> String {
@@ -35,15 +55,6 @@ fn default_app_id() -> String {
 
 const fn default_spawn_viewer() -> bool {
     true
-}
-
-impl Default for RerunConfig {
-    fn default() -> Self {
-        Self {
-            app_id: default_app_id(),
-            spawn_viewer: default_spawn_viewer(),
-        }
-    }
 }
 
 /// Errors produced by the visualization layer.
@@ -82,6 +93,7 @@ mod tests {
         let cfg = RerunConfig::default();
         assert_eq!(cfg.app_id, "robowbc");
         assert!(cfg.spawn_viewer);
+        assert!(cfg.save_path.is_none());
     }
 
     #[test]
@@ -89,10 +101,24 @@ mod tests {
         let cfg = RerunConfig {
             app_id: "test_app".to_owned(),
             spawn_viewer: false,
+            save_path: Some(PathBuf::from("/tmp/snapshot.rrd")),
         };
         let toml_str = toml::to_string(&cfg).expect("serialization should succeed");
         let loaded: RerunConfig =
             toml::from_str(&toml_str).expect("deserialization should succeed");
         assert_eq!(cfg, loaded);
+    }
+
+    #[test]
+    fn headless_config_round_trips() {
+        let toml_str = r#"
+app_id = "ci-run"
+spawn_viewer = false
+save_path = "output.rrd"
+"#;
+        let cfg: RerunConfig = toml::from_str(toml_str).expect("should parse");
+        assert_eq!(cfg.app_id, "ci-run");
+        assert!(!cfg.spawn_viewer);
+        assert_eq!(cfg.save_path, Some(PathBuf::from("output.rrd")));
     }
 }
