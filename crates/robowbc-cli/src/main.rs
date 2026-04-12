@@ -681,6 +681,7 @@ device = "cpu"
             ],
             default_pose: vec![0.0, 0.0, 0.0, 0.0],
             model_path: None,
+            joint_velocity_limits: None,
         };
 
         let mut cfg_map = toml::map::Map::new();
@@ -722,6 +723,7 @@ device = "cpu"
             &comm,
             &runtime,
             Arc::new(AtomicBool::new(true)),
+            None,
             #[cfg(feature = "sim")]
             None,
             #[cfg(feature = "vis")]
