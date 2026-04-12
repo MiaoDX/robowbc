@@ -316,6 +316,7 @@ fn run_control_loop_inner<T: RobotTransport>(
     comm: &CommConfig,
     runtime: &RuntimeConfig,
     running: &AtomicBool,
+    #[cfg(feature = "vis")] visualizer: &mut Option<RerunVisualizer>,
 ) -> Result<(usize, usize, Duration), String> {
     let command = if let Some([vx, vy, yaw]) = runtime.velocity {
         WbcCommand::Velocity(Twist {
@@ -342,27 +343,70 @@ fn run_control_loop_inner<T: RobotTransport>(
         }
 
         let cycle_start = Instant::now();
+
+        // Capture per-tick data for vis logging; populated inside the closure.
+        #[cfg(feature = "vis")]
+        let mut tick_vis: Option<(Vec<f32>, Vec<f32>, Vec<f32>, f64)> = None;
+
         run_control_tick(transport, command.clone(), |obs| {
             let infer_start = Instant::now();
             let output = policy.predict(&obs);
-            inference_total += infer_start.elapsed();
+            let elapsed = infer_start.elapsed();
+            inference_total += elapsed;
+
+            #[cfg(feature = "vis")]
+            {
+                let positions = obs.joint_positions.clone();
+                let velocities = obs.joint_velocities.clone();
+                let targets = output
+                    .as_ref()
+                    .map(|t| t.positions.clone())
+                    .unwrap_or_default();
+                tick_vis = Some((positions, velocities, targets, elapsed.as_secs_f64() * 1e3));
+            }
+
             output
         })
         .map_err(|e| format!("control loop tick failed: {e}"))?;
 
+        let cycle_elapsed = cycle_start.elapsed();
+
+        // Log joint state, targets, and metrics to Rerun (no-op when vis disabled).
+        #[cfg(feature = "vis")]
+        if let (Some(vis), Some((positions, velocities, targets, latency_ms))) =
+            (visualizer.as_mut(), tick_vis)
+        {
+            vis.advance_frame();
+            let _ = vis.log_joint_state(&positions, &velocities);
+            let _ = vis.log_joint_targets(&targets);
+            let _ = vis.log_inference_latency(latency_ms);
+            #[allow(clippy::cast_precision_loss)]
+            let freq = 1.0_f64 / cycle_elapsed.as_secs_f64().max(f64::EPSILON);
+            let _ = vis.log_control_frequency(freq);
+            match &command {
+                WbcCommand::Velocity(t) => {
+                    let _ = vis.log_velocity_command(t.linear[0], t.linear[1], t.angular[2]);
+                }
+                WbcCommand::MotionTokens(tokens) => {
+                    let _ = vis.log_motion_tokens(tokens);
+                }
+                _ => {}
+            }
+        }
+
         ticks = ticks.saturating_add(1);
 
-        let elapsed = cycle_start.elapsed();
-        if elapsed > period {
+        if cycle_elapsed > period {
             dropped_frames = dropped_frames.saturating_add(1);
         } else {
-            thread::sleep(period.saturating_sub(elapsed));
+            thread::sleep(period.saturating_sub(cycle_elapsed));
         }
     }
 
     Ok((ticks, dropped_frames, inference_total))
 }
 
+#[allow(clippy::too_many_lines)]
 fn run_control_loop(
     policy: &dyn WbcPolicy,
     robot: &RobotConfig,
@@ -386,7 +430,7 @@ fn run_control_loop(
 
     // Optionally initialise Rerun visualizer.
     #[cfg(feature = "vis")]
-    let _visualizer: Option<RerunVisualizer> = match vis_config {
+    let mut visualizer: Option<RerunVisualizer> = match vis_config {
         Some(ref cfg) => {
             let vis = RerunVisualizer::new(cfg, &robot.joint_names)
                 .map_err(|e| format!("failed to start Rerun visualizer: {e}"))?;
@@ -406,20 +450,41 @@ fn run_control_loop(
                 UnitreeG1Transport::connect(hw_cfg, robot.clone(), comm.frequency_hz)
                     .map_err(|e| format!("hardware transport connect failed: {e}"))?;
             println!("unitree g1 hardware transport active");
-            let (ticks, dropped, inf) =
-                run_control_loop_inner(&mut transport, policy, comm, runtime, running)?;
+            let (ticks, dropped, inf) = run_control_loop_inner(
+                &mut transport,
+                policy,
+                comm,
+                runtime,
+                running,
+                #[cfg(feature = "vis")]
+                &mut visualizer,
+            )?;
             (ticks, dropped, inf, ticks)
         } else if let Some(sim_cfg) = sim_config {
             let mut transport = MujocoTransport::new(sim_cfg, robot.clone())
                 .map_err(|e| format!("mujoco init failed: {e}"))?;
             println!("mujoco simulation transport active");
-            let (ticks, dropped, inf) =
-                run_control_loop_inner(&mut transport, policy, comm, runtime, running)?;
+            let (ticks, dropped, inf) = run_control_loop_inner(
+                &mut transport,
+                policy,
+                comm,
+                runtime,
+                running,
+                #[cfg(feature = "vis")]
+                &mut visualizer,
+            )?;
             (ticks, dropped, inf, ticks)
         } else {
             let mut transport = SyntheticTransport::new(robot.joint_count);
-            let (ticks, dropped, inf) =
-                run_control_loop_inner(&mut transport, policy, comm, runtime, running)?;
+            let (ticks, dropped, inf) = run_control_loop_inner(
+                &mut transport,
+                policy,
+                comm,
+                runtime,
+                running,
+                #[cfg(feature = "vis")]
+                &mut visualizer,
+            )?;
             (ticks, dropped, inf, transport.sent_commands())
         }
     };
@@ -431,13 +496,27 @@ fn run_control_loop(
                 UnitreeG1Transport::connect(hw_cfg, robot.clone(), comm.frequency_hz)
                     .map_err(|e| format!("hardware transport connect failed: {e}"))?;
             println!("unitree g1 hardware transport active");
-            let (ticks, dropped, inf) =
-                run_control_loop_inner(&mut transport, policy, comm, runtime, running)?;
+            let (ticks, dropped, inf) = run_control_loop_inner(
+                &mut transport,
+                policy,
+                comm,
+                runtime,
+                running,
+                #[cfg(feature = "vis")]
+                &mut visualizer,
+            )?;
             (ticks, dropped, inf, ticks)
         } else {
             let mut transport = SyntheticTransport::new(robot.joint_count);
-            let (ticks, dropped, inf) =
-                run_control_loop_inner(&mut transport, policy, comm, runtime, running)?;
+            let (ticks, dropped, inf) = run_control_loop_inner(
+                &mut transport,
+                policy,
+                comm,
+                runtime,
+                running,
+                #[cfg(feature = "vis")]
+                &mut visualizer,
+            )?;
             (ticks, dropped, inf, transport.sent_commands())
         }
     };

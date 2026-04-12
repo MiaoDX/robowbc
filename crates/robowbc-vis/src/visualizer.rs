@@ -131,6 +131,40 @@ impl RerunVisualizer {
             })
     }
 
+    /// Logs a velocity command `[vx, vy, yaw_rate]` for the current frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VisError`] if a log call fails.
+    pub fn log_velocity_command(&self, vx: f32, vy: f32, yaw_rate: f32) -> Result<(), VisError> {
+        for (channel, value) in [("vx", vx), ("vy", vy), ("yaw_rate", yaw_rate)] {
+            self.rec
+                .log(format!("command/{channel}"), &Scalar::new(f64::from(value)))
+                .map_err(|e| VisError::LogFailed {
+                    reason: format!("{e}"),
+                })?;
+        }
+        Ok(())
+    }
+
+    /// Logs motion token values for the current frame.
+    ///
+    /// Each token is logged as `command/token_<index>`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VisError`] if a log call fails.
+    pub fn log_motion_tokens(&self, tokens: &[f32]) -> Result<(), VisError> {
+        for (i, &v) in tokens.iter().enumerate() {
+            self.rec
+                .log(format!("command/token_{i}"), &Scalar::new(f64::from(v)))
+                .map_err(|e| VisError::LogFailed {
+                    reason: format!("{e}"),
+                })?;
+        }
+        Ok(())
+    }
+
     /// Advances the timeline to the next frame.
     ///
     /// Call this once per control tick, before logging data for that tick.
