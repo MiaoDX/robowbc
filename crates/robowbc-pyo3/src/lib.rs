@@ -43,6 +43,7 @@
 //!     joint_limits: vec![robowbc_core::JointLimit { min: -1.0, max: 1.0 }; 4],
 //!     default_pose: vec![0.0; 4],
 //!     model_path: None,
+//!     joint_velocity_limits: None,
 //! };
 //! let config = PyModelConfig {
 //!     model_path: "my_wbc_model.py".into(),
