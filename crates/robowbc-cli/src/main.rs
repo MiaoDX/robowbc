@@ -365,6 +365,7 @@ fn run_control_loop(
 
     let _ = std::any::TypeId::of::<robowbc_ort::GearSonicPolicy>();
     let _ = std::any::TypeId::of::<robowbc_ort::DecoupledWbcPolicy>();
+    let _ = std::any::TypeId::of::<robowbc_ort::WbcAgilePolicy>();
 
     let running = Arc::new(AtomicBool::new(true));
     {
