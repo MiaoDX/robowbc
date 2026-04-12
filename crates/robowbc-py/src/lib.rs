@@ -53,6 +53,46 @@ use robowbc_registry::WbcRegistry;
 use std::sync::Arc;
 use std::time::Instant;
 
+/// Load a [`Policy`] from a robowbc TOML config file.
+///
+/// Convenience wrapper around :meth:`Registry.build_from_str` that reads
+/// the config file for you.  The TOML file must contain a ``[policy]`` table
+/// with a ``name`` field and an optional ``[policy.config]`` subsection.
+///
+/// Parameters
+/// ----------
+/// config_path : str
+///     Path to the robowbc TOML config file (e.g. ``"configs/sonic_g1.toml"``).
+///
+/// Returns
+/// -------
+/// Policy
+///     A policy instance ready for inference.
+///
+/// Raises
+/// ------
+/// RuntimeError
+///     If the file cannot be read, parsed, or the policy cannot be built.
+///
+/// Examples
+/// --------
+/// ```python
+/// import robowbc
+/// policy = robowbc.load_from_config("configs/sonic_g1.toml")
+/// print(policy.control_frequency_hz())  # 50
+/// ```
+#[pyfunction]
+fn load_from_config(config_path: &str) -> PyResult<PyPolicy> {
+    let content = std::fs::read_to_string(config_path).map_err(|e| {
+        PyRuntimeError::new_err(format!("cannot read config file {config_path:?}: {e}"))
+    })?;
+    let policy = WbcRegistry::build_from_toml_str(&content)
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    Ok(PyPolicy {
+        inner: Arc::from(policy),
+    })
+}
+
 /// Standardized sensor input for a WBC policy.
 ///
 /// Parameters
@@ -320,5 +360,6 @@ fn robowbc(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyJointPositionTargets>()?;
     m.add_class::<PyPolicy>()?;
     m.add_class::<PyRegistry>()?;
+    m.add_function(wrap_pyfunction!(load_from_config, m)?)?;
     Ok(())
 }
