@@ -62,7 +62,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install maturin
-        run: pip install maturin
+        run: pip install "maturin>=1.4,<2.0"
 
       - name: Build robowbc wheel (maturin develop)
         run: maturin develop --release
