@@ -269,6 +269,9 @@ inventory::submit! {
     WbcRegistration::new::<HoverPolicy>("hover")
 }
 
+#[doc(hidden)]
+pub fn force_link() {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -595,6 +595,26 @@ inventory::submit! {
     WbcRegistration::new::<GearSonicPolicy>("gear_sonic")
 }
 
+/// Forces all ORT-backed policy modules to be linked into the final binary or
+/// `cdylib`.
+///
+/// Call this from any `cdylib` (e.g. a Python extension module) that needs to
+/// discover ORT policies via [`robowbc_registry::WbcRegistry`].  Without it,
+/// the linker dead-strips `robowbc-ort` from the extension module because none
+/// of its symbols are directly referenced, causing
+/// [`robowbc_registry::WbcRegistry::policy_names`] to return an empty list.
+///
+/// Each call to `std::hint::black_box` below creates an unresolvable reference
+/// to a symbol in the corresponding module's object file, which forces the
+/// linker to include that file (and its `inventory::submit!` constructor).
+pub fn link_all_ort_policies() {
+    std::hint::black_box(bfm_zero::force_link as fn());
+    std::hint::black_box(decoupled::force_link as fn());
+    std::hint::black_box(wholebody_vla::force_link as fn());
+    std::hint::black_box(wbc_agile::force_link as fn());
+    std::hint::black_box(hover::force_link as fn());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -221,6 +221,9 @@ inventory::submit! {
     WbcRegistration::new::<WholeBodyVlaPolicy>("wholebody_vla")
 }
 
+#[doc(hidden)]
+pub fn force_link() {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

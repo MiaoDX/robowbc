@@ -224,6 +224,9 @@ inventory::submit! {
     WbcRegistration::new::<DecoupledWbcPolicy>("decoupled_wbc")
 }
 
+#[doc(hidden)]
+pub fn force_link() {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

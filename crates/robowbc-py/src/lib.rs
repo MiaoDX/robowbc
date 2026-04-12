@@ -312,6 +312,10 @@ impl PyRegistry {
 /// control policies backed by the Rust `robowbc` runtime.
 #[pymodule]
 fn robowbc(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Without this call, the linker dead-strips robowbc-ort from the cdylib
+    // (because none of its symbols are directly referenced here), causing all
+    // inventory::submit! policy registrations to be absent at runtime.
+    robowbc_ort::link_all_ort_policies();
     m.add_class::<PyObservation>()?;
     m.add_class::<PyJointPositionTargets>()?;
     m.add_class::<PyPolicy>()?;
