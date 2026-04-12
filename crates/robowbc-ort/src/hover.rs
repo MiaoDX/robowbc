@@ -308,6 +308,7 @@ mod tests {
             ],
             default_pose: vec![0.0; joint_count],
             model_path: None,
+            joint_velocity_limits: None,
         }
     }
 
