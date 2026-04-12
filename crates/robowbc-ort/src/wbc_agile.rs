@@ -200,6 +200,9 @@ inventory::submit! {
     WbcRegistration::new::<WbcAgilePolicy>("wbc_agile")
 }
 
+#[doc(hidden)]
+pub fn force_link() {}
+
 #[cfg(test)]
 mod tests {
     use super::*;

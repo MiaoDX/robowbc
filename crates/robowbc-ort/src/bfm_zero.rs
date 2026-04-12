@@ -188,6 +188,9 @@ inventory::submit! {
     WbcRegistration::new::<BfmZeroPolicy>("bfm_zero")
 }
 
+#[doc(hidden)]
+pub fn force_link() {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
