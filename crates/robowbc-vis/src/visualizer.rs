@@ -1,7 +1,10 @@
 //! Rerun-backed robot state visualizer.
 
 use crate::{RerunConfig, VisError};
-use rerun::{RecordingStream, RecordingStreamBuilder, Scalar};
+use rerun::{
+    blueprint::{Blueprint, BlueprintActivation, TimeSeriesView, Vertical},
+    RecordingStream, RecordingStreamBuilder, Scalars,
+};
 
 /// Streams robot joint state, policy targets, and runtime metrics to Rerun.
 ///
@@ -24,13 +27,16 @@ impl RerunVisualizer {
     ///    (headless, no display required — suitable for CI).
     /// 2. Else if [`RerunConfig::spawn_viewer`] is `true` → spawns a local
     ///    Rerun viewer process.
-    /// 3. Otherwise → connects to an already-running viewer via TCP.
+    /// 3. Otherwise → connects to an already-running viewer via gRPC.
+    ///
+    /// A default [`Blueprint`] is sent immediately after connecting so the
+    /// viewer opens with a useful panel layout without manual configuration.
     ///
     /// # Errors
     ///
     /// Returns [`VisError`] if the recording stream cannot be created.
     pub fn new(config: &RerunConfig, joint_names: &[String]) -> Result<Self, VisError> {
-        let builder = RecordingStreamBuilder::new(&config.app_id);
+        let builder = RecordingStreamBuilder::new(config.app_id.as_str());
 
         let rec = if let Some(ref path) = config.save_path {
             builder.save(path).map_err(|e| VisError::InitFailed {
@@ -41,16 +47,55 @@ impl RerunVisualizer {
                 reason: format!("failed to spawn viewer: {e}"),
             })?
         } else {
-            builder.connect_tcp().map_err(|e| VisError::InitFailed {
+            builder.connect_grpc().map_err(|e| VisError::InitFailed {
                 reason: format!("failed to connect to viewer: {e}"),
             })?
         };
 
-        Ok(Self {
+        let vis = Self {
             rec,
             joint_names: joint_names.to_vec(),
             frame: 0,
-        })
+        };
+
+        // Send a default blueprint so the viewer opens with a structured layout.
+        vis.send_default_blueprint()?;
+
+        Ok(vis)
+    }
+
+    /// Sends a default [`Blueprint`] that pre-configures two time-series panels:
+    ///
+    /// - **Joint Trajectories** — `joints/actual/*` and `joints/target/*`
+    /// - **Runtime Metrics** — `metrics/*` (latency, frequency)
+    ///
+    /// Called automatically from [`new`](Self::new). Can be re-sent at any
+    /// time to reset the viewer layout.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VisError`] if the blueprint cannot be serialised or sent.
+    pub fn send_default_blueprint(&self) -> Result<(), VisError> {
+        let blueprint = Blueprint::new(Vertical::new([
+            TimeSeriesView::new("Joint Trajectories")
+                .with_origin("joints")
+                .into(),
+            TimeSeriesView::new("Runtime Metrics")
+                .with_origin("metrics")
+                .into(),
+        ]));
+
+        blueprint
+            .send(
+                &self.rec,
+                BlueprintActivation {
+                    make_active: true,
+                    make_default: true,
+                },
+            )
+            .map_err(|e| VisError::InitFailed {
+                reason: format!("failed to send blueprint: {e}"),
+            })
     }
 
     /// Logs actual joint positions and velocities for the current frame.
@@ -64,7 +109,7 @@ impl RerunVisualizer {
                 self.rec
                     .log(
                         format!("joints/actual/{name}"),
-                        &Scalar::new(f64::from(pos)),
+                        &Scalars::new([f64::from(pos)]),
                     )
                     .map_err(|e| VisError::LogFailed {
                         reason: format!("{e}"),
@@ -74,7 +119,7 @@ impl RerunVisualizer {
                 self.rec
                     .log(
                         format!("joints/velocity/{name}"),
-                        &Scalar::new(f64::from(vel)),
+                        &Scalars::new([f64::from(vel)]),
                     )
                     .map_err(|e| VisError::LogFailed {
                         reason: format!("{e}"),
@@ -95,7 +140,7 @@ impl RerunVisualizer {
                 self.rec
                     .log(
                         format!("joints/target/{name}"),
-                        &Scalar::new(f64::from(target)),
+                        &Scalars::new([f64::from(target)]),
                     )
                     .map_err(|e| VisError::LogFailed {
                         reason: format!("{e}"),
@@ -112,7 +157,7 @@ impl RerunVisualizer {
     /// Returns [`VisError`] if the log call fails.
     pub fn log_inference_latency(&self, latency_ms: f64) -> Result<(), VisError> {
         self.rec
-            .log("metrics/inference_latency_ms", &Scalar::new(latency_ms))
+            .log("metrics/inference_latency_ms", &Scalars::new([latency_ms]))
             .map_err(|e| VisError::LogFailed {
                 reason: format!("{e}"),
             })
@@ -125,7 +170,10 @@ impl RerunVisualizer {
     /// Returns [`VisError`] if the log call fails.
     pub fn log_control_frequency(&self, frequency_hz: f64) -> Result<(), VisError> {
         self.rec
-            .log("metrics/control_frequency_hz", &Scalar::new(frequency_hz))
+            .log(
+                "metrics/control_frequency_hz",
+                &Scalars::new([frequency_hz]),
+            )
             .map_err(|e| VisError::LogFailed {
                 reason: format!("{e}"),
             })
@@ -139,7 +187,10 @@ impl RerunVisualizer {
     pub fn log_velocity_command(&self, vx: f32, vy: f32, yaw_rate: f32) -> Result<(), VisError> {
         for (channel, value) in [("vx", vx), ("vy", vy), ("yaw_rate", yaw_rate)] {
             self.rec
-                .log(format!("command/{channel}"), &Scalar::new(f64::from(value)))
+                .log(
+                    format!("command/{channel}"),
+                    &Scalars::new([f64::from(value)]),
+                )
                 .map_err(|e| VisError::LogFailed {
                     reason: format!("{e}"),
                 })?;
@@ -157,7 +208,7 @@ impl RerunVisualizer {
     pub fn log_motion_tokens(&self, tokens: &[f32]) -> Result<(), VisError> {
         for (i, &v) in tokens.iter().enumerate() {
             self.rec
-                .log(format!("command/token_{i}"), &Scalar::new(f64::from(v)))
+                .log(format!("command/token_{i}"), &Scalars::new([f64::from(v)]))
                 .map_err(|e| VisError::LogFailed {
                     reason: format!("{e}"),
                 })?;
