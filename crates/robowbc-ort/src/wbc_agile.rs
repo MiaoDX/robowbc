@@ -127,13 +127,10 @@ impl robowbc_core::WbcPolicy for WbcAgilePolicy {
             ));
         }
 
-        let twist = match &obs.command {
-            WbcCommand::Velocity(t) => t,
-            _ => {
-                return Err(WbcError::UnsupportedCommand(
-                    "WbcAgilePolicy requires WbcCommand::Velocity",
-                ))
-            }
+        let WbcCommand::Velocity(twist) = &obs.command else {
+            return Err(WbcError::UnsupportedCommand(
+                "WbcAgilePolicy requires WbcCommand::Velocity",
+            ));
         };
 
         let input = self.build_input(obs, twist);
@@ -185,7 +182,7 @@ impl std::fmt::Debug for WbcAgilePolicy {
         f.debug_struct("WbcAgilePolicy")
             .field("joint_count", &self.robot.joint_count)
             .field("control_frequency_hz", &self.control_frequency_hz)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -365,12 +362,12 @@ mod tests {
 
     #[test]
     fn predict_on_g1_35dof_joint_count() {
+        const N: usize = 35;
+
         if !has_dynamic_model() {
             eprintln!("skipping: dynamic model not found");
             return;
         }
-
-        const N: usize = 35;
         let config = WbcAgileConfig {
             rl_model: test_ort_config(dynamic_model_path()),
             robot: test_robot_config(N),
@@ -404,12 +401,12 @@ mod tests {
 
     #[test]
     fn predict_on_t1_23dof_joint_count() {
+        const N: usize = 23;
+
         if !has_dynamic_model() {
             eprintln!("skipping: dynamic model not found");
             return;
         }
-
-        const N: usize = 23;
         let config = WbcAgileConfig {
             rl_model: test_ort_config(dynamic_model_path()),
             robot: test_robot_config(N),
@@ -442,12 +439,12 @@ mod tests {
 
     #[test]
     fn registry_build_wbc_agile() {
+        use robowbc_registry::WbcRegistry;
+
         if !has_dynamic_model() {
             eprintln!("skipping: dynamic model not found");
             return;
         }
-
-        use robowbc_registry::WbcRegistry;
 
         let robot = test_robot_config(4);
         let mut cfg_map = toml::map::Map::new();
@@ -479,8 +476,7 @@ mod tests {
     #[ignore = "requires real WBC-AGILE ONNX weights from nvidia-isaac/WBC-AGILE"]
     fn wbc_agile_real_model_inference() {
         let model_path = std::env::var("WBC_AGILE_G1_MODEL_PATH")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("models/wbc_agile_g1.onnx"));
+            .map_or_else(|_| PathBuf::from("models/wbc_agile_g1.onnx"), PathBuf::from);
 
         // G1 35-DOF: input = 2*35 + 6 = 76 elements, output = 35 joint targets.
         let config = WbcAgileConfig {

@@ -251,7 +251,7 @@ impl std::fmt::Debug for HoverPolicy {
         f.debug_struct("HoverPolicy")
             .field("command_dim", &self.command_dim)
             .field("control_frequency_hz", &self.control_frequency_hz)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -335,6 +335,7 @@ mod tests {
         mask
     }
 
+    #[allow(clippy::cast_precision_loss)]
     fn sample_velocity_obs(joint_count: usize) -> Observation {
         Observation {
             joint_positions: (0..joint_count).map(|i| 0.1 * i as f32).collect(),
@@ -732,12 +733,12 @@ default_pose = [0.0, 0.0]
 
     #[test]
     fn registry_build_hover() {
+        use robowbc_registry::WbcRegistry;
+
         if !has_dynamic_model() {
             eprintln!("skipping: dynamic model not found");
             return;
         }
-
-        use robowbc_registry::WbcRegistry;
 
         let robot = test_robot_config(4);
         let mut cfg_map = toml::map::Map::new();

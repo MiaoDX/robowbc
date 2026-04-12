@@ -1,4 +1,4 @@
-//! Inventory-based policy registry and factory for RoboWBC.
+//! Inventory-based policy registry and factory for `RoboWBC`.
 
 use robowbc_core::{Result as CoreResult, WbcError, WbcPolicy};
 use std::fmt;
@@ -6,6 +6,10 @@ use std::fmt;
 /// Trait implemented by policy types that support registry-driven construction.
 pub trait RegistryPolicy: WbcPolicy + Sized + 'static {
     /// Builds a policy instance from the policy-specific TOML configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`WbcError`] if the config is missing required fields or contains invalid values.
     fn from_config(config: &toml::Value) -> CoreResult<Self>;
 }
 
@@ -19,6 +23,7 @@ pub struct WbcRegistration {
 
 impl WbcRegistration {
     /// Creates a registration entry for policy type `P`.
+    #[must_use]
     pub const fn new<P>(name: &'static str) -> Self
     where
         P: RegistryPolicy,
@@ -80,6 +85,7 @@ pub struct WbcRegistry;
 
 impl WbcRegistry {
     /// Returns all registered policy names sorted lexicographically.
+    #[must_use]
     pub fn policy_names() -> Vec<&'static str> {
         let mut names: Vec<_> = inventory::iter::<WbcRegistration>
             .into_iter()
@@ -90,6 +96,11 @@ impl WbcRegistry {
     }
 
     /// Builds a policy by name using the provided policy-specific config table.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RegistryError::UnknownPolicy`] if the name is not registered,
+    /// or [`RegistryError::PolicyBuildFailed`] if construction fails.
     pub fn build(name: &str, config: &toml::Value) -> Result<Box<dyn WbcPolicy>, RegistryError> {
         let registration = inventory::iter::<WbcRegistration>
             .into_iter()
@@ -115,6 +126,11 @@ impl WbcRegistry {
     /// [policy.config]
     /// model_dir = "./models/sonic"
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`RegistryError`] if the TOML is malformed, missing the `[policy]` section,
+    /// or if policy construction fails.
     pub fn build_from_toml_str(config: &str) -> Result<Box<dyn WbcPolicy>, RegistryError> {
         let parsed: toml::Value = config
             .parse()
@@ -152,6 +168,7 @@ mod tests {
     }
 
     impl RegistryPolicy for MockPolicy {
+        #[allow(clippy::cast_possible_truncation)]
         fn from_config(config: &toml::Value) -> CoreResult<Self> {
             let gain = config
                 .get("gain")
@@ -221,9 +238,8 @@ mod tests {
     #[test]
     fn unknown_policy_returns_clear_error() {
         let config = toml::Value::Table(toml::map::Map::new());
-        let err = match WbcRegistry::build("does_not_exist", &config) {
-            Ok(_) => panic!("unknown policy should not build"),
-            Err(err) => err,
+        let Err(err) = WbcRegistry::build("does_not_exist", &config) else {
+            panic!("unknown policy should not build")
         };
         assert!(matches!(err, RegistryError::UnknownPolicy { .. }));
     }

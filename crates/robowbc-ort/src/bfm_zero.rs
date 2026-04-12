@@ -115,13 +115,10 @@ impl robowbc_core::WbcPolicy for BfmZeroPolicy {
             ));
         }
 
-        let twist = match &obs.command {
-            WbcCommand::Velocity(t) => t,
-            _ => {
-                return Err(WbcError::UnsupportedCommand(
-                    "BfmZeroPolicy requires WbcCommand::Velocity",
-                ))
-            }
+        let WbcCommand::Velocity(twist) = &obs.command else {
+            return Err(WbcError::UnsupportedCommand(
+                "BfmZeroPolicy requires WbcCommand::Velocity",
+            ));
         };
 
         let input = self.build_input(obs, twist);
@@ -173,7 +170,7 @@ impl std::fmt::Debug for BfmZeroPolicy {
         f.debug_struct("BfmZeroPolicy")
             .field("joint_count", &self.robot.joint_count)
             .field("control_frequency_hz", &self.control_frequency_hz)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -350,12 +347,12 @@ mod tests {
 
     #[test]
     fn registry_build_bfm_zero() {
+        use robowbc_registry::WbcRegistry;
+
         if !has_dynamic_model() {
             eprintln!("skipping: dynamic model not found");
             return;
         }
-
-        use robowbc_registry::WbcRegistry;
 
         let robot = test_robot(4);
         let mut cfg = toml::map::Map::new();

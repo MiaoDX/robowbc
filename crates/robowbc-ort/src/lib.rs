@@ -1,7 +1,7 @@
-//! ONNX Runtime inference backend for RoboWBC.
+//! ONNX Runtime inference backend for `RoboWBC`.
 //!
 //! Provides a thread-safe wrapper around the [`ort`] crate for loading and
-//! executing ONNX models with CPU, CUDA, and TensorRT execution providers.
+//! executing ONNX models with CPU, CUDA, and `TensorRT` execution providers.
 //!
 //! # Example
 //!
@@ -110,9 +110,9 @@ pub enum ExecutionProvider {
         /// CUDA device ordinal (0-based).
         device_id: i32,
     },
-    /// NVIDIA TensorRT execution provider.
+    /// NVIDIA `TensorRT` execution provider.
     TensorRt {
-        /// CUDA device ordinal for TensorRT (0-based).
+        /// CUDA device ordinal for `TensorRT` (0-based).
         device_id: i32,
     },
 }
@@ -356,7 +356,10 @@ impl OrtBackend {
                     });
                 }
 
-                let shape_usize: Vec<usize> = shape.iter().map(|&d| d as usize).collect();
+                let shape_usize: Vec<usize> = shape
+                    .iter()
+                    .map(|&d| usize::try_from(d).unwrap_or_default())
+                    .collect();
                 let tensor = Tensor::<f32>::from_array((
                     shape_usize.as_slice(),
                     data.to_vec().into_boxed_slice(),
@@ -402,7 +405,7 @@ impl std::fmt::Debug for OrtBackend {
         f.debug_struct("OrtBackend")
             .field("inputs", &self.input_names)
             .field("outputs", &self.output_names)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

@@ -127,7 +127,7 @@ fn bench_dynamic_identity_scaling(c: &mut Criterion) {
     for &size in &[4, 29, 64, 256] {
         let mut backend = OrtBackend::from_file(&model_path).expect("model should load");
         let input_data: Vec<f32> = vec![1.0; size];
-        let shape = [1, size as i64];
+        let shape = [1_i64, i64::try_from(size).expect("bench size fits in i64")];
 
         group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
             b.iter(|| {
@@ -152,12 +152,11 @@ fn bench_gear_sonic_predict(c: &mut Criterion) {
     //
     // Set GEAR_SONIC_MODEL_DIR to a directory containing
     // model_encoder.onnx, model_decoder.onnx, and planner_sonic.onnx.
-    let model_dir = match std::env::var("GEAR_SONIC_MODEL_DIR") {
-        Ok(d) => PathBuf::from(d),
-        Err(_) => {
-            eprintln!("skipping gear_sonic benchmark: GEAR_SONIC_MODEL_DIR not set");
-            return;
-        }
+    let model_dir = if let Ok(d) = std::env::var("GEAR_SONIC_MODEL_DIR") {
+        PathBuf::from(d)
+    } else {
+        eprintln!("skipping gear_sonic benchmark: GEAR_SONIC_MODEL_DIR not set");
+        return;
     };
     let encoder_path = model_dir.join("model_encoder.onnx");
     let decoder_path = model_dir.join("model_decoder.onnx");

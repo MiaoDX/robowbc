@@ -1,6 +1,6 @@
-//! WholeBodyVLA policy: VLA-conditioned whole-body control.
+//! `WholeBodyVLA` policy: VLA-conditioned whole-body control.
 //!
-//! WholeBodyVLA (OpenDriveLab, AGIBOT X2) integrates a vision-language-action
+//! `WholeBodyVLA` (`OpenDriveLab`, AGIBOT X2) integrates a vision-language-action
 //! (VLA) model with a whole-body controller. The VLA layer outputs end-effector
 //! pose targets; the WBC model converts them — alongside proprioceptive state —
 //! into joint position targets.
@@ -34,7 +34,7 @@
 //!
 //! ## ONNX export
 //!
-//! After training with the WholeBodyVLA repository:
+//! After training with the `WholeBodyVLA` repository:
 //! ```bash
 //! python export_onnx.py --checkpoint checkpoints/wholebody_vla_x2.pt \
 //!     --output models/wholebody_vla_x2.onnx \
@@ -56,7 +56,7 @@ fn default_control_frequency_hz() -> u32 {
     50
 }
 
-/// Configuration for the WholeBodyVLA policy.
+/// Configuration for the `WholeBodyVLA` policy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WholeBodyVlaConfig {
     /// ONNX model for the WBC inference stage.
@@ -73,7 +73,7 @@ pub struct WholeBodyVlaConfig {
     pub control_frequency_hz: u32,
 }
 
-/// WholeBodyVLA whole-body control policy.
+/// `WholeBodyVLA` whole-body control policy.
 ///
 /// Converts VLA-generated end-effector pose targets and proprioceptive state
 /// into joint position targets via a single ONNX model.
@@ -147,13 +147,10 @@ impl robowbc_core::WbcPolicy for WholeBodyVlaPolicy {
             ));
         }
 
-        let body_pose = match &obs.command {
-            WbcCommand::KinematicPose(p) => p,
-            _ => {
-                return Err(WbcError::UnsupportedCommand(
-                    "WholeBodyVlaPolicy requires WbcCommand::KinematicPose",
-                ))
-            }
+        let WbcCommand::KinematicPose(body_pose) = &obs.command else {
+            return Err(WbcError::UnsupportedCommand(
+                "WholeBodyVlaPolicy requires WbcCommand::KinematicPose",
+            ));
         };
 
         let input = self.build_input(obs, body_pose);
@@ -206,7 +203,7 @@ impl std::fmt::Debug for WholeBodyVlaPolicy {
             .field("joint_count", &self.robot.joint_count)
             .field("num_ee_links", &self.num_ee_links)
             .field("control_frequency_hz", &self.control_frequency_hz)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -397,12 +394,12 @@ mod tests {
 
     #[test]
     fn registry_build_wholebody_vla() {
+        use robowbc_registry::WbcRegistry;
+
         if !has_dynamic_model() {
             eprintln!("skipping: dynamic model not found");
             return;
         }
-
-        use robowbc_registry::WbcRegistry;
 
         let robot = test_robot(4);
         let mut cfg = toml::map::Map::new();

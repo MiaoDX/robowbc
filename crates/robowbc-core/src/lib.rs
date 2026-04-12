@@ -1,10 +1,10 @@
-//! Core interfaces and data types for RoboWBC.
+//! Core interfaces and data types for `RoboWBC`.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-/// Result type used across the RoboWBC core abstractions.
+/// Result type used across the `RoboWBC` core abstractions.
 pub type Result<T> = std::result::Result<T, WbcError>;
 
 /// Error type for policy inference and contract validation failures.
@@ -40,6 +40,10 @@ impl std::error::Error for WbcError {}
 /// controllers.
 pub trait WbcPolicy: Send + Sync {
     /// Predicts a joint-position target vector for the provided observation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`WbcError`] if the observation is invalid or inference fails.
     fn predict(&self, obs: &Observation) -> Result<JointPositionTargets>;
 
     /// Returns the control frequency required by the policy runtime.
