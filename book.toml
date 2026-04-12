@@ -1,0 +1,24 @@
+[book]
+title = "RoboWBC"
+description = "Unified inference runtime for humanoid whole-body control policies"
+authors = ["RoboWBC Contributors"]
+language = "en"
+multilingual = false
+src = "docs"
+
+[output.html]
+git-repository-url = "https://github.com/MiaoDX/robowbc"
+edit-url-template = "https://github.com/MiaoDX/robowbc/edit/main/{path}"
+no-section-label = false
+
+[output.html.playground]
+editable = false
+
+[output.html.search]
+limit-results = 20
+use-boolean-and = true
+boost-title = 2
+boost-hierarchy = 1
+boost-paragraph = 1
+expand = true
+heading-split-level = 3
