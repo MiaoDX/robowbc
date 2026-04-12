@@ -21,6 +21,9 @@
 pub mod decoupled;
 pub use decoupled::{DecoupledWbcConfig, DecoupledWbcPolicy};
 
+pub mod wbc_agile;
+pub use wbc_agile::{WbcAgileConfig, WbcAgilePolicy};
+
 use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
 use ort::value::Tensor;

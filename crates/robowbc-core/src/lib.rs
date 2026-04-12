@@ -349,6 +349,47 @@ mod tests {
     }
 
     #[test]
+    fn unitree_g1_35dof_config_loads_from_toml_file() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../configs/robots/unitree_g1_35dof.toml");
+        let config = RobotConfig::from_toml_file(&path).expect("G1-35 config should load");
+
+        assert_eq!(config.name, "unitree_g1_35dof");
+        assert_eq!(config.joint_count, 35);
+        assert_eq!(config.joint_names.len(), 35);
+        assert_eq!(config.pd_gains.len(), 35);
+        assert_eq!(config.joint_limits.len(), 35);
+        assert_eq!(config.default_pose.len(), 35);
+
+        // First joint matches GEAR-SONIC G1 ordering.
+        assert_eq!(config.joint_names[0], "left_hip_pitch_joint");
+        // Hand joints at indices 29–34.
+        assert_eq!(config.joint_names[29], "left_hand_index_joint");
+        assert_eq!(config.joint_names[32], "right_hand_index_joint");
+    }
+
+    #[test]
+    fn booster_t1_config_loads_from_toml_file() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../configs/robots/booster_t1.toml");
+        let config = RobotConfig::from_toml_file(&path).expect("T1 config should load");
+
+        assert_eq!(config.name, "booster_t1");
+        assert_eq!(config.joint_count, 23);
+        assert_eq!(config.joint_names.len(), 23);
+        assert_eq!(config.pd_gains.len(), 23);
+        assert_eq!(config.joint_limits.len(), 23);
+        assert_eq!(config.default_pose.len(), 23);
+
+        // First joint: left leg hip yaw.
+        assert_eq!(config.joint_names[0], "left_hip_yaw_joint");
+        // Waist joint at index 12.
+        assert_eq!(config.joint_names[12], "waist_yaw_joint");
+        // Arm joints start at index 13.
+        assert_eq!(config.joint_names[13], "left_shoulder_pitch_joint");
+    }
+
+    #[test]
     fn robot_config_validate_rejects_mismatched_lengths() {
         let mut robot = sample_robot();
         robot.joint_count = 3;

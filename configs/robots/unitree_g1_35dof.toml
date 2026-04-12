@@ -1,0 +1,198 @@
+# Unitree G1 35-DOF robot configuration for WBC-AGILE.
+#
+# Extends the standard G1 29-DOF (configs/robots/unitree_g1.toml) with 6
+# additional hand joints (3 per hand), as used by NVIDIA WBC-AGILE.
+#
+# Joint ordering follows WBC-AGILE's IsaacLab training config.
+# First 29 joints match the GEAR-SONIC G1 ordering; joints 29–34 are the
+# dexterous hand fingers (Unitree G1 Dexterous Hand module).
+#
+# TODO: Verify joint names, ordering, PD gains, and limits against the
+# official WBC-AGILE Isaac Lab training config:
+# https://github.com/nvidia-isaac/WBC-AGILE
+#
+# Hardware: Unitree G1 humanoid with Dexterous Hand modules.
+# Relevant policies: WBC-AGILE (NVIDIA, #44).
+
+name = "unitree_g1_35dof"
+joint_count = 35
+
+joint_names = [
+    # Legs (0–11): same ordering as 29-DOF G1
+    "left_hip_pitch_joint",
+    "left_hip_roll_joint",
+    "left_hip_yaw_joint",
+    "left_knee_joint",
+    "left_ankle_pitch_joint",
+    "left_ankle_roll_joint",
+    "right_hip_pitch_joint",
+    "right_hip_roll_joint",
+    "right_hip_yaw_joint",
+    "right_knee_joint",
+    "right_ankle_pitch_joint",
+    "right_ankle_roll_joint",
+    # Waist (12–14)
+    "waist_yaw_joint",
+    "waist_roll_joint",
+    "waist_pitch_joint",
+    # Left arm (15–21): same as 29-DOF
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "left_wrist_roll_joint",
+    "left_wrist_pitch_joint",
+    "left_wrist_yaw_joint",
+    # Right arm (22–28): same as 29-DOF
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint",
+    "right_wrist_pitch_joint",
+    "right_wrist_yaw_joint",
+    # Left hand fingers (29–31): Dexterous Hand module
+    "left_hand_index_joint",
+    "left_hand_middle_joint",
+    "left_hand_ring_joint",
+    # Right hand fingers (32–34): Dexterous Hand module
+    "right_hand_index_joint",
+    "right_hand_middle_joint",
+    "right_hand_ring_joint",
+]
+
+# PD gains: joints 0–28 from GEAR-SONIC policy_parameters.hpp;
+# hand joints 29–34 use conservative low-stiffness values.
+pd_gains = [
+    # Left leg (same as 29-DOF)
+    { kp = 15.826, kd = 6.299 },  # left_hip_pitch
+    { kp = 15.826, kd = 6.299 },  # left_hip_roll
+    { kp =  4.439, kd = 1.769 },  # left_hip_yaw
+    { kp = 15.826, kd = 6.299 },  # left_knee
+    { kp =  7.238, kd = 5.759 },  # left_ankle_pitch
+    { kp =  7.238, kd = 5.759 },  # left_ankle_roll
+    # Right leg
+    { kp = 15.826, kd = 6.299 },  # right_hip_pitch
+    { kp = 15.826, kd = 6.299 },  # right_hip_roll
+    { kp =  4.439, kd = 1.769 },  # right_hip_yaw
+    { kp = 15.826, kd = 6.299 },  # right_knee
+    { kp =  7.238, kd = 5.759 },  # right_ankle_pitch
+    { kp =  7.238, kd = 5.759 },  # right_ankle_roll
+    # Waist
+    { kp =  4.439, kd = 1.769 },  # waist_yaw
+    { kp =  7.238, kd = 5.759 },  # waist_roll
+    { kp =  7.238, kd = 5.759 },  # waist_pitch
+    # Left arm
+    { kp =  3.619, kd = 2.880 },  # left_shoulder_pitch
+    { kp =  3.619, kd = 2.880 },  # left_shoulder_roll
+    { kp =  3.619, kd = 2.880 },  # left_shoulder_yaw
+    { kp =  3.619, kd = 2.880 },  # left_elbow
+    { kp =  3.619, kd = 2.880 },  # left_wrist_roll
+    { kp =  1.069, kd = 0.851 },  # left_wrist_pitch
+    { kp =  1.069, kd = 0.851 },  # left_wrist_yaw
+    # Right arm
+    { kp =  3.619, kd = 2.880 },  # right_shoulder_pitch
+    { kp =  3.619, kd = 2.880 },  # right_shoulder_roll
+    { kp =  3.619, kd = 2.880 },  # right_shoulder_yaw
+    { kp =  3.619, kd = 2.880 },  # right_elbow
+    { kp =  3.619, kd = 2.880 },  # right_wrist_roll
+    { kp =  1.069, kd = 0.851 },  # right_wrist_pitch
+    { kp =  1.069, kd = 0.851 },  # right_wrist_yaw
+    # Left hand fingers (conservative)
+    { kp =  0.5, kd = 0.05 },    # left_hand_index
+    { kp =  0.5, kd = 0.05 },    # left_hand_middle
+    { kp =  0.5, kd = 0.05 },    # left_hand_ring
+    # Right hand fingers (conservative)
+    { kp =  0.5, kd = 0.05 },    # right_hand_index
+    { kp =  0.5, kd = 0.05 },    # right_hand_middle
+    { kp =  0.5, kd = 0.05 },    # right_hand_ring
+]
+
+# Joint limits: joints 0–28 from g1_29dof.xml MuJoCo model (radians);
+# hand joints 29–34 are conservative ±1.57 rad placeholders.
+joint_limits = [
+    # Left leg
+    { min = -2.5307, max =  2.8798 },  # left_hip_pitch
+    { min = -0.5236, max =  2.9671 },  # left_hip_roll
+    { min = -2.7576, max =  2.7576 },  # left_hip_yaw
+    { min = -0.0873, max =  2.8798 },  # left_knee
+    { min = -0.8727, max =  0.5236 },  # left_ankle_pitch
+    { min = -0.2618, max =  0.2618 },  # left_ankle_roll
+    # Right leg
+    { min = -2.5307, max =  2.8798 },  # right_hip_pitch
+    { min = -2.9671, max =  0.5236 },  # right_hip_roll
+    { min = -2.7576, max =  2.7576 },  # right_hip_yaw
+    { min = -0.0873, max =  2.8798 },  # right_knee
+    { min = -0.8727, max =  0.5236 },  # right_ankle_pitch
+    { min = -0.2618, max =  0.2618 },  # right_ankle_roll
+    # Waist
+    { min = -2.6180, max =  2.6180 },  # waist_yaw
+    { min = -0.5200, max =  0.5200 },  # waist_roll
+    { min = -0.5200, max =  0.5200 },  # waist_pitch
+    # Left arm
+    { min = -3.0892, max =  2.6704 },  # left_shoulder_pitch
+    { min = -1.5882, max =  2.2515 },  # left_shoulder_roll
+    { min = -2.6180, max =  2.6180 },  # left_shoulder_yaw
+    { min = -1.0472, max =  2.0944 },  # left_elbow
+    { min = -1.9722, max =  1.9722 },  # left_wrist_roll
+    { min = -1.6144, max =  1.6144 },  # left_wrist_pitch
+    { min = -1.6144, max =  1.6144 },  # left_wrist_yaw
+    # Right arm
+    { min = -3.0892, max =  2.6704 },  # right_shoulder_pitch
+    { min = -2.2515, max =  1.5882 },  # right_shoulder_roll
+    { min = -2.6180, max =  2.6180 },  # right_shoulder_yaw
+    { min = -1.0472, max =  2.0944 },  # right_elbow
+    { min = -1.9722, max =  1.9722 },  # right_wrist_roll
+    { min = -1.6144, max =  1.6144 },  # right_wrist_pitch
+    { min = -1.6144, max =  1.6144 },  # right_wrist_yaw
+    # Left hand fingers
+    { min =  0.0, max =  1.57 },   # left_hand_index
+    { min =  0.0, max =  1.57 },   # left_hand_middle
+    { min =  0.0, max =  1.57 },   # left_hand_ring
+    # Right hand fingers
+    { min =  0.0, max =  1.57 },   # right_hand_index
+    { min =  0.0, max =  1.57 },   # right_hand_middle
+    { min =  0.0, max =  1.57 },   # right_hand_ring
+]
+
+# Default pose: joints 0–28 from GEAR-SONIC; hand joints 29–34 open (0.0).
+default_pose = [
+    # Left leg
+    -0.312,  # left_hip_pitch
+     0.0,    # left_hip_roll
+     0.0,    # left_hip_yaw
+     0.669,  # left_knee
+    -0.363,  # left_ankle_pitch
+     0.0,    # left_ankle_roll
+    # Right leg
+    -0.312,  # right_hip_pitch
+     0.0,    # right_hip_roll
+     0.0,    # right_hip_yaw
+     0.669,  # right_knee
+    -0.363,  # right_ankle_pitch
+     0.0,    # right_ankle_roll
+    # Waist
+     0.0,   # waist_yaw
+     0.0,   # waist_roll
+     0.0,   # waist_pitch
+    # Left arm
+     0.2,   # left_shoulder_pitch
+     0.2,   # left_shoulder_roll
+     0.0,   # left_shoulder_yaw
+     0.6,   # left_elbow
+     0.0,   # left_wrist_roll
+     0.0,   # left_wrist_pitch
+     0.0,   # left_wrist_yaw
+    # Right arm
+     0.2,   # right_shoulder_pitch
+    -0.2,   # right_shoulder_roll
+     0.0,   # right_shoulder_yaw
+     0.6,   # right_elbow
+     0.0,   # right_wrist_roll
+     0.0,   # right_wrist_pitch
+     0.0,   # right_wrist_yaw
+    # Left hand fingers (open)
+     0.0, 0.0, 0.0,
+    # Right hand fingers (open)
+     0.0, 0.0, 0.0,
+]

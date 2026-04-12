@@ -1,0 +1,57 @@
+# WBC-AGILE policy configuration for Unitree G1 (35 DOF).
+#
+# NVIDIA WBC-AGILE is a modular RL-based whole-body control training and
+# deployment task suite. A single ONNX model handles all 35 joints.
+#
+# ## Downloading the model
+#
+# WBC-AGILE does not yet provide pre-trained ONNX weights for public download.
+# To export from an Isaac Lab training checkpoint:
+#
+#   git clone https://github.com/nvidia-isaac/WBC-AGILE
+#   cd WBC-AGILE
+#   # train: python scripts/train.py --task WbcAgile-G1 ...
+#   python scripts/export_onnx.py \
+#     --task WbcAgile-G1 \
+#     --checkpoint logs/wbc_agile_g1/model_XXXX.pt \
+#     --output models/wbc_agile_g1.onnx
+#
+# ## ONNX model I/O
+#
+#   Input  shape: [1, 76]   (2*35 joints + 3 gravity + 3 velocity)
+#   Output shape: [1, 35]   (joint position targets)
+#
+# ## Running
+#
+#   robowbc run --config configs/wbc_agile_g1.toml
+
+[policy]
+name = "wbc_agile"
+
+[policy.config.rl_model]
+# Replace with your exported model path.
+model_path = "models/wbc_agile_g1.onnx"
+execution_provider = { type = "cpu" }
+# Use TensorRT for ~3× lower latency on NVIDIA GPUs:
+# execution_provider = { type = "tensor_rt", device_id = 0 }
+optimization_level = "extended"
+num_threads = 4
+
+[policy.config]
+control_frequency_hz = 50
+
+[robot]
+config_path = "configs/robots/unitree_g1_35dof.toml"
+
+[comm]
+frequency_hz = 50
+topics = { joint_state = "unitree/g1/joint_state", imu = "unitree/g1/imu", joint_target_command = "unitree/g1/command/joint_position" }
+
+[inference]
+backend = "ort"
+device = "cpu"
+
+[runtime]
+# Forward velocity 0.3 m/s, zero lateral and yaw.
+velocity = [0.3, 0.0, 0.0]
+max_ticks = 200

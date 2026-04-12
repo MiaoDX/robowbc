@@ -1,0 +1,137 @@
+# Booster T1 23-DOF robot configuration.
+#
+# Joint ordering follows Booster T1 SDK motor IDs 0–22.
+# PD gains are conservative estimates modelled after Unitree H1 training
+# configs; verify against official Booster T1 SDK specs before real deployment.
+# Joint limits are conservative placeholders; replace with official datasheet
+# values.
+#
+# DOF breakdown:
+#   Left leg  (6): hip_yaw, hip_roll, hip_pitch, knee_pitch, ankle_pitch, ankle_roll
+#   Right leg (6): same
+#   Waist     (1): waist_yaw
+#   Left arm  (5): shoulder_pitch, shoulder_roll, shoulder_yaw, elbow_pitch, wrist_roll
+#   Right arm (5): same
+#   Total: 23 DOF
+#
+# Hardware: Booster T1 bipedal humanoid.
+# Relevant policies: WBC-AGILE (NVIDIA, #44).
+#
+# TODO: Replace placeholder PD gains and limits with official Booster T1 specs.
+# Reference: https://github.com/nvidia-isaac/WBC-AGILE
+
+name = "booster_t1"
+joint_count = 23
+
+joint_names = [
+    # Left leg (0–5)
+    "left_hip_yaw_joint",
+    "left_hip_roll_joint",
+    "left_hip_pitch_joint",
+    "left_knee_pitch_joint",
+    "left_ankle_pitch_joint",
+    "left_ankle_roll_joint",
+    # Right leg (6–11)
+    "right_hip_yaw_joint",
+    "right_hip_roll_joint",
+    "right_hip_pitch_joint",
+    "right_knee_pitch_joint",
+    "right_ankle_pitch_joint",
+    "right_ankle_roll_joint",
+    # Waist (12)
+    "waist_yaw_joint",
+    # Left arm (13–17)
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_pitch_joint",
+    "left_wrist_roll_joint",
+    # Right arm (18–22)
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_pitch_joint",
+    "right_wrist_roll_joint",
+]
+
+# PD gains (Nm/rad, Nm·s/rad) — conservative estimates based on Unitree H1
+# training configs. Replace with Booster T1 official values before deployment.
+pd_gains = [
+    # Left leg
+    { kp = 120.0, kd = 2.0 },   # left_hip_yaw
+    { kp = 120.0, kd = 2.0 },   # left_hip_roll
+    { kp = 180.0, kd = 4.0 },   # left_hip_pitch
+    { kp = 180.0, kd = 4.0 },   # left_knee_pitch
+    { kp =  40.0, kd = 2.0 },   # left_ankle_pitch
+    { kp =  40.0, kd = 2.0 },   # left_ankle_roll
+    # Right leg
+    { kp = 120.0, kd = 2.0 },   # right_hip_yaw
+    { kp = 120.0, kd = 2.0 },   # right_hip_roll
+    { kp = 180.0, kd = 4.0 },   # right_hip_pitch
+    { kp = 180.0, kd = 4.0 },   # right_knee_pitch
+    { kp =  40.0, kd = 2.0 },   # right_ankle_pitch
+    { kp =  40.0, kd = 2.0 },   # right_ankle_roll
+    # Waist
+    { kp = 180.0, kd = 4.0 },   # waist_yaw
+    # Left arm
+    { kp =  40.0, kd = 2.0 },   # left_shoulder_pitch
+    { kp =  40.0, kd = 2.0 },   # left_shoulder_roll
+    { kp =  40.0, kd = 2.0 },   # left_shoulder_yaw
+    { kp =  40.0, kd = 2.0 },   # left_elbow_pitch
+    { kp =  20.0, kd = 1.0 },   # left_wrist_roll
+    # Right arm
+    { kp =  40.0, kd = 2.0 },   # right_shoulder_pitch
+    { kp =  40.0, kd = 2.0 },   # right_shoulder_roll
+    { kp =  40.0, kd = 2.0 },   # right_shoulder_yaw
+    { kp =  40.0, kd = 2.0 },   # right_elbow_pitch
+    { kp =  20.0, kd = 1.0 },   # right_wrist_roll
+]
+
+# Joint limits in radians — conservative ±1.5 rad placeholders for legs/arms,
+# ±0.5 rad for ankle/wrist joints.
+# TODO: Replace with official Booster T1 datasheet limits.
+joint_limits = [
+    # Left leg
+    { min = -0.52, max =  0.52 },   # left_hip_yaw
+    { min = -0.52, max =  0.52 },   # left_hip_roll
+    { min = -1.57, max =  1.57 },   # left_hip_pitch
+    { min = -0.10, max =  2.10 },   # left_knee_pitch
+    { min = -0.87, max =  0.52 },   # left_ankle_pitch
+    { min = -0.52, max =  0.52 },   # left_ankle_roll
+    # Right leg
+    { min = -0.52, max =  0.52 },   # right_hip_yaw
+    { min = -0.52, max =  0.52 },   # right_hip_roll
+    { min = -1.57, max =  1.57 },   # right_hip_pitch
+    { min = -0.10, max =  2.10 },   # right_knee_pitch
+    { min = -0.87, max =  0.52 },   # right_ankle_pitch
+    { min = -0.52, max =  0.52 },   # right_ankle_roll
+    # Waist
+    { min = -2.09, max =  2.09 },   # waist_yaw
+    # Left arm
+    { min = -3.14, max =  3.14 },   # left_shoulder_pitch
+    { min = -0.52, max =  2.97 },   # left_shoulder_roll
+    { min = -1.57, max =  1.57 },   # left_shoulder_yaw
+    { min = -1.57, max =  2.53 },   # left_elbow_pitch
+    { min = -1.57, max =  1.57 },   # left_wrist_roll
+    # Right arm
+    { min = -3.14, max =  3.14 },   # right_shoulder_pitch
+    { min = -2.97, max =  0.52 },   # right_shoulder_roll
+    { min = -1.57, max =  1.57 },   # right_shoulder_yaw
+    { min = -1.57, max =  2.53 },   # right_elbow_pitch
+    { min = -1.57, max =  1.57 },   # right_wrist_roll
+]
+
+# Default standing pose (radians) — zero pose.
+# Update with the WBC-AGILE training default pose before deployment.
+default_pose = [
+    # Left leg
+    0.0, 0.0, -0.3, 0.6, -0.3, 0.0,
+    # Right leg
+    0.0, 0.0, -0.3, 0.6, -0.3, 0.0,
+    # Waist
+    0.0,
+    # Left arm
+    0.0, 0.0, 0.0, 0.0, 0.0,
+    # Right arm
+    0.0, 0.0, 0.0, 0.0, 0.0,
+]
