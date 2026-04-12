@@ -8,9 +8,9 @@ _Tracks issue [#17](https://github.com/MiaoDX/robowbc/issues/17). RFC/proposal r
 
 | Item | Status | Link / Notes |
 |------|--------|--------------|
-| `pip install robowbc` confirmed working | [ ] | Requires #15 |
-| LeRobot v0.5+ interface verified | [ ] | `HolosomaLocomotionController`, `GrootLocomotionController` |
-| Adapter prototype built | [ ] | See interface mapping below |
+| `pip install robowbc` confirmed working | [x] | Done in #15 / #39 |
+| LeRobot v0.5+ interface verified | [x] | `HolosomaLocomotionController`, `GrootLocomotionController` — same `step(obs_dict)→action_dict` contract |
+| Adapter prototype built | [x] | `crates/robowbc-py/examples/lerobot_adapter.py` — `RoboWBCController` class |
 | RFC issue opened in LeRobot | [ ] | — |
 | PR or plugin submitted | [ ] | — |
 
@@ -77,13 +77,16 @@ class RobowbcController(BaseLocomotionController):
         self._policy = robowbc.load_from_config(config_path)
 
     def step(self, obs_dict: dict) -> dict:
+        imu = obs_dict["observation.imu"]
+        # LeRobot task_cmd: [vx, vy, omega] → robowbc velocity: [vx, vy, vz, wx, wy, wz]
+        cmd = obs_dict["observation.task_cmd"].tolist()
+        cmd_6 = [cmd[0], cmd[1], 0.0, 0.0, 0.0, cmd[2]] if len(cmd) == 3 else cmd
         obs = robowbc.Observation(
             joint_positions=obs_dict["observation.state"].tolist(),
             joint_velocities=obs_dict["observation.velocity"].tolist(),
-            projected_gravity=obs_dict["observation.imu"][:3].tolist(),
-            base_angular_velocity=obs_dict["observation.imu"][3:6].tolist(),
-            base_linear_velocity=[0.0, 0.0, 0.0],
-            command=obs_dict["observation.task_cmd"].tolist(),
+            gravity_vector=(float(imu[0]), float(imu[1]), float(imu[2])),
+            command_type="velocity",
+            command_data=cmd_6,
         )
         targets = self._policy.predict(obs)
         return {"action": targets.positions}
@@ -118,57 +121,48 @@ class RobowbcController(BaseLocomotionController):
 
 ## When to submit
 
-Submit after `pip install robowbc` works end-to-end (issue #15). A working Python package
-is the minimum bar — the LeRobot team needs to be able to `pip install robowbc` and
-run the adapter prototype to evaluate the proposal.
+`pip install robowbc` works end-to-end (issue #15 / #39 done) and the adapter
+prototype at `crates/robowbc-py/examples/lerobot_adapter.py` is ready.  The
+remaining blocker is **real GEAR-SONIC model inference** (issue A) — the LeRobot
+team needs a working demo they can run, not just a code sketch.  Submit after
+`robowbc run --config configs/sonic_g1.toml` produces real joint targets.
 
 ---
 
 ## Adapter prototype (local development)
 
-For local testing before submission, place the adapter at
-`crates/robowbc-py/examples/lerobot_adapter.py`:
+The adapter prototype is at `crates/robowbc-py/examples/lerobot_adapter.py`.
+It provides a `RoboWBCController` class and a standalone demo loop (no LeRobot
+install required):
+
+```bash
+pip install robowbc        # or: maturin develop
+python crates/robowbc-py/examples/lerobot_adapter.py --config configs/sonic_g1.toml
+```
+
+Abbreviated adapter (see the file for full docstring and numpy/list handling):
 
 ```python
-"""
-Prototype: robowbc as a WBC backend for LeRobot.
-
-Usage:
-    pip install robowbc
-    python lerobot_adapter.py --config configs/sonic_g1.toml
-"""
-import argparse
-import numpy as np
 import robowbc
 
-def run(config_path: str, steps: int = 100) -> None:
-    policy = robowbc.load_from_config(config_path)
-    dof = 29  # Unitree G1
+class RoboWBCController:
+    def __init__(self, config_path: str) -> None:
+        self._policy = robowbc.load_from_config(config_path)
 
-    for step in range(steps):
-        # Simulate obs_dict as LeRobot would provide it
-        obs_dict = {
-            "observation.state":    np.zeros(dof, dtype=np.float32),
-            "observation.velocity": np.zeros(dof, dtype=np.float32),
-            "observation.imu":      np.array([0.0, 0.0, -1.0, 0.0, 0.0, 0.0], dtype=np.float32),
-            "observation.task_cmd": np.array([0.3, 0.0, 0.0], dtype=np.float32),
-        }
+    def step(self, obs_dict: dict) -> dict:
+        imu = obs_dict["observation.imu"]
+        cmd = [float(v) for v in obs_dict["observation.task_cmd"]]
+        # [vx, vy, omega] → [vx, vy, vz, wx, wy, wz]
+        cmd_6 = [cmd[0], cmd[1], 0.0, 0.0, 0.0, cmd[2]] if len(cmd) == 3 else cmd
         obs = robowbc.Observation(
-            joint_positions=obs_dict["observation.state"].tolist(),
-            joint_velocities=obs_dict["observation.velocity"].tolist(),
-            projected_gravity=obs_dict["observation.imu"][:3].tolist(),
-            base_angular_velocity=obs_dict["observation.imu"][3:6].tolist(),
-            base_linear_velocity=[0.0, 0.0, 0.0],
-            command=obs_dict["observation.task_cmd"].tolist(),
+            joint_positions=[float(v) for v in obs_dict["observation.state"]],
+            joint_velocities=[float(v) for v in obs_dict["observation.velocity"]],
+            gravity_vector=(float(imu[0]), float(imu[1]), float(imu[2])),
+            command_type="velocity",
+            command_data=cmd_6,
         )
-        targets = policy.predict(obs)
-        if step % 10 == 0:
-            print(f"step {step:3d}: targets[0:3] = {targets.positions[:3]}")
+        return {"action": self._policy.predict(obs).positions}
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="configs/sonic_g1.toml")
-    parser.add_argument("--steps", type=int, default=100)
-    args = parser.parse_args()
-    run(args.config, args.steps)
+    def reset(self) -> None:
+        pass  # stateless policy — no-op
 ```

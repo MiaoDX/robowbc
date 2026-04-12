@@ -142,6 +142,43 @@ for _ in range(100):                        # 2 seconds at 50 Hz
 
 A full runnable example is at `examples/python/gear_sonic_inference.py`.
 
+## LeRobot integration
+
+robowbc can act as a drop-in WBC inference backend for LeRobot's
+`GrootLocomotionController` and `HolosomaLocomotionController`.  Both
+controllers share a `step(obs_dict) → action_dict` interface that maps
+directly to robowbc's `Policy.predict`.
+
+A standalone `RoboWBCController` adapter is provided in
+`crates/robowbc-py/examples/lerobot_adapter.py`:
+
+```python
+from lerobot_adapter import RoboWBCController
+
+# Load any robowbc policy via TOML config — no code changes for model switching.
+ctrl = RoboWBCController("configs/sonic_g1.toml")
+
+# LeRobot-style inference step.
+obs_dict = {
+    "observation.state":    joint_positions,   # list[float] or np.ndarray, n_joints
+    "observation.velocity": joint_velocities,  # list[float] or np.ndarray, n_joints
+    "observation.imu":      [gx, gy, gz, wx, wy, wz],  # gravity + angular vel
+    "observation.task_cmd": [vx, vy, omega],   # base velocity command (3 floats)
+}
+action = ctrl.step(obs_dict)
+joint_targets = action["action"]   # list[float], n_joints
+```
+
+The `load_from_config` convenience function (also available at module level)
+reads the TOML file and returns a `Policy` in one call:
+
+```python
+import robowbc
+policy = robowbc.load_from_config("configs/sonic_g1.toml")
+```
+
+See `docs/community/lerobot-rfc.md` for the full RFC and submission plan.
+
 ## Publishing new releases
 
 Wheels are built automatically on every `v*` tag via
