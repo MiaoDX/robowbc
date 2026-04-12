@@ -330,6 +330,10 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
     }
 
+    fn has_numpy() -> bool {
+        Python::with_gil(|py| py.import("numpy").is_ok())
+    }
+
     fn test_robot(joint_count: usize) -> RobotConfig {
         RobotConfig {
             name: "test_robot".to_owned(),
@@ -348,6 +352,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::cast_precision_loss)]
     fn test_obs(robot: &RobotConfig) -> Observation {
         let n = robot.joint_count;
         Observation {
@@ -397,6 +402,10 @@ mod tests {
             eprintln!("skipping: fixture not found at {model_path:?}");
             return;
         }
+        if !has_numpy() {
+            eprintln!("skipping: numpy not available");
+            return;
+        }
 
         let robot = test_robot(4);
         let config = PyModelConfig {
@@ -426,6 +435,10 @@ mod tests {
             eprintln!("skipping: fixture not found at {model_path:?}");
             return;
         }
+        if !has_numpy() {
+            eprintln!("skipping: numpy not available");
+            return;
+        }
 
         // Robot with 6 joints but fixture always outputs 4 — should fail.
         let robot = test_robot(6);
@@ -448,6 +461,10 @@ mod tests {
         let model_path = fixture_dir().join("test_model.py");
         if !model_path.exists() {
             eprintln!("skipping: fixture not found at {model_path:?}");
+            return;
+        }
+        if !has_numpy() {
+            eprintln!("skipping: numpy not available");
             return;
         }
 
@@ -473,6 +490,10 @@ mod tests {
         let model_path = fixture_dir().join("test_model.py");
         if !model_path.exists() {
             eprintln!("skipping: fixture not found at {model_path:?}");
+            return;
+        }
+        if !has_numpy() {
+            eprintln!("skipping: numpy not available");
             return;
         }
 
@@ -505,6 +526,10 @@ mod tests {
             eprintln!("skipping: fixture not found at {model_path:?}");
             return;
         }
+        if !has_numpy() {
+            eprintln!("skipping: numpy not available");
+            return;
+        }
 
         let robot = test_robot(4);
         let config = PyModelConfig {
@@ -521,7 +546,7 @@ mod tests {
     /// `PyTorch`-specific test — requires `torch` to be installed.
     /// Run with: `cargo test -- --ignored`
     #[test]
-    #[ignore]
+    #[ignore = "requires torch to be installed; run with: cargo test -- --ignored"]
     fn torch_checkpoint_policy_predicts() {
         Python::with_gil(|py| {
             py.import("torch")
