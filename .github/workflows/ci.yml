@@ -122,11 +122,11 @@ jobs:
       - name: Build manylinux wheel
         uses: PyO3/maturin-action@v1
         with:
-          args: --release --out /tmp/robowbc-dist
+          args: --release --out dist -i python3.12
           manylinux: auto
 
       - name: Install robowbc wheel
-        run: pip install /tmp/robowbc-dist/*.whl
+        run: pip install dist/*.whl
 
       - name: Python smoke test
         run: |
