@@ -49,6 +49,16 @@ pub struct RerunConfig {
     pub save_path: Option<PathBuf>,
 }
 
+impl Default for RerunConfig {
+    fn default() -> Self {
+        Self {
+            app_id: default_app_id(),
+            spawn_viewer: default_spawn_viewer(),
+            save_path: None,
+        }
+    }
+}
+
 fn default_app_id() -> String {
     "robowbc".to_owned()
 }
