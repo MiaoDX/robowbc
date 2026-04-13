@@ -39,6 +39,7 @@ use robowbc_core::{
 };
 use robowbc_registry::{RegistryPolicy, WbcRegistration};
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -97,6 +98,13 @@ pub enum OrtError {
     OutputExtraction {
         /// Underlying error description.
         reason: String,
+    },
+
+    /// Encountered a tensor type that this wrapper does not currently decode.
+    #[error("unsupported tensor type for '{name}'; only f32, i64, and i32 tensors are supported")]
+    UnsupportedTensorType {
+        /// Input or output tensor name.
+        name: String,
     },
 }
 
@@ -206,7 +214,7 @@ pub struct OrtConfig {
 
 /// Thread-safe ONNX Runtime inference backend.
 ///
-/// Wraps an [`ort::Session`](Session) and provides typed `f32` tensor I/O.
+/// Wraps an [`ort::Session`](Session) and provides typed tensor I/O.
 /// Input/output metadata is cached at construction time so it can be queried
 /// without locking.
 ///
@@ -216,6 +224,80 @@ pub struct OrtBackend {
     session: Session,
     input_names: Vec<String>,
     output_names: Vec<String>,
+}
+
+/// Supported tensor input payloads for [`OrtBackend::run_typed`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum OrtTensorInput<'a> {
+    /// A named `f32` tensor.
+    F32 {
+        /// Tensor name.
+        name: &'a str,
+        /// Flattened tensor data.
+        data: &'a [f32],
+        /// Tensor shape.
+        shape: &'a [i64],
+    },
+    /// A named `i64` tensor.
+    I64 {
+        /// Tensor name.
+        name: &'a str,
+        /// Flattened tensor data.
+        data: &'a [i64],
+        /// Tensor shape.
+        shape: &'a [i64],
+    },
+}
+
+/// Owned tensor payloads returned by [`OrtBackend::run_typed`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum OrtTensorData {
+    /// An `f32` tensor payload.
+    F32(Vec<f32>),
+    /// An `i64` tensor payload.
+    I64(Vec<i64>),
+    /// An `i32` tensor payload.
+    I32(Vec<i32>),
+}
+
+/// A named output tensor returned from [`OrtBackend::run_typed`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct OrtTensorOutput {
+    /// Tensor name.
+    pub name: String,
+    /// Tensor shape.
+    pub shape: Vec<i64>,
+    /// Tensor payload.
+    pub data: OrtTensorData,
+}
+
+impl OrtTensorOutput {
+    /// Returns the payload as `f32`, if this output stores `f32` values.
+    #[must_use]
+    pub fn as_f32(&self) -> Option<&[f32]> {
+        match &self.data {
+            OrtTensorData::F32(data) => Some(data.as_slice()),
+            OrtTensorData::I64(_) | OrtTensorData::I32(_) => None,
+        }
+    }
+
+    /// Returns the payload as `i64`, if this output stores `i64` values.
+    #[must_use]
+    pub fn as_i64(&self) -> Option<&[i64]> {
+        match &self.data {
+            OrtTensorData::I64(data) => Some(data.as_slice()),
+            OrtTensorData::F32(_) | OrtTensorData::I32(_) => None,
+        }
+    }
+
+    /// Returns the payload as `i32`, if this output stores `i32` values.
+    #[must_use]
+    pub fn as_i32(&self) -> Option<&[i32]> {
+        match &self.data {
+            OrtTensorData::I32(data) => Some(data.as_slice()),
+            OrtTensorData::F32(_) | OrtTensorData::I64(_) => None,
+        }
+    }
 }
 
 impl OrtBackend {
@@ -289,23 +371,42 @@ impl OrtBackend {
     ///
     /// Returns [`OrtError::InvalidShape`] if a shape contains negative dimensions,
     /// [`OrtError::ShapeMismatch`] if a data slice length does not match its
-    /// declared shape, or [`OrtError::InferenceFailed`] if execution fails.
+    /// declared shape, [`OrtError::UnsupportedTensorType`] if the model emits a
+    /// non-`f32` output, or [`OrtError::InferenceFailed`] if execution fails.
     pub fn run(&mut self, inputs: &[(&str, &[f32], &[i64])]) -> Result<Vec<Vec<f32>>, OrtError> {
-        let input_values = Self::build_input_values(inputs)?;
-
-        let session_inputs: Vec<(
-            std::borrow::Cow<'_, str>,
-            ort::session::SessionInputValue<'_>,
-        )> = input_values
+        let typed_inputs: Vec<_> = inputs
             .iter()
-            .map(|(name, value)| {
-                (
-                    std::borrow::Cow::Borrowed(name.as_str()),
-                    ort::session::SessionInputValue::from(value),
-                )
-            })
+            .map(|(name, data, shape)| OrtTensorInput::F32 { name, data, shape })
             .collect();
 
+        let outputs = self.run_typed(&typed_inputs)?;
+        outputs
+            .into_iter()
+            .map(|output| match output.data {
+                OrtTensorData::F32(data) => Ok(data),
+                OrtTensorData::I64(_) | OrtTensorData::I32(_) => {
+                    Err(OrtError::UnsupportedTensorType { name: output.name })
+                }
+            })
+            .collect()
+    }
+
+    /// Runs inference with mixed `f32` / `i64` named tensor inputs.
+    ///
+    /// Returns owned named outputs in the model's declared output order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrtError::InvalidShape`] if a shape contains negative dimensions,
+    /// [`OrtError::ShapeMismatch`] if a data slice length does not match its
+    /// declared shape, [`OrtError::UnsupportedTensorType`] if an output tensor is
+    /// not currently decoded by this wrapper, or [`OrtError::InferenceFailed`] if
+    /// execution fails.
+    pub fn run_typed(
+        &mut self,
+        inputs: &[OrtTensorInput<'_>],
+    ) -> Result<Vec<OrtTensorOutput>, OrtError> {
+        let session_inputs = Self::build_typed_input_values(inputs)?;
         let outputs = self
             .session
             .run(session_inputs)
@@ -313,7 +414,7 @@ impl OrtBackend {
                 reason: e.to_string(),
             })?;
 
-        Self::extract_outputs(&self.output_names, &outputs)
+        Self::extract_typed_outputs(&self.output_names, &outputs)
     }
 
     fn build_session(config: &OrtConfig) -> Result<Session, OrtError> {
@@ -360,66 +461,89 @@ impl OrtBackend {
             })
     }
 
-    fn build_input_values(
-        inputs: &[(&str, &[f32], &[i64])],
-    ) -> Result<Vec<(String, Tensor<f32>)>, OrtError> {
+    fn validate_shape(
+        name: &str,
+        shape: &[i64],
+        actual_len: usize,
+    ) -> Result<Vec<usize>, OrtError> {
+        let mut expected_len: usize = 1;
+        let mut shape_usize = Vec::with_capacity(shape.len());
+
+        for (index, &dimension) in shape.iter().enumerate() {
+            if dimension < 0 {
+                return Err(OrtError::InvalidShape {
+                    name: name.to_owned(),
+                    index,
+                    dimension,
+                });
+            }
+
+            let dimension = usize::try_from(dimension).map_err(|_| OrtError::InvalidShape {
+                name: name.to_owned(),
+                index,
+                dimension,
+            })?;
+            expected_len =
+                expected_len
+                    .checked_mul(dimension)
+                    .ok_or_else(|| OrtError::InferenceFailed {
+                        reason: format!(
+                            "input '{name}' shape {shape:?} overflows usize element count"
+                        ),
+                    })?;
+            shape_usize.push(dimension);
+        }
+
+        if actual_len != expected_len {
+            return Err(OrtError::ShapeMismatch {
+                name: name.to_owned(),
+                shape: shape.to_vec(),
+                expected: expected_len,
+                actual: actual_len,
+            });
+        }
+
+        Ok(shape_usize)
+    }
+
+    fn build_typed_input_values(
+        inputs: &[OrtTensorInput<'_>],
+    ) -> Result<Vec<(String, ort::session::SessionInputValue<'static>)>, OrtError> {
         inputs
             .iter()
-            .map(|(name, data, shape)| {
-                let mut expected_len: usize = 1;
-                for (index, &dimension) in shape.iter().enumerate() {
-                    if dimension < 0 {
-                        return Err(OrtError::InvalidShape {
-                            name: (*name).to_owned(),
-                            index,
-                            dimension,
-                        });
-                    }
-
-                    let dimension =
-                        usize::try_from(dimension).map_err(|_| OrtError::InvalidShape {
-                            name: (*name).to_owned(),
-                            index,
-                            dimension,
-                        })?;
-                    expected_len = expected_len.checked_mul(dimension).ok_or_else(|| {
-                        OrtError::InferenceFailed {
-                            reason: format!(
-                                "input '{name}' shape {shape:?} overflows usize element count"
-                            ),
-                        }
+            .map(|input| match input {
+                OrtTensorInput::F32 { name, data, shape } => {
+                    let shape_usize = Self::validate_shape(name, shape, data.len())?;
+                    let tensor = Tensor::<f32>::from_array((
+                        shape_usize.as_slice(),
+                        data.to_vec().into_boxed_slice(),
+                    ))
+                    .map_err(|e| OrtError::InferenceFailed {
+                        reason: format!("failed to create tensor for input '{name}': {e}"),
                     })?;
+                    let value: ort::session::SessionInputValue<'static> = tensor.into();
+                    Ok(((*name).to_owned(), value))
                 }
-                if data.len() != expected_len {
-                    return Err(OrtError::ShapeMismatch {
-                        name: (*name).to_owned(),
-                        shape: shape.to_vec(),
-                        expected: expected_len,
-                        actual: data.len(),
-                    });
+                OrtTensorInput::I64 { name, data, shape } => {
+                    let shape_usize = Self::validate_shape(name, shape, data.len())?;
+                    let tensor = Tensor::<i64>::from_array((
+                        shape_usize.as_slice(),
+                        data.to_vec().into_boxed_slice(),
+                    ))
+                    .map_err(|e| OrtError::InferenceFailed {
+                        reason: format!("failed to create tensor for input '{name}': {e}"),
+                    })?;
+                    let value: ort::session::SessionInputValue<'static> = tensor.into();
+                    Ok(((*name).to_owned(), value))
                 }
-
-                let shape_usize: Vec<usize> = shape
-                    .iter()
-                    .map(|&d| usize::try_from(d).unwrap_or_default())
-                    .collect();
-                let tensor = Tensor::<f32>::from_array((
-                    shape_usize.as_slice(),
-                    data.to_vec().into_boxed_slice(),
-                ))
-                .map_err(|e| OrtError::InferenceFailed {
-                    reason: format!("failed to create tensor for input '{name}': {e}"),
-                })?;
-
-                Ok(((*name).to_owned(), tensor))
             })
             .collect()
     }
 
-    fn extract_outputs(
+    fn extract_typed_outputs(
         output_names: &[String],
         outputs: &ort::session::SessionOutputs<'_>,
-    ) -> Result<Vec<Vec<f32>>, OrtError> {
+    ) -> Result<Vec<OrtTensorOutput>, OrtError> {
         let mut results = Vec::with_capacity(output_names.len());
 
         for name in output_names {
@@ -429,14 +553,34 @@ impl OrtBackend {
                     reason: format!("missing output '{name}'"),
                 })?;
 
-            let (_shape, data) =
-                value
-                    .try_extract_tensor::<f32>()
-                    .map_err(|e| OrtError::OutputExtraction {
-                        reason: format!("output '{name}': {e}"),
-                    })?;
+            if let Ok((shape, data)) = value.try_extract_tensor::<f32>() {
+                results.push(OrtTensorOutput {
+                    name: name.clone(),
+                    shape: shape.to_vec(),
+                    data: OrtTensorData::F32(data.to_vec()),
+                });
+                continue;
+            }
 
-            results.push(data.to_vec());
+            if let Ok((shape, data)) = value.try_extract_tensor::<i64>() {
+                results.push(OrtTensorOutput {
+                    name: name.clone(),
+                    shape: shape.to_vec(),
+                    data: OrtTensorData::I64(data.to_vec()),
+                });
+                continue;
+            }
+
+            if let Ok((shape, data)) = value.try_extract_tensor::<i32>() {
+                results.push(OrtTensorOutput {
+                    name: name.clone(),
+                    shape: shape.to_vec(),
+                    data: OrtTensorData::I32(data.to_vec()),
+                });
+                continue;
+            }
+
+            return Err(OrtError::UnsupportedTensorType { name: name.clone() });
         }
 
         Ok(results)
@@ -465,31 +609,61 @@ pub struct GearSonicConfig {
     pub robot: RobotConfig,
 }
 
-/// A chain-style implementation of the `GEAR-SONIC` policy.
+const GEAR_SONIC_PLANNER_QPOS_DIM: usize = 36;
+const GEAR_SONIC_PLANNER_QPOS_DIM_I64: i64 = 36;
+const GEAR_SONIC_PLANNER_JOINT_OFFSET: usize = 7;
+const GEAR_SONIC_PLANNER_CONTEXT_LEN: usize = 4;
+const GEAR_SONIC_PLANNER_CONTEXT_LEN_I64: i64 = 4;
+const GEAR_SONIC_PLANNER_REPLAN_INTERVAL_TICKS: usize = 5;
+const GEAR_SONIC_ALLOWED_PRED_NUM_TOKENS: usize = 11;
+const GEAR_SONIC_ALLOWED_PRED_NUM_TOKENS_I64: i64 = 11;
+const GEAR_SONIC_DEFAULT_HEIGHT_METERS: f32 = 0.74;
+const GEAR_SONIC_DEFAULT_MODE_WALK: i64 = 2;
+const GEAR_SONIC_PLANNER_INTERP_STEP: f32 = 30.0 / 50.0;
+
+#[derive(Debug)]
+struct GearSonicPlannerState {
+    context: VecDeque<Vec<f32>>,
+    trajectory: Vec<Vec<f32>>,
+    traj_index: usize,
+    interp_phase: f32,
+    steps_since_plan: usize,
+    last_context_frame: Vec<f32>,
+}
+
+impl GearSonicPlannerState {
+    fn new(robot: &RobotConfig) -> Self {
+        let standing = GearSonicPolicy::make_standing_qpos(robot);
+        let mut context = VecDeque::with_capacity(GEAR_SONIC_PLANNER_CONTEXT_LEN);
+        for _ in 0..GEAR_SONIC_PLANNER_CONTEXT_LEN {
+            context.push_back(standing.clone());
+        }
+        Self {
+            context,
+            trajectory: Vec::new(),
+            traj_index: 0,
+            interp_phase: 0.0,
+            steps_since_plan: GEAR_SONIC_PLANNER_REPLAN_INTERVAL_TICKS,
+            last_context_frame: standing,
+        }
+    }
+}
+
+/// `GEAR-SONIC` policy wrapper with two execution paths.
 ///
-/// Implements the NVIDIA GEAR-SONIC 3-model inference pipeline:
+/// - `WbcCommand::Velocity` uses the published `planner_sonic.onnx` contract,
+///   matching the real CPU-only showcase path used in CI.
+/// - `WbcCommand::MotionTokens` preserves the earlier single-input
+///   encoder→planner→decoder mock pipeline for fixture-backed tests.
 ///
-/// 1. **Encoder** (`model_encoder.onnx`) — encodes the current proprioceptive
-///    state (`joint_positions ‖ joint_velocities ‖ gravity_vector`) into a
-///    latent vector.
-/// 2. **Planner** (`planner_sonic.onnx`) — concatenates the latent with the
-///    motion-token goal command and produces an action latent.
-/// 3. **Decoder** (`model_decoder.onnx`) — decodes the action latent into joint
-///    position targets.
-///
-/// For a Unitree G1 (29 DOF) the expected tensor shapes are:
-/// - encoder input  : `[1, 61]` (29 pos + 29 vel + 3 gravity)
-/// - encoder output : `[1, D_latent]` (e.g. 128)
-/// - planner input  : `[1, D_latent + T]` where T = number of motion tokens
-/// - planner output : `[1, D_latent]`
-/// - decoder input  : `[1, D_latent]`
-/// - decoder output : `[1, 29]`
-///
-/// Download real checkpoints with `scripts/download_gear_sonic_models.sh`.
+/// The published encoder/decoder tracking contract (`obs_dict` 1762D/994D) is
+/// not integrated yet, so real encoder/decoder checkpoints currently require
+/// the velocity/planner path.
 pub struct GearSonicPolicy {
     encoder: Mutex<OrtBackend>,
     decoder: Mutex<OrtBackend>,
     planner: Mutex<OrtBackend>,
+    planner_state: Mutex<GearSonicPlannerState>,
     robot: RobotConfig,
 }
 
@@ -507,11 +681,13 @@ impl GearSonicPolicy {
             .map_err(|e| robowbc_core::WbcError::InferenceFailed(e.to_string()))?;
         let planner = OrtBackend::new(&config.planner)
             .map_err(|e| robowbc_core::WbcError::InferenceFailed(e.to_string()))?;
+        let planner_state = GearSonicPlannerState::new(&config.robot);
 
         Ok(Self {
             encoder: Mutex::new(encoder),
             decoder: Mutex::new(decoder),
             planner: Mutex::new(planner),
+            planner_state: Mutex::new(planner_state),
             robot: config.robot,
         })
     }
@@ -541,38 +717,72 @@ impl GearSonicPolicy {
                 "model returned no outputs".to_owned(),
             ))
     }
-}
 
-impl robowbc_core::WbcPolicy for GearSonicPolicy {
-    fn predict(&self, obs: &Observation) -> CoreResult<JointPositionTargets> {
-        if obs.joint_positions.len() != self.robot.joint_count {
-            return Err(robowbc_core::WbcError::InvalidObservation(
-                "joint_positions length does not match robot.joint_count",
-            ));
-        }
-        if obs.joint_velocities.len() != self.robot.joint_count {
-            return Err(robowbc_core::WbcError::InvalidObservation(
-                "joint_velocities length does not match robot.joint_count",
-            ));
-        }
+    fn make_standing_qpos(robot: &RobotConfig) -> Vec<f32> {
+        let mut qpos = vec![0.0; GEAR_SONIC_PLANNER_QPOS_DIM];
+        qpos[2] = GEAR_SONIC_DEFAULT_HEIGHT_METERS;
+        qpos[3] = 1.0;
+        let joint_len = robot
+            .joint_count
+            .min(GEAR_SONIC_PLANNER_QPOS_DIM - GEAR_SONIC_PLANNER_JOINT_OFFSET);
+        qpos[GEAR_SONIC_PLANNER_JOINT_OFFSET..GEAR_SONIC_PLANNER_JOINT_OFFSET + joint_len]
+            .copy_from_slice(&robot.default_pose[..joint_len]);
+        qpos
+    }
 
-        let motion_tokens = match &obs.command {
-            WbcCommand::MotionTokens(tokens) if !tokens.is_empty() => tokens.as_slice(),
-            WbcCommand::MotionTokens(_) => {
-                return Err(robowbc_core::WbcError::InvalidObservation(
-                    "motion token command must not be empty",
-                ))
-            }
-            _ => {
-                return Err(robowbc_core::WbcError::UnsupportedCommand(
-                    "GearSonicPolicy requires WbcCommand::MotionTokens",
-                ))
-            }
+    fn planner_context_frame(obs: &Observation, template: &[f32]) -> Vec<f32> {
+        let mut frame = if template.len() == GEAR_SONIC_PLANNER_QPOS_DIM {
+            template.to_vec()
+        } else {
+            vec![0.0; GEAR_SONIC_PLANNER_QPOS_DIM]
         };
+        if frame[2] == 0.0 {
+            frame[2] = GEAR_SONIC_DEFAULT_HEIGHT_METERS;
+        }
+        if frame[3..7].iter().all(|value| value.abs() <= f32::EPSILON) {
+            frame[3] = 1.0;
+        }
+        frame[GEAR_SONIC_PLANNER_JOINT_OFFSET
+            ..GEAR_SONIC_PLANNER_JOINT_OFFSET + obs.joint_positions.len()]
+            .copy_from_slice(&obs.joint_positions);
+        frame
+    }
 
-        // Step 1: encode proprioceptive state → latent vector.
-        // Input layout: [joint_positions | joint_velocities | gravity_vector]
-        // For G1 (29 DOF): [29 + 29 + 3] = 61 floats → encoder → D_latent floats.
+    fn supports_real_planner_contract(backend: &OrtBackend) -> bool {
+        backend
+            .input_names()
+            .iter()
+            .any(|name| name == "context_mujoco_qpos")
+            && backend
+                .output_names()
+                .iter()
+                .any(|name| name == "mujoco_qpos")
+            && backend
+                .output_names()
+                .iter()
+                .any(|name| name == "num_pred_frames")
+    }
+
+    fn supports_real_tracking_contract(backend: &OrtBackend) -> bool {
+        backend.input_names().iter().any(|name| name == "obs_dict")
+    }
+
+    fn run_fixture_motion_tokens(
+        &self,
+        obs: &Observation,
+        motion_tokens: &[f32],
+    ) -> CoreResult<JointPositionTargets> {
+        {
+            let encoder = self.encoder.lock().map_err(|_| {
+                robowbc_core::WbcError::InferenceFailed("encoder mutex poisoned".to_owned())
+            })?;
+            if Self::supports_real_tracking_contract(&encoder) {
+                return Err(robowbc_core::WbcError::UnsupportedCommand(
+                    "GearSonicPolicy motion-token mode is only wired for the fixture-style single-input pipeline; use WbcCommand::Velocity for published planner_sonic.onnx checkpoints",
+                ));
+            }
+        }
+
         let mut proprio_state =
             Vec::with_capacity(obs.joint_positions.len() + obs.joint_velocities.len() + 3);
         proprio_state.extend_from_slice(&obs.joint_positions);
@@ -585,9 +795,6 @@ impl robowbc_core::WbcPolicy for GearSonicPolicy {
         let latent = Self::run_single_input_model(&mut encoder, &proprio_state)?;
         drop(encoder);
 
-        // Step 2: plan — concatenate latent with motion-token goal command.
-        // Input layout: [latent | motion_tokens]
-        // The motion tokens encode the desired trajectory goal produced by GEAR.
         let mut planner_input = Vec::with_capacity(latent.len() + motion_tokens.len());
         planner_input.extend_from_slice(&latent);
         planner_input.extend_from_slice(motion_tokens);
@@ -598,7 +805,6 @@ impl robowbc_core::WbcPolicy for GearSonicPolicy {
         let action_latent = Self::run_single_input_model(&mut planner, &planner_input)?;
         drop(planner);
 
-        // Step 3: decode action latent → joint position targets.
         let mut decoder = self.decoder.lock().map_err(|_| {
             robowbc_core::WbcError::InferenceFailed("decoder mutex poisoned".to_owned())
         })?;
@@ -614,6 +820,289 @@ impl robowbc_core::WbcPolicy for GearSonicPolicy {
             positions: joint_targets,
             timestamp: obs.timestamp,
         })
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn run_real_planner(
+        backend: &mut OrtBackend,
+        context: &VecDeque<Vec<f32>>,
+        twist: &robowbc_core::Twist,
+    ) -> CoreResult<Vec<Vec<f32>>> {
+        let mut context_data = Vec::with_capacity(context.len() * GEAR_SONIC_PLANNER_QPOS_DIM);
+        for frame in context {
+            context_data.extend_from_slice(frame);
+        }
+
+        let cmd_norm =
+            (twist.linear[0] * twist.linear[0] + twist.linear[1] * twist.linear[1]).sqrt();
+        let movement_direction = if cmd_norm > 1e-6 {
+            [twist.linear[0] / cmd_norm, twist.linear[1] / cmd_norm, 0.0]
+        } else {
+            [1.0, 0.0, 0.0]
+        };
+        let yaw = twist.angular[2];
+        let facing_direction = [yaw.cos(), yaw.sin(), 0.0];
+        let target_vel = [cmd_norm];
+        let mode = [GEAR_SONIC_DEFAULT_MODE_WALK];
+        let height = [GEAR_SONIC_DEFAULT_HEIGHT_METERS];
+        let random_seed = [0_i64];
+        let has_specific_target = [0_i64];
+        let specific_target_positions = vec![0.0_f32; 4 * 3];
+        let specific_target_headings = vec![0.0_f32; 4];
+        let allowed_pred_num_tokens = vec![1_i64; GEAR_SONIC_ALLOWED_PRED_NUM_TOKENS];
+
+        let context_shape = [
+            1_i64,
+            GEAR_SONIC_PLANNER_CONTEXT_LEN_I64,
+            GEAR_SONIC_PLANNER_QPOS_DIM_I64,
+        ];
+        let vec3_shape = [1_i64, 3_i64];
+        let target_shape = [1_i64];
+        let scalar_shape = [1_i64];
+        let has_target_shape = [1_i64, 1_i64];
+        let specific_positions_shape = [1_i64, 4_i64, 3_i64];
+        let specific_headings_shape = [1_i64, 4_i64];
+        let allowed_tokens_shape = [1_i64, GEAR_SONIC_ALLOWED_PRED_NUM_TOKENS_I64];
+
+        let outputs = backend
+            .run_typed(&[
+                OrtTensorInput::F32 {
+                    name: "context_mujoco_qpos",
+                    data: &context_data,
+                    shape: &context_shape,
+                },
+                OrtTensorInput::F32 {
+                    name: "target_vel",
+                    data: &target_vel,
+                    shape: &target_shape,
+                },
+                OrtTensorInput::I64 {
+                    name: "mode",
+                    data: &mode,
+                    shape: &scalar_shape,
+                },
+                OrtTensorInput::F32 {
+                    name: "movement_direction",
+                    data: &movement_direction,
+                    shape: &vec3_shape,
+                },
+                OrtTensorInput::F32 {
+                    name: "facing_direction",
+                    data: &facing_direction,
+                    shape: &vec3_shape,
+                },
+                OrtTensorInput::F32 {
+                    name: "height",
+                    data: &height,
+                    shape: &scalar_shape,
+                },
+                OrtTensorInput::I64 {
+                    name: "random_seed",
+                    data: &random_seed,
+                    shape: &scalar_shape,
+                },
+                OrtTensorInput::I64 {
+                    name: "has_specific_target",
+                    data: &has_specific_target,
+                    shape: &has_target_shape,
+                },
+                OrtTensorInput::F32 {
+                    name: "specific_target_positions",
+                    data: &specific_target_positions,
+                    shape: &specific_positions_shape,
+                },
+                OrtTensorInput::F32 {
+                    name: "specific_target_headings",
+                    data: &specific_target_headings,
+                    shape: &specific_headings_shape,
+                },
+                OrtTensorInput::I64 {
+                    name: "allowed_pred_num_tokens",
+                    data: &allowed_pred_num_tokens,
+                    shape: &allowed_tokens_shape,
+                },
+            ])
+            .map_err(|e| robowbc_core::WbcError::InferenceFailed(e.to_string()))?;
+
+        let mujoco_qpos = outputs
+            .iter()
+            .find(|output| output.name == "mujoco_qpos")
+            .ok_or(robowbc_core::WbcError::InferenceFailed(
+                "planner output missing 'mujoco_qpos'".to_owned(),
+            ))?;
+        let num_pred_frames = outputs
+            .iter()
+            .find(|output| output.name == "num_pred_frames")
+            .ok_or(robowbc_core::WbcError::InferenceFailed(
+                "planner output missing 'num_pred_frames'".to_owned(),
+            ))?;
+
+        let qpos_data = mujoco_qpos.as_f32().ok_or_else(|| {
+            robowbc_core::WbcError::InferenceFailed(
+                "planner 'mujoco_qpos' output must be f32".to_owned(),
+            )
+        })?;
+        if qpos_data.len() % GEAR_SONIC_PLANNER_QPOS_DIM != 0 {
+            return Err(robowbc_core::WbcError::InferenceFailed(format!(
+                "planner 'mujoco_qpos' output length {} is not divisible by {}",
+                qpos_data.len(),
+                GEAR_SONIC_PLANNER_QPOS_DIM
+            )));
+        }
+
+        let available_frames = match mujoco_qpos.shape.as_slice() {
+            [1, frames, frame_dim] if *frame_dim == GEAR_SONIC_PLANNER_QPOS_DIM_I64 => {
+                usize::try_from(*frames).map_err(|_| {
+                    robowbc_core::WbcError::InferenceFailed(format!(
+                        "invalid planner frame count in output shape {:?}",
+                        mujoco_qpos.shape
+                    ))
+                })?
+            }
+            [frames, frame_dim] if *frame_dim == GEAR_SONIC_PLANNER_QPOS_DIM_I64 => {
+                usize::try_from(*frames).map_err(|_| {
+                    robowbc_core::WbcError::InferenceFailed(format!(
+                        "invalid planner frame count in output shape {:?}",
+                        mujoco_qpos.shape
+                    ))
+                })?
+            }
+            _ => {
+                return Err(robowbc_core::WbcError::InferenceFailed(format!(
+                    "unexpected planner output shape for 'mujoco_qpos': {:?}",
+                    mujoco_qpos.shape
+                )))
+            }
+        };
+
+        let predicted_frames = if let Some(values) = num_pred_frames.as_i64() {
+            values.first().copied().unwrap_or(1)
+        } else if let Some(values) = num_pred_frames.as_i32() {
+            values.first().copied().map_or(1, i64::from)
+        } else {
+            return Err(robowbc_core::WbcError::InferenceFailed(
+                "planner 'num_pred_frames' output must be numeric".to_owned(),
+            ));
+        };
+
+        let predicted_frames = predicted_frames.max(1);
+        let predicted_frames = usize::try_from(predicted_frames).map_err(|_| {
+            robowbc_core::WbcError::InferenceFailed(
+                "planner num_pred_frames overflowed usize".to_owned(),
+            )
+        })?;
+        let num_frames = predicted_frames.min(available_frames).max(1);
+
+        Ok(qpos_data
+            .chunks_exact(GEAR_SONIC_PLANNER_QPOS_DIM)
+            .take(num_frames)
+            .map(<[f32]>::to_vec)
+            .collect())
+    }
+
+    fn next_planner_frame(state: &mut GearSonicPlannerState) -> Vec<f32> {
+        if state.trajectory.is_empty() {
+            return state.last_context_frame.clone();
+        }
+
+        if state.trajectory.len() < 2 {
+            return state.trajectory[0].clone();
+        }
+
+        let idx = state.traj_index.min(state.trajectory.len() - 2);
+        let frame_a = &state.trajectory[idx];
+        let frame_b = &state.trajectory[(idx + 1).min(state.trajectory.len() - 1)];
+        let alpha = state.interp_phase;
+        let interpolated = frame_a
+            .iter()
+            .zip(frame_b)
+            .map(|(start, end)| start + alpha * (end - start))
+            .collect::<Vec<_>>();
+
+        state.interp_phase += GEAR_SONIC_PLANNER_INTERP_STEP;
+        while state.interp_phase >= 1.0 && state.traj_index < state.trajectory.len() - 2 {
+            state.interp_phase -= 1.0;
+            state.traj_index += 1;
+        }
+
+        interpolated
+    }
+
+    fn run_velocity_planner(
+        &self,
+        obs: &Observation,
+        twist: &robowbc_core::Twist,
+    ) -> CoreResult<JointPositionTargets> {
+        let mut planner = self.planner.lock().map_err(|_| {
+            robowbc_core::WbcError::InferenceFailed("planner mutex poisoned".to_owned())
+        })?;
+        if !Self::supports_real_planner_contract(&planner) {
+            return Err(robowbc_core::WbcError::UnsupportedCommand(
+                "GearSonicPolicy velocity mode requires the published planner_sonic.onnx contract",
+            ));
+        }
+        if self.robot.joint_count != GEAR_SONIC_PLANNER_QPOS_DIM - GEAR_SONIC_PLANNER_JOINT_OFFSET {
+            return Err(robowbc_core::WbcError::InvalidObservation(
+                "GearSonicPolicy planner mode currently expects robot.joint_count = 29",
+            ));
+        }
+
+        let mut planner_state = self.planner_state.lock().map_err(|_| {
+            robowbc_core::WbcError::InferenceFailed("planner state mutex poisoned".to_owned())
+        })?;
+        let context_frame = Self::planner_context_frame(obs, &planner_state.last_context_frame);
+        if planner_state.context.len() >= GEAR_SONIC_PLANNER_CONTEXT_LEN {
+            let _ = planner_state.context.pop_front();
+        }
+        planner_state.context.push_back(context_frame.clone());
+        planner_state.last_context_frame = context_frame;
+
+        if planner_state.steps_since_plan >= GEAR_SONIC_PLANNER_REPLAN_INTERVAL_TICKS
+            || planner_state.trajectory.is_empty()
+        {
+            planner_state.trajectory =
+                Self::run_real_planner(&mut planner, &planner_state.context, twist)?;
+            planner_state.traj_index = 0;
+            planner_state.interp_phase = 0.0;
+            planner_state.steps_since_plan = 0;
+        }
+
+        planner_state.steps_since_plan = planner_state.steps_since_plan.saturating_add(1);
+        let frame = Self::next_planner_frame(&mut planner_state);
+        planner_state.last_context_frame.clone_from(&frame);
+
+        Ok(JointPositionTargets {
+            positions: frame[GEAR_SONIC_PLANNER_JOINT_OFFSET..].to_vec(),
+            timestamp: obs.timestamp,
+        })
+    }
+}
+
+impl robowbc_core::WbcPolicy for GearSonicPolicy {
+    fn predict(&self, obs: &Observation) -> CoreResult<JointPositionTargets> {
+        if obs.joint_positions.len() != self.robot.joint_count {
+            return Err(robowbc_core::WbcError::InvalidObservation(
+                "joint_positions length does not match robot.joint_count",
+            ));
+        }
+        if obs.joint_velocities.len() != self.robot.joint_count {
+            return Err(robowbc_core::WbcError::InvalidObservation(
+                "joint_velocities length does not match robot.joint_count",
+            ));
+        }
+
+        match &obs.command {
+            WbcCommand::MotionTokens(tokens) if !tokens.is_empty() => {
+                self.run_fixture_motion_tokens(obs, tokens)
+            }
+            WbcCommand::MotionTokens(_) => Err(robowbc_core::WbcError::InvalidObservation(
+                "motion token command must not be empty",
+            )),
+            WbcCommand::Velocity(twist) => self.run_velocity_planner(obs, twist),
+            _ => Err(robowbc_core::WbcError::UnsupportedCommand(
+                "GearSonicPolicy requires WbcCommand::Velocity or WbcCommand::MotionTokens",
+            )),
+        }
     }
 
     fn control_frequency_hz(&self) -> u32 {
@@ -768,7 +1257,11 @@ mod tests {
 
     #[test]
     fn negative_dimension_is_rejected_before_inference() {
-        let result = OrtBackend::build_input_values(&[("input", &[1.0, 2.0], &[1, -2])]);
+        let result = OrtBackend::build_typed_input_values(&[OrtTensorInput::F32 {
+            name: "input",
+            data: &[1.0, 2.0],
+            shape: &[1, -2],
+        }]);
         assert!(
             matches!(
                 result,
@@ -778,7 +1271,7 @@ mod tests {
                     dimension: -2
                 }) if name == "input"
             ),
-            "expected InvalidShape for negative dimension, got: {result:?}"
+            "expected InvalidShape for negative dimension"
         );
     }
 
@@ -970,7 +1463,42 @@ mod tests {
         assert!(matches!(err, robowbc_core::WbcError::UnsupportedCommand(_)));
     }
 
-    /// Integration test against real GEAR-SONIC ONNX checkpoints.
+    #[test]
+    fn gear_sonic_velocity_requires_real_planner_contract() {
+        if !has_test_model() {
+            eprintln!(
+                "skipping: test model not found at {:?}",
+                identity_model_path()
+            );
+            return;
+        }
+
+        let config = GearSonicConfig {
+            encoder: test_ort_config(identity_model_path()),
+            decoder: test_ort_config(identity_model_path()),
+            planner: test_ort_config(identity_model_path()),
+            robot: test_robot_config(4),
+        };
+
+        let policy = GearSonicPolicy::new(config).expect("policy should build");
+        let obs = Observation {
+            joint_positions: vec![0.0; 4],
+            joint_velocities: vec![0.0; 4],
+            gravity_vector: [0.0, 0.0, -1.0],
+            command: WbcCommand::Velocity(robowbc_core::Twist {
+                linear: [0.2, 0.0, 0.0],
+                angular: [0.0, 0.0, 0.1],
+            }),
+            timestamp: Instant::now(),
+        };
+
+        let err = policy
+            .predict(&obs)
+            .expect_err("fixture planner should reject velocity-mode real contract");
+        assert!(matches!(err, robowbc_core::WbcError::UnsupportedCommand(_)));
+    }
+
+    /// Integration test against the published GEAR-SONIC planner checkpoint.
     ///
     /// Run with:
     /// ```
@@ -1024,27 +1552,26 @@ mod tests {
 
         let policy = GearSonicPolicy::new(config).expect("policy should build from real models");
 
-        // Construct a standing-pose observation with a neutral velocity command.
-        // Motion tokens here are placeholder zeros — replace with GEAR planner output
-        // for a meaningful trajectory command.
         let obs = Observation {
             joint_positions: robot.default_pose.clone(),
             joint_velocities: vec![0.0; robot.joint_count],
-            gravity_vector: [0.0, 0.0, -9.81],
-            command: WbcCommand::MotionTokens(vec![0.0; 4]),
+            gravity_vector: [0.0, 0.0, -1.0],
+            command: WbcCommand::Velocity(robowbc_core::Twist {
+                linear: [0.3, 0.0, 0.0],
+                angular: [0.0, 0.0, 0.0],
+            }),
             timestamp: Instant::now(),
         };
 
         let targets = policy
             .predict(&obs)
-            .expect("real model inference should succeed");
+            .expect("real planner inference should succeed");
 
         assert_eq!(
             targets.positions.len(),
             robot.joint_count,
-            "decoder output must match robot DOF"
+            "planner output must match robot DOF"
         );
-        // All joint targets should be finite (no NaN / inf from model).
         for (i, &pos) in targets.positions.iter().enumerate() {
             assert!(pos.is_finite(), "joint target {i} is not finite: {pos}");
         }

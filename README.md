@@ -22,8 +22,9 @@ control loops, latency, and target trajectories with the same data pipeline.
 - A checked-in fixture config exists at `configs/decoupled_g1.toml` for local
   smoke testing without model downloads.
 - CI runs Rust build/test/lint/format checks, Rust API docs, `mdBook`, Python
-  wheel smoke tests, and a fixture-backed policy showcase artifact with
-  `index.html`, JSON summaries, logs, and Rerun recordings.
+  wheel smoke tests, and a mixed-source policy showcase artifact with one
+  real CPU `gear_sonic` planner card plus fixture-backed comparison cards,
+  all exported as `index.html`, JSON summaries, logs, and Rerun recordings.
 
 ## Repo layout
 
@@ -65,8 +66,11 @@ bash scripts/download_gear_sonic_models.sh
 cargo run --release --bin robowbc -- run --config configs/sonic_g1.toml
 ```
 
-`configs/sonic_g1.toml` is wired for NVIDIA's three-model GEAR-SONIC pipeline:
-`model_encoder.onnx`, `model_decoder.onnx`, and `planner_sonic.onnx`.
+`configs/sonic_g1.toml` downloads NVIDIA's three public GEAR-SONIC checkpoints,
+then runs the published `planner_sonic.onnx` velocity path by default. The
+real encoder/decoder tracking contract is not integrated into the Rust runtime
+yet, so the CLI config keeps `motion_tokens` as a documented fixture-only /
+experimental path for now.
 
 ### Generate a new config template
 
@@ -81,7 +85,7 @@ without copying an existing example by hand.
 
 | Policy | Example config(s) | Backend | Notes |
 |--------|-------------------|---------|-------|
-| `gear_sonic` | `configs/sonic_g1.toml` | `robowbc-ort` | Real NVIDIA G1 checkpoints via `scripts/download_gear_sonic_models.sh` |
+| `gear_sonic` | `configs/sonic_g1.toml` | `robowbc-ort` | Real `planner_sonic.onnx` velocity path today; encoder/decoder tracking contract still pending |
 | `decoupled_wbc` | `configs/decoupled_g1.toml`, `configs/decoupled_h1.toml` | `robowbc-ort` | Best local smoke-test path; checked-in fixture available |
 | `hover` | `configs/hover_h1.toml` | `robowbc-ort` | H1-oriented ONNX wrapper; bring your own exported checkpoint |
 | `wbc_agile` | `configs/wbc_agile_g1.toml`, `configs/wbc_agile_t1.toml` | `robowbc-ort` | NVIDIA WBC-AGILE style policy wrapper |
@@ -143,7 +147,7 @@ python scripts/generate_policy_showcase.py \
 
 That produces:
 
-- `index.html`: static comparison report across fixture-backed policies
+- `index.html`: static mixed-source comparison report across runnable policies
 - `manifest.json`: machine-readable manifest of all runs
 - `*.json`: per-policy run summaries written by the CLI `[report]` section
 - `*.rrd`: downloadable Rerun recordings for each policy
@@ -151,10 +155,12 @@ That produces:
 
 ### CI policy showcase
 
-The CI workflow builds the same fixture-backed showcase and uploads it as the
+The CI workflow warms a cached `models/gear-sonic/` checkpoint directory,
+builds the same mixed-source showcase, and uploads it as the
 `policy-showcase` artifact. Each run contains an auto-generated `index.html`
-plus per-policy `.json`, `.rrd`, and `.log` files for `decoupled_wbc`,
-`bfm_zero`, `hover`, and `wbc_agile`.
+plus per-policy `.json`, `.rrd`, and `.log` files for the real CPU
+`gear_sonic` planner path and the fixture-backed `decoupled_wbc`, `bfm_zero`,
+`hover`, and `wbc_agile` cards.
 
 ## Python SDK
 

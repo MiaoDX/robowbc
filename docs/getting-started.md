@@ -45,8 +45,8 @@ If an ONNX-backed run stalls before the first tick on Linux/x86_64, set
 
 ## Generate a local policy showcase
 
-The repository includes a fixture-backed showcase generator that compares the
-current mock-policy integrations and emits one static HTML report.
+The repository includes a mixed-source showcase generator that compares the
+currently runnable policy integrations and emits one static HTML report.
 
 ```bash
 cargo build --bin robowbc --features robowbc-cli/vis
@@ -57,8 +57,10 @@ python scripts/generate_policy_showcase.py \
 ```
 
 Open `./artifacts/policy-showcase/index.html` locally after the script
-finishes. The same generator is used in CI for the downloadable
-`policy-showcase` artifact.
+finishes. If real GEAR-SONIC checkpoints are present, the report includes a
+real CPU `gear_sonic` planner card; otherwise that card is rendered as blocked
+with the missing-path reason. The same generator is used in CI for the
+downloadable `policy-showcase` artifact.
 
 ## Run GEAR-SONIC with real checkpoints
 
@@ -67,7 +69,7 @@ finishes. The same generator is used in CI for the downloadable
 ```bash
 bash scripts/download_gear_sonic_models.sh
 # Downloads model_encoder.onnx, model_decoder.onnx, planner_sonic.onnx
-# into models/gear-sonic/
+# into models/gear-sonic/ and reuses cached files when already present.
 ```
 
 ### Step 2 — run inference
@@ -76,8 +78,9 @@ bash scripts/download_gear_sonic_models.sh
 cargo run --release --bin robowbc -- run --config configs/sonic_g1.toml
 ```
 
-The control loop prints joint position targets at 50 Hz until you press Ctrl-C
-or `max_ticks` is reached.
+The default CLI config exercises the published `planner_sonic.onnx` velocity
+path at 50 Hz until you press Ctrl-C or `max_ticks` is reached. The real
+encoder/decoder tracking contract is not integrated into the Rust runtime yet.
 
 ## Generate a new config from the template
 
