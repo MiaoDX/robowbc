@@ -1,6 +1,6 @@
 //! `MuJoCo` simulation transport for `RoboWBC`.
 //!
-//! Provides [`MujocoTransport`], an implementation of
+//! Provides `MujocoTransport`, an implementation of
 //! [`RobotTransport`](robowbc_comm::RobotTransport) that runs physics
 //! simulation using `MuJoCo`. This enables closed-loop policy testing without
 //! real hardware.

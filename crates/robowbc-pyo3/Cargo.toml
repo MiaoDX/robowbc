@@ -5,9 +5,11 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 description = "PyO3 Python inference backend for RoboWBC"
+build = "build.rs"
 
 [lib]
 path = "src/lib.rs"
+doc = false
 
 [dependencies]
 inventory = "0.3"

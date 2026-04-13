@@ -41,6 +41,8 @@ use robowbc_registry::{RegistryPolicy, WbcRegistration};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+use std::sync::OnceLock;
 
 /// Errors produced by the ONNX Runtime backend.
 #[derive(Debug, thiserror::Error)]
@@ -145,6 +147,45 @@ impl From<&OptimizationLevel> for GraphOptimizationLevel {
 
 fn default_num_threads() -> usize {
     1
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const ROBOWBC_ORT_DYLIB_ENV: &str = "ROBOWBC_ORT_DYLIB_PATH";
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+static ORT_RUNTIME_INIT: OnceLock<Result<(), String>> = OnceLock::new();
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn ensure_onnxruntime_loaded() -> Result<(), OrtError> {
+    ORT_RUNTIME_INIT
+        .get_or_init(|| {
+            let builder = match resolved_onnxruntime_dylib_path() {
+                Some(path) => ort::init_from(path).map_err(|e| e.to_string())?,
+                None => ort::init(),
+            };
+            let _ = builder.commit();
+            Ok(())
+        })
+        .clone()
+        .map_err(|reason| OrtError::SessionCreation { reason })
+}
+
+#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+fn ensure_onnxruntime_loaded() -> Result<(), OrtError> {
+    Ok(())
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn resolved_onnxruntime_dylib_path() -> Option<PathBuf> {
+    std::env::var_os("ORT_DYLIB_PATH")
+        .or_else(|| std::env::var_os(ROBOWBC_ORT_DYLIB_ENV))
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+        .or_else(|| {
+            option_env!("ROBOWBC_ORT_DYLIB_PATH")
+                .map(PathBuf::from)
+                .filter(|path| path.is_file())
+        })
 }
 
 /// Configuration for constructing an [`OrtBackend`].
@@ -276,6 +317,8 @@ impl OrtBackend {
     }
 
     fn build_session(config: &OrtConfig) -> Result<Session, OrtError> {
+        ensure_onnxruntime_loaded()?;
+
         let builder = Session::builder().map_err(|e| OrtError::SessionCreation {
             reason: e.to_string(),
         })?;

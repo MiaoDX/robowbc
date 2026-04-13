@@ -1,6 +1,6 @@
 //! Rerun visualization for `RoboWBC`.
 //!
-//! Provides [`RerunVisualizer`], a logging frontend that streams robot state,
+//! Provides `RerunVisualizer`, a logging frontend that streams robot state,
 //! policy targets, and runtime metrics to a [Rerun](https://rerun.io/) viewer.
 //!
 //! # Feature flags
@@ -65,16 +65,6 @@ fn default_app_id() -> String {
 
 const fn default_spawn_viewer() -> bool {
     true
-}
-
-impl Default for RerunConfig {
-    fn default() -> Self {
-        Self {
-            app_id: default_app_id(),
-            spawn_viewer: default_spawn_viewer(),
-            save_path: None,
-        }
-    }
 }
 
 /// Errors produced by the visualization layer.
