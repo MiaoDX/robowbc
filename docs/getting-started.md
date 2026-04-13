@@ -27,25 +27,21 @@ cargo test                         # run all tests
 Expected output: all tests pass (a small number are marked `#[ignore]` — they
 require real model checkpoints or hardware and are skipped in CI).
 
-## Run a smoke test with the mock config
+## Run a smoke test with the bundled fixture
 
-The repository ships a mock config that uses small identity ONNX fixtures (no
-downloads required):
-
-```bash
-cargo run --bin robowbc -- run --config configs/sonic_g1.toml
-```
-
-> The default `sonic_g1.toml` points at `models/gear-sonic/*.onnx`. If those
-> files are not present yet, use `configs/decoupled_g1.toml` instead:
+The fastest local path is the checked-in `decoupled_wbc` fixture:
 
 ```bash
 cargo run --bin robowbc -- run --config configs/decoupled_g1.toml
 ```
 
-`decoupled_g1.toml` uses a small test fixture bundled in the repo and runs
-without any downloads. You should see a control loop running at 50 Hz printing
-joint target vectors.
+`decoupled_g1.toml` uses the bundled
+`crates/robowbc-ort/tests/fixtures/test_dynamic_identity.onnx` model and is the
+intended no-download local smoke path.
+
+If an ONNX-backed run stalls before the first tick on Linux/x86_64, set
+`ROBOWBC_ORT_DYLIB_PATH` to a fully extracted `libonnxruntime.so.1.24.2` under
+`target/debug/build/robowbc-ort-*/out/onnxruntime-linux-x64-1.24.2/lib/`.
 
 ## Run GEAR-SONIC with real checkpoints
 
@@ -79,21 +75,15 @@ field. Edit `policy.name` and the model paths, then:
 cargo run --bin robowbc -- run --config my_config.toml
 ```
 
-## Validate a config file
+RoboWBC validates the config as part of `robowbc run`, so malformed TOML or
+missing required fields fail fast before policy execution starts.
 
-```bash
-cargo run --bin robowbc -- validate --config my_config.toml
-```
-
-Exits with a clear error message if any required field is missing or has an
-invalid value, before loading any models.
 
 ## Available CLI commands
 
 ```
 robowbc run      --config <path>   Run the control loop
 robowbc init     --output <path>   Generate an annotated config template
-robowbc validate --config <path>   Validate a config without running
 ```
 
 ## What to explore next

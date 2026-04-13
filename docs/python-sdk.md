@@ -1,26 +1,30 @@
 # Python SDK
 
-RoboWBC ships a first-class Python SDK backed by the same Rust runtime.
-Install it from PyPI, load any registered policy by name, and call
+RoboWBC ships a first-class Python SDK backed by the same Rust runtime. Build
+it locally with `maturin develop`, or install a published `robowbc` wheel when
+one is available, then load any registered policy by name and call
 `policy.predict(obs)` — no Rust required.
 
 ## Installation
+
+Python 3.10 or later is required.
+
+### Build from source
+
+```bash
+# Requires Rust stable >= 1.75 and maturin
+pip install "maturin>=1.4,<2.0"
+maturin develop          # installs an editable build into the current venv
+```
+
+### Install a published wheel
 
 ```bash
 pip install robowbc
 ```
 
-Python 3.10 or later is required.
-The wheel is a native extension built for `manylinux2014` (glibc ≥ 2.17),
-which covers all modern Linux distributions used in robotics research.
-
-### Build from source
-
-```bash
-# Requires Rust stable ≥ 1.75 and maturin
-pip install "maturin>=1.4,<2.0"
-maturin develop          # installs an editable build into the current venv
-```
+Published wheels target `manylinux2014` (glibc >= 2.17), which covers modern
+Linux distributions commonly used in robotics research.
 
 ## Quick start
 

@@ -1,193 +1,177 @@
-# RoboWBC: Unified Inference Runtime for Humanoid Whole-Body Control
+# RoboWBC
 
-**RoboWBC** is an open-source inference runtime that lets you run multiple whole-body control (WBC) policies — GEAR-SONIC, HOVER, OmniH2O, and more — through one interface, on one runtime, with one config swap.
+Unified inference runtime for humanoid whole-body control policies.
 
-## Core Purpose
+RoboWBC gives you one runtime for loading multiple WBC policies, switching them
+by TOML config, and running them through synthetic, simulation, or hardware
+transports from the same codebase.
 
-Every humanoid robotics team rebuilds their deployment stack from scratch. In 2025, **30+ papers** used Unitree G1/H1 with bespoke control code — each reimplementing the same WBC-to-joint-target pipeline. RoboWBC eliminates this duplication by providing a unified `WbcPolicy` trait that abstracts over all major WBC implementations.
+### **[View Interactive Visual Reports →](https://miaodx.com/roboharness/)**
 
-## Key Features
+Browser-native visual reports live in the companion `roboharness` project.
+RoboWBC itself records Rerun `.rrd` traces locally and in CI, so you can inspect
+control loops, latency, and target trajectories with the same data pipeline.
 
-**Unified Policy Interface:**
-One trait (`WbcPolicy::predict(observation) → joint_targets`) covers GEAR-SONIC, Decoupled WBC, HOVER, OmniH2O, HumanPlus, ExBody, and more. All output the same thing: joint position PD targets at 50 Hz.
+## Current status
 
-**Multiple Inference Backends:**
-- ONNX Runtime (CUDA + TensorRT) via [`ort`](https://github.com/pykeio/ort) — for GEAR-SONIC and exported models
-- PyTorch via PyO3 — for development and non-exported models
-- Burn (native Rust) — for future embedded scenarios
+- Rust workspace with core abstractions, policy registry, ONNX Runtime
+  backends, Python-backed policy loading, CLI, communication, MuJoCo transport,
+  and Rerun visualization.
+- Registered policies on `main`: `gear_sonic`, `decoupled_wbc`, `hover`,
+  `wbc_agile`, `bfm_zero`, `wholebody_vla`, and `py_model`.
+- A checked-in fixture config exists at `configs/decoupled_g1.toml` for local
+  smoke testing without model downloads.
+- CI runs Rust build/test/lint/format checks, Rust API docs, `mdBook`, Python
+  wheel smoke tests, and headless Rerun snapshot recording.
 
-**Config-Driven Model Switching:**
-Change a TOML file, not your code. Registry + factory pattern (inspired by [StarVLA](https://github.com/starVLA/starVLA)) enables runtime model selection.
+## Repo layout
 
-**Rust Core, Python API:**
-Fearless concurrency for real-time multi-threaded inference. Python bindings via PyO3 — use it like any Python library.
+| Path | Purpose |
+|------|---------|
+| `crates/robowbc-core` | `WbcPolicy`, `Observation`, `WbcCommand`, `JointPositionTargets`, `RobotConfig` |
+| `crates/robowbc-registry` | `inventory`-based policy registration and factory |
+| `crates/robowbc-ort` | ONNX Runtime backends and policy wrappers |
+| `crates/robowbc-pyo3` | Python-backed runtime policy (`py_model`) for `.py`, `.pt`, and `.pth` models |
+| `crates/robowbc-comm` | Control-loop plumbing and robot transports |
+| `crates/robowbc-sim` | MuJoCo transport for hardware-free execution |
+| `crates/robowbc-vis` | Rerun visualization and `.rrd` recording |
+| `crates/robowbc-cli` | `robowbc` CLI binary |
+| `crates/robowbc-py` | Standalone `maturin` package for the Python SDK |
 
-## Position in the Stack
+## Quick start
 
-```
-LeRobot / StarVLA / GR00T N1 (VLA layer)    "brain"
-        ↓ outputs: SE3 poses + velocity commands
-RoboWBC (WBC unification layer)              ← you are here
-        ↓ outputs: joint position PD targets
-Robot hardware PD controllers                "muscles"
-```
-
-The VLA layer already has [LeRobot](https://github.com/huggingface/lerobot) (~23K stars) and [StarVLA](https://github.com/starVLA/starVLA) (~1,500 stars). **The WBC layer has no equivalent — until now.**
-
-## The Insight
-
-We surveyed **10 open-source WBC implementations** with real-robot validation. Every single one shares the same output contract:
-
-| Property | Consensus |
-|----------|-----------|
-| Output type | Joint position PD targets (not direct torques) |
-| Control frequency | 50 Hz (SoFTA: 100/50 Hz asymmetric) |
-| Direct torque output | **None** — PD targets provide a natural safety layer |
-
-This uniformity makes a thin abstraction layer both possible and natural.
-
-## Supported Models
-
-| Model | Source | Format | Pre-trained | Hardware | Status |
-|-------|--------|--------|:-----------:|----------|--------|
-| [GEAR-SONIC](https://github.com/NVlabs/GR00T-WholeBodyControl) | NVIDIA | ONNX → TensorRT | ✅ [HuggingFace](https://huggingface.co/nvidia/GEAR-SONIC) | G1 | 🎯 First target |
-| [Decoupled WBC](https://github.com/NVlabs/GR00T-WholeBodyControl) | NVIDIA | PyTorch → ONNX | ✅ | G1 | Planned |
-| [HOVER](https://github.com/NVlabs/HOVER) | NVIDIA | PyTorch | ❌ | H1 | Planned |
-| [WBC-AGILE](https://github.com/nvidia-isaac/WBC-AGILE) | NVIDIA | PyTorch → ONNX | ❌ | G1, T1 | Planned |
-| [OmniH2O](https://github.com/LeCAR-Lab/human2humanoid) | CMU | PyTorch | ❌ | H1 | Planned |
-| [HumanPlus](https://github.com/MarkFzp/humanplus) | Stanford | PyTorch | ❌ | Custom H1 | Planned |
-| [ExBody](https://github.com/chengxuxin/expressive-humanoid) | Unitree collab | PyTorch | ❌ | H1 | Planned |
-
-## Visualization
-
-RoboWBC ships a [Rerun](https://rerun.io)-backed visualizer (`robowbc-vis`) that streams per-tick data for any running policy:
-
-| Channel | Path in Rerun |
-|---------|---------------|
-| Actual joint positions | `joints/actual/<name>` |
-| Actual joint velocities | `joints/velocity/<name>` |
-| Policy joint targets | `joints/target/<name>` |
-| Inference latency | `metrics/inference_latency_ms` |
-| Control loop frequency | `metrics/control_frequency_hz` |
-
-### Quick start
-
-Add a `[vis]` section to any config file and rebuild with the `vis` feature:
+### Rust CLI smoke test
 
 ```bash
-cargo run --bin robowbc --features robowbc-cli/vis -- run --config configs/decoupled_g1.toml
+rustc --version
+cargo --version
+cargo build
+cargo run --bin robowbc -- run --config configs/decoupled_g1.toml
 ```
 
-**Live viewer** — spawns a Rerun window automatically:
+`configs/decoupled_g1.toml` uses
+`crates/robowbc-ort/tests/fixtures/test_dynamic_identity.onnx`, so it is the
+intended no-download local smoke path.
+
+If an ONNX-backed run stalls before the first tick on Linux/x86_64, point
+`ROBOWBC_ORT_DYLIB_PATH` at a fully extracted `libonnxruntime.so.1.24.2` under
+`target/debug/build/robowbc-ort-*/out/onnxruntime-linux-x64-1.24.2/lib/`.
+
+### Run real GEAR-SONIC checkpoints
+
+```bash
+bash scripts/download_gear_sonic_models.sh
+cargo run --release --bin robowbc -- run --config configs/sonic_g1.toml
+```
+
+`configs/sonic_g1.toml` is wired for NVIDIA's three-model GEAR-SONIC pipeline:
+`model_encoder.onnx`, `model_decoder.onnx`, and `planner_sonic.onnx`.
+
+### Generate a new config template
+
+```bash
+cargo run --bin robowbc -- init --output robowbc.template.toml
+```
+
+The generated file is the fastest way to start a new policy or robot config
+without copying an existing example by hand.
+
+## Registered policies
+
+| Policy | Example config(s) | Backend | Notes |
+|--------|-------------------|---------|-------|
+| `gear_sonic` | `configs/sonic_g1.toml` | `robowbc-ort` | Real NVIDIA G1 checkpoints via `scripts/download_gear_sonic_models.sh` |
+| `decoupled_wbc` | `configs/decoupled_g1.toml`, `configs/decoupled_h1.toml` | `robowbc-ort` | Best local smoke-test path; checked-in fixture available |
+| `hover` | `configs/hover_h1.toml` | `robowbc-ort` | H1-oriented ONNX wrapper; bring your own exported checkpoint |
+| `wbc_agile` | `configs/wbc_agile_g1.toml`, `configs/wbc_agile_t1.toml` | `robowbc-ort` | NVIDIA WBC-AGILE style policy wrapper |
+| `bfm_zero` | `configs/bfm_zero_g1.toml` | `robowbc-ort` | G1-oriented ONNX policy integration |
+| `wholebody_vla` | `configs/wholebody_vla_x2.toml` | `robowbc-ort` | WholeBodyVLA / AGIBOT X2 wrapper |
+| `py_model` | user-supplied TOML | `robowbc-pyo3` | Loads Python scripts or PyTorch checkpoints through PyO3 |
+
+## Visualization and reports
+
+RoboWBC records per-tick joint state, policy targets, command inputs, and
+timing data through `robowbc-vis`.
+
+Build the CLI with visualization enabled:
+
+```bash
+cargo build --bin robowbc --features robowbc-cli/vis
+```
+
+Add a `[vis]` section to any config:
 
 ```toml
 [vis]
-app_id  = "robowbc"
-spawn_viewer = true
-```
-
-**Headless / save to file** — no display required, works in CI or SSH sessions:
-
-```toml
-[vis]
-app_id       = "robowbc"
+app_id = "robowbc"
 spawn_viewer = false
-save_path    = "recording.rrd"
+save_path = "recording.rrd"
 ```
 
-Open the saved file:
+Then run:
 
 ```bash
-rerun recording.rrd          # local Rerun install
-# or paste the file URL into https://app.rerun.io
-```
-
-### CI-generated snapshots
-
-Every CI run on this repository records a headless `.rrd` snapshot of the `decoupled_wbc` policy (200 ticks, no model downloads required). Download the artifact named **`policy-snapshots`** from any [GitHub Actions run](../../actions/workflows/ci.yml) and open it with Rerun to see joint position targets, velocities, and inference latency over time.
-
-### Comparing policies
-
-Run each policy config with a shared `save_path` prefix, then open the files together:
-
-```bash
-# record two policies
 cargo run --bin robowbc --features robowbc-cli/vis -- run --config configs/decoupled_g1.toml
-# edit [vis] save_path between runs, then:
-rerun decoupled_wbc.rrd gear_sonic.rrd
 ```
 
-Rerun's timeline lets you scrub both recordings side-by-side to compare target trajectories and latency characteristics.
-
-## Related Work (WBC Literature)
-
-RoboWBC is grounded in recent whole-body control research and is designed to provide a common deployment interface across these lines of work:
-
-- **GEAR-SONIC** (NVIDIA) — universal whole-body control for Unitree G1 with ONNX/TensorRT deployment support.
-- **BFM-Zero** (CMU) — open humanoid WBC effort centered on Unitree G1 with strong sim-to-real emphasis.
-- **WholeBodyVLA** (OpenDriveLab) — end-to-end VLA + WBC integration direction for whole-body behavior.
-- **LeVERB** — language-conditioned humanoid behavior generation with a downstream WBC execution interface.
-- **HugWBC** — generalized WBC policy formulation targeting broad humanoid skill coverage.
-- **SoFTA** (CMU LeCAR Lab) — dual-rate asymmetric upper/lower body control (100 Hz arms, 50 Hz legs).
-- **WBC-AGILE** (NVIDIA) — modular RL-based WBC training/deployment task suite for G1/T1-class robots.
-- **HOVER** (NVIDIA) — multi-mode humanoid policy with decoupled upper/lower-body command structure.
-- **WBC Survey** — broad landscape reference: [arXiv:2506.20487](https://arxiv.org/abs/2506.20487).
-
-These works motivate RoboWBC's core abstraction: policy-specific model internals, but a shared runtime contract (`Observation` in, joint-position targets out).
-
-
-## Download GEAR-SONIC ONNX Models
-
-RoboWBC includes a helper script to fetch NVIDIA's public GEAR-SONIC checkpoints from HuggingFace:
+Open the saved recording with a local Rerun install:
 
 ```bash
-./scripts/download_gear_sonic_models.sh
+rerun recording.rrd
 ```
 
-By default, files are written to `models/gear-sonic/` and line up with `configs/sonic_g1.toml`.
+Or inspect it in the browser via the Rerun web app.
 
-## Architecture
+### CI snapshots
 
-```rust
-// The core trait — every WBC policy implements this
-trait WbcPolicy: Send + Sync {
-    fn predict(&self, obs: &Observation) -> JointPositionTargets;
-    fn control_frequency_hz(&self) -> u32;
-    fn supported_robots(&self) -> &[RobotConfig];
-}
+The CI workflow also records a headless `decoupled_wbc` run and uploads the
+artifact as `policy-snapshots`. That gives every PR a downloadable `.rrd`
+recording without requiring local graphics or model downloads.
 
-// Config-driven instantiation
-let policy = WbcRegistry::build("gear_sonic", &config)?;
-let targets = policy.predict(&observation);
+## Python SDK
+
+The repository ships a standalone Python package in `crates/robowbc-py` and a
+runtime Python-backed policy backend in `crates/robowbc-pyo3`.
+
+Build the SDK locally with `maturin`:
+
+```bash
+pip install "maturin>=1.4,<2.0"
+maturin develop
+python -c "from robowbc import Registry; print(Registry.list_policies())"
 ```
 
-Communication via [`zenoh`](https://github.com/eclipse-zenoh/zenoh) (official ROS 2 RMW, ~2.2K stars) — bridging DDS (Unitree SDK) and ZMQ (SONIC-compatible).
+That exposes the same registry-driven runtime from Python:
 
-## Why Rust?
+```python
+from robowbc import Observation, Registry
 
-Real-world WBC deployment runs concurrent threads: simulation, planner, ONNX inference, and hardware communication — all simultaneously. In C++/Python, this leads to subtle multi-threading bugs. Rust's ownership system eliminates entire classes of concurrency errors at compile time.
+policy = Registry.build("decoupled_wbc", "configs/decoupled_g1.toml")
+obs = Observation(
+    joint_positions=[0.0] * 4,
+    joint_velocities=[0.0] * 4,
+    gravity_vector=[0.0, 0.0, -1.0],
+    command_type="velocity",
+    command_data=[0.2, 0.0, 0.0],
+)
+targets = policy.predict(obs)
+print(targets.positions)
+```
 
-Precedent: [`libfranka-rs`](https://github.com/marcbone/libfranka-rs) runs 1 kHz real-time control loops on Franka robots in pure Rust.
+## Documentation
 
-## Roadmap
+- [Getting Started](docs/getting-started.md)
+- [Python SDK](docs/python-sdk.md)
+- [Architecture](docs/architecture.md)
+- [Founding document](docs/founding-document.md)
 
-- **Phase 1** (2–4 weeks): GEAR-SONIC on Unitree G1 via `ort` + `zenoh`, matching NVIDIA's C++ deployment performance
-- **Phase 2** (4–8 weeks): Multi-model support (Decoupled WBC + HOVER), config-driven switching, Python bindings
-- **Phase 3** (8–12 weeks): Community release, documentation, upstream PRs to GR00T-WholeBodyControl and LeRobot
+## Related projects
 
-See [docs/issues.md](docs/issues.md) for the full issue-driven development plan.
-
-## Related Projects
-
-- [roboharness](https://github.com/MiaoDX/roboharness) — Visual testing harness for AI coding agents in robot simulation (sibling project)
-- [rl_sar](https://github.com/fan-ziqi/rl_sar) — RL locomotion sim-to-real deployment (~1.2K stars, C++/ROS)
-- [StarVLA](https://github.com/starVLA/starVLA) — Unified VLA codebase (architectural inspiration)
-- [LeRobot](https://github.com/huggingface/lerobot) — Hugging Face robotics platform (upstream VLA layer)
+- [roboharness](https://github.com/MiaoDX/roboharness): companion visual
+  testing and browser-report project
+- [LeRobot](https://github.com/huggingface/lerobot): upstream robotics stack
+  that can consume a WBC backend
 
 ## License
 
 MIT
-
----
-
-*Closed-source players (Agility Motor Cortex, Figure Helix, 1X) have already proven unified WBC works in production. Time to bring it to the open-source community.*

@@ -104,12 +104,15 @@ This test proves:
 2. All arrays have the correct length
 3. `RobotConfig` needs no modification to support a new hardware target
 
-## Step 4 — Run the validation
+## Step 4 — Run a smoke test
 
 ```bash
 cargo test -p robowbc-core -- my_robot
-cargo run --bin robowbc -- validate --config configs/my_policy_my_robot.toml
+cargo run --bin robowbc -- run --config configs/my_policy_my_robot.toml
 ```
+
+For a quick CLI check, set `[runtime].max_ticks = 1` in your policy config so
+the control loop exits immediately after a single successful inference step.
 
 ## Reference: Unitree G1 (29 DOF)
 
