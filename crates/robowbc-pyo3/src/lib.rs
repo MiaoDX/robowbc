@@ -1,6 +1,6 @@
 //! `PyO3` Python inference backend for `RoboWBC`.
 //!
-//! Provides [`PyModelPolicy`], a [`WbcPolicy`] implementation that delegates
+//! Provides [`PyModelPolicy`], a [`robowbc_core::WbcPolicy`] implementation that delegates
 //! inference to an arbitrary Python callable, enabling support for `PyTorch` and
 //! other Python-based model frameworks without requiring an ONNX export step.
 //!
@@ -109,7 +109,7 @@ pub struct PyModelConfig {
     pub robot: RobotConfig,
 }
 
-/// `PyO3`-backed [`WbcPolicy`] that calls a Python model for inference.
+/// `PyO3`-backed [`robowbc_core::WbcPolicy`] that calls a Python model for inference.
 ///
 /// The policy stores a GIL-independent `Py<PyAny>` reference to the Python
 /// callable and acquires the GIL on each [`predict`] call.
@@ -164,7 +164,7 @@ impl PyModelPolicy {
         }
 
         let callable =
-            Python::with_gil(|py| load_callable(py, &config.model_path, &ext)).map_err(|e| {
+            Python::attach(|py| load_callable(py, &config.model_path, &ext)).map_err(|e| {
                 Pyo3Error::LoadFailed {
                     reason: e.to_string(),
                 }
@@ -191,7 +191,7 @@ fn load_callable(py: Python<'_>, path: &Path, ext: &str) -> PyResult<Py<PyAny>> 
 /// Imports a `.py` script and returns its `predict` attribute.
 fn load_python_script(py: Python<'_>, path: &Path) -> PyResult<Py<PyAny>> {
     let sys = py.import("sys")?;
-    let path_list = sys.getattr("path")?.downcast_into::<PyList>()?;
+    let path_list = sys.getattr("path")?.cast_into::<PyList>()?;
 
     let parent = path.parent().unwrap_or(Path::new("."));
     let parent_str = parent.to_string_lossy();
@@ -263,7 +263,7 @@ impl robowbc_core::WbcPolicy for PyModelPolicy {
         obs_flat.extend_from_slice(&obs.gravity_vector);
         obs_flat.extend(command_to_floats(&obs.command));
 
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             // Zero-copy transfer of obs_flat into a numpy array.
             let input_array = obs_flat.into_pyarray(py);
 
@@ -332,7 +332,7 @@ mod tests {
     }
 
     fn has_numpy() -> bool {
-        Python::with_gil(|py| py.import("numpy").is_ok())
+        Python::attach(|py| py.import("numpy").is_ok())
     }
 
     fn test_robot(joint_count: usize) -> RobotConfig {
@@ -551,7 +551,7 @@ mod tests {
     #[test]
     #[ignore = "requires torch to be installed; run with: cargo test -- --ignored"]
     fn torch_checkpoint_policy_predicts() {
-        Python::with_gil(|py| {
+        Python::attach(|py| {
             py.import("torch")
                 .expect("torch must be installed for this test");
         });

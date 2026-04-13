@@ -12,8 +12,8 @@ path = "src/lib.rs"
 
 [dependencies]
 inventory = "0.3"
-numpy = "0.23"
-pyo3 = { version = "0.23", features = ["auto-initialize"] }
+numpy = "0.28"
+pyo3 = { version = "0.28", features = ["auto-initialize"] }
 robowbc-core = { path = "../robowbc-core" }
 robowbc-registry = { path = "../robowbc-registry" }
 serde = { workspace = true }
