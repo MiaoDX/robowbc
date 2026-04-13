@@ -36,6 +36,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build Rust API docs
+        run: cargo doc --workspace --no-deps
+
       - name: Install mdBook
         run: |
           curl -sSL https://github.com/rust-lang/mdBook/releases/download/v0.4.40/mdbook-v0.4.40-x86_64-unknown-linux-gnu.tar.gz \

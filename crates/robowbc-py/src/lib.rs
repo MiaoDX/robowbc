@@ -107,7 +107,7 @@ fn load_from_config(config_path: &str) -> PyResult<PyPolicy> {
 ///     One of `"velocity"`, `"motion_tokens"`, or `"joint_targets"`.
 /// `command_data` : list[float]
 ///     Payload for the command type.  See module-level table for layouts.
-#[pyclass(name = "Observation")]
+#[pyclass(name = "Observation", skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyObservation {
     /// Joint positions in radians.
