@@ -32,7 +32,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 /// Configuration for the Rerun visualizer.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RerunConfig {
     /// Rerun application identifier shown in the viewer title bar.
     #[serde(default = "default_app_id")]
@@ -47,6 +47,16 @@ pub struct RerunConfig {
     /// When set, [`spawn_viewer`](Self::spawn_viewer) is ignored.
     #[serde(default)]
     pub save_path: Option<PathBuf>,
+}
+
+impl Default for RerunConfig {
+    fn default() -> Self {
+        Self {
+            app_id: default_app_id(),
+            spawn_viewer: default_spawn_viewer(),
+            save_path: None,
+        }
+    }
 }
 
 fn default_app_id() -> String {
