@@ -14,6 +14,10 @@ models=(
 
 for model in "${models[@]}"; do
   target="${DEST_DIR}/${model}"
+  if [[ -s "${target}" ]]; then
+    echo "[cache] ${model} already present at ${target} ($(wc -c < "${target}") bytes)"
+    continue
+  fi
   echo "[download] ${model} -> ${target}"
   curl --fail --location --retry 3 --retry-delay 2 \
     "${BASE_URL}/${model}" \

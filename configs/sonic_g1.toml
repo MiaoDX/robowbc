@@ -27,8 +27,13 @@ frequency_hz = 50
 topics = { joint_state = "unitree/g1/joint_state", imu = "unitree/g1/imu", joint_target_command = "unitree/g1/command/joint_position" }
 
 [runtime]
-motion_tokens = [0.05, -0.1, 0.2, 0.0]
+velocity = [0.30, 0.0, 0.0]
 max_ticks = 200
+
+# The default CLI path uses the published planner_sonic.onnx velocity contract.
+# The real encoder+decoder tracking contract is not wired into robowbc yet, so
+# motion_tokens remains a fixture-only / experimental path for now.
+# motion_tokens = [0.05, -0.1, 0.2, 0.0]
 
 # Hardware transport for real Unitree G1.
 #

@@ -304,7 +304,7 @@ const TEMPLATE_CONFIG: &str = r#"# RoboWBC configuration template.
 #
 # To switch policies, change policy.name and update [policy.config.*] to
 # match the new policy's required fields.  Available policies:
-#   gear_sonic     — 3-model ONNX pipeline (encoder/planner/decoder)
+#   gear_sonic     — real planner_sonic velocity path + fixture motion-token chain
 #   decoupled_wbc  — RL lower-body + analytical IK upper-body (see configs/decoupled_g1.toml)
 
 [policy]
@@ -340,6 +340,9 @@ backend = "ort"
 device = "cpu"
 
 [runtime]
+# Template defaults to the fixture motion-token path because it works with the
+# bundled identity ONNX models. For published planner_sonic.onnx runs, switch
+# to `velocity = [vx, vy, yaw_rate]` instead.
 motion_tokens = [0.05, -0.1, 0.2, 0.0]
 max_ticks = 1
 

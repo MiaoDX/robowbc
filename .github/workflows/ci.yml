@@ -72,10 +72,19 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Cache GEAR-Sonic checkpoints
+        uses: actions/cache@v4
+        with:
+          path: models/gear-sonic
+          key: gear-sonic-${{ runner.os }}-v1
+
+      - name: Warm GEAR-Sonic checkpoint cache
+        run: bash scripts/download_gear_sonic_models.sh models/gear-sonic
+
       - name: Build robowbc with vis feature
         run: cargo build --bin robowbc --features robowbc-cli/vis
 
-      - name: Generate fixture-backed policy showcase
+      - name: Generate mixed-source policy showcase
         run: |
           python scripts/generate_policy_showcase.py \
             --repo-root . \
