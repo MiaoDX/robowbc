@@ -22,7 +22,8 @@ control loops, latency, and target trajectories with the same data pipeline.
 - A checked-in fixture config exists at `configs/decoupled_g1.toml` for local
   smoke testing without model downloads.
 - CI runs Rust build/test/lint/format checks, Rust API docs, `mdBook`, Python
-  wheel smoke tests, and headless Rerun snapshot recording.
+  wheel smoke tests, and a fixture-backed policy showcase artifact with
+  `index.html`, JSON summaries, logs, and Rerun recordings.
 
 ## Repo layout
 
@@ -91,7 +92,8 @@ without copying an existing example by hand.
 ## Visualization and reports
 
 RoboWBC records per-tick joint state, policy targets, command inputs, and
-timing data through `robowbc-vis`.
+timing data through `robowbc-vis`, and the CLI can also write a JSON run
+summary for downstream tooling or static report generation.
 
 Build the CLI with visualization enabled:
 
@@ -106,6 +108,10 @@ Add a `[vis]` section to any config:
 app_id = "robowbc"
 spawn_viewer = false
 save_path = "recording.rrd"
+
+[report]
+output_path = "artifacts/run/report.json"
+max_frames = 120
 ```
 
 Then run:
@@ -120,13 +126,35 @@ Open the saved recording with a local Rerun install:
 rerun recording.rrd
 ```
 
-Or inspect it in the browser via the Rerun web app.
+If you only need the machine-readable summary, `[report]` works on the default
+CLI build too.
 
-### CI snapshots
+### Generate the local policy showcase
 
-The CI workflow also records a headless `decoupled_wbc` run and uploads the
-artifact as `policy-snapshots`. That gives every PR a downloadable `.rrd`
-recording without requiring local graphics or model downloads.
+Build the CLI with visualization enabled, then run the showcase generator:
+
+```bash
+cargo build --bin robowbc --features robowbc-cli/vis
+python scripts/generate_policy_showcase.py \
+  --repo-root . \
+  --robowbc-binary ./target/debug/robowbc \
+  --output-dir ./artifacts/policy-showcase
+```
+
+That produces:
+
+- `index.html`: static comparison report across fixture-backed policies
+- `manifest.json`: machine-readable manifest of all runs
+- `*.json`: per-policy run summaries written by the CLI `[report]` section
+- `*.rrd`: downloadable Rerun recordings for each policy
+- `*.log`: raw stdout/stderr from each showcase run
+
+### CI policy showcase
+
+The CI workflow builds the same fixture-backed showcase and uploads it as the
+`policy-showcase` artifact. Each run contains an auto-generated `index.html`
+plus per-policy `.json`, `.rrd`, and `.log` files for `decoupled_wbc`,
+`bfm_zero`, `hover`, and `wbc_agile`.
 
 ## Python SDK
 

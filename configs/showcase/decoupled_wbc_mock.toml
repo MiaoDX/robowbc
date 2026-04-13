@@ -1,0 +1,24 @@
+[policy]
+name = "decoupled_wbc"
+
+[policy.config.rl_model]
+model_path = "crates/robowbc-ort/tests/fixtures/test_dynamic_identity.onnx"
+execution_provider = { type = "cpu" }
+optimization_level = "extended"
+num_threads = 1
+
+[policy.config]
+lower_body_joints = [0, 1]
+upper_body_joints = [2, 3]
+control_frequency_hz = 50
+
+[robot]
+config_path = "configs/robots/unitree_g1_mock.toml"
+
+[comm]
+frequency_hz = 50
+topics = { joint_state = "unitree/g1/joint_state", imu = "unitree/g1/imu", joint_target_command = "unitree/g1/command/joint_position" }
+
+[runtime]
+velocity = [0.25, 0.0, 0.15]
+max_ticks = 120

@@ -9,6 +9,8 @@ RoboWBC CLI reads a single TOML file for runtime selection of policy, robot, com
 - `[communication]` (or legacy `[comm]`): loop frequency and topic mapping
 - `[inference]`: backend + device target
 - `[runtime]`: command mode and optional max tick limit
+- `[report]` (optional): JSON run summary output
+- `[vis]` (optional): Rerun recording output
 
 ## Example
 
@@ -48,6 +50,15 @@ device = "cpu"
 [runtime]
 motion_tokens = [0.05, -0.1, 0.2, 0.0]
 max_ticks = 200
+
+[report]
+output_path = "artifacts/run/report.json"
+max_frames = 120
+
+[vis]
+app_id = "robowbc"
+spawn_viewer = false
+save_path = "artifacts/run/recording.rrd"
 ```
 
 ## Switching policies
@@ -89,6 +100,38 @@ See `configs/decoupled_g1.toml` for a complete working example using mock ONNX f
 - `comm.frequency_hz` / `communication.frequency_hz` must be greater than zero
 - `inference.backend` currently supports only `ort`
 - `inference.device` must be non-empty
+
+## Optional artifact sections
+
+### `[report]`
+
+The `[report]` section makes the CLI write a machine-readable JSON summary at
+the end of a successful run.
+
+```toml
+[report]
+output_path = "artifacts/run/report.json"
+max_frames = 120
+```
+
+- `output_path`: file path for the JSON summary
+- `max_frames`: maximum number of per-tick frames to keep in the JSON output
+
+### `[vis]`
+
+The `[vis]` section enables Rerun recording when the CLI is built with
+`--features robowbc-cli/vis`.
+
+```toml
+[vis]
+app_id = "robowbc"
+spawn_viewer = false
+save_path = "artifacts/run/recording.rrd"
+```
+
+- `app_id`: Rerun application identifier
+- `spawn_viewer`: whether to launch a live Rerun viewer
+- `save_path`: output `.rrd` recording path
 
 Use `robowbc init` to generate an annotated starter template:
 

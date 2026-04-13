@@ -9565,6 +9565,7 @@ dependencies = [
  "robowbc-sim",
  "robowbc-vis",
  "serde",
+ "serde_json",
  "toml",
 ]
 
