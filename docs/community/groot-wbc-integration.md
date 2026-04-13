@@ -94,7 +94,7 @@ It is not an NVIDIA product.
 ### Prerequisites
 
 - Rust 1.75+ (`rustup update stable`)
-- ONNX Runtime 1.19 libraries
+- ONNX Runtime 1.24.2 libraries
 - GEAR-SONIC ONNX checkpoints (see below)
 
 ### Download GEAR-SONIC checkpoints

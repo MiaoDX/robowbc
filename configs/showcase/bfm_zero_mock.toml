@@ -1,0 +1,22 @@
+[policy]
+name = "bfm_zero"
+
+[policy.config.model]
+model_path = "crates/robowbc-ort/tests/fixtures/test_dynamic_identity.onnx"
+execution_provider = { type = "cpu" }
+optimization_level = "extended"
+num_threads = 1
+
+[policy.config]
+control_frequency_hz = 50
+
+[robot]
+config_path = "configs/robots/unitree_g1_mock.toml"
+
+[comm]
+frequency_hz = 50
+topics = { joint_state = "unitree/g1/joint_state", imu = "unitree/g1/imu", joint_target_command = "unitree/g1/command/joint_position" }
+
+[runtime]
+velocity = [0.30, 0.0, 0.0]
+max_ticks = 120

@@ -8,7 +8,7 @@ in under 10 minutes.
 | Requirement | Version | Notes |
 |-------------|---------|-------|
 | Rust toolchain | 1.75+ stable | `rustup update stable` |
-| ONNX Runtime libs | 1.19 | Only for `robowbc-ort` (GPU features) |
+| ONNX Runtime libs | 1.24.2 | Auto-prepared on Linux/x86_64 for `robowbc-ort`; manual setup mainly matters for custom GPU/runtime installs |
 | Python | 3.10+ | Only for `robowbc-pyo3` backend |
 
 For local testing without a GPU or ONNX Runtime installation, the provided
@@ -42,6 +42,23 @@ intended no-download local smoke path.
 If an ONNX-backed run stalls before the first tick on Linux/x86_64, set
 `ROBOWBC_ORT_DYLIB_PATH` to a fully extracted `libonnxruntime.so.1.24.2` under
 `target/debug/build/robowbc-ort-*/out/onnxruntime-linux-x64-1.24.2/lib/`.
+
+## Generate a local policy showcase
+
+The repository includes a fixture-backed showcase generator that compares the
+current mock-policy integrations and emits one static HTML report.
+
+```bash
+cargo build --bin robowbc --features robowbc-cli/vis
+python scripts/generate_policy_showcase.py \
+  --repo-root . \
+  --robowbc-binary ./target/debug/robowbc \
+  --output-dir ./artifacts/policy-showcase
+```
+
+Open `./artifacts/policy-showcase/index.html` locally after the script
+finishes. The same generator is used in CI for the downloadable
+`policy-showcase` artifact.
 
 ## Run GEAR-SONIC with real checkpoints
 
@@ -78,6 +95,27 @@ cargo run --bin robowbc -- run --config my_config.toml
 RoboWBC validates the config as part of `robowbc run`, so malformed TOML or
 missing required fields fail fast before policy execution starts.
 
+## Optional reports and recordings
+
+Add a `[report]` section when you want the CLI to emit a JSON summary:
+
+```toml
+[report]
+output_path = "artifacts/run/report.json"
+max_frames = 120
+```
+
+Add a `[vis]` section when you want a Rerun recording:
+
+```toml
+[vis]
+app_id = "robowbc"
+spawn_viewer = false
+save_path = "artifacts/run/recording.rrd"
+```
+
+`[report]` works in the default CLI build. `[vis]` requires
+`--features robowbc-cli/vis`.
 
 ## Available CLI commands
 

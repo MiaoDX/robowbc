@@ -4,7 +4,7 @@ use robowbc_comm::{
 };
 use robowbc_core::{JointPositionTargets, RobotConfig, Twist, WbcCommand, WbcPolicy};
 use robowbc_registry::{RegistryError, WbcRegistry};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -61,6 +61,17 @@ impl Default for RuntimeConfig {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct ReportConfig {
+    output_path: PathBuf,
+    #[serde(default = "default_report_max_frames")]
+    max_frames: usize,
+}
+
+fn default_report_max_frames() -> usize {
+    200
+}
+
 #[derive(Debug, Deserialize)]
 struct AppConfig {
     policy: PolicySection,
@@ -71,6 +82,9 @@ struct AppConfig {
     inference: InferenceSection,
     #[serde(default)]
     runtime: RuntimeConfig,
+    /// Optional JSON report written after a run completes.
+    #[serde(default)]
+    report: Option<ReportConfig>,
     /// MuJoCo simulation config. When present and the `sim` feature is
     /// enabled, the control loop uses [`MujocoTransport`] instead of the
     /// synthetic transport.
@@ -164,12 +178,35 @@ impl RobotTransport for SyntheticTransport {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize)]
 struct Metrics {
     ticks: usize,
     dropped_frames: usize,
     average_inference_ms: f64,
     achieved_frequency_hz: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ReportFrame {
+    tick: usize,
+    actual_positions: Vec<f32>,
+    actual_velocities: Vec<f32>,
+    target_positions: Vec<f32>,
+    inference_latency_ms: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct RunReport {
+    report_version: u32,
+    policy_name: String,
+    robot_name: String,
+    joint_names: Vec<String>,
+    command_kind: String,
+    command_data: Vec<f32>,
+    control_frequency_hz: u32,
+    requested_max_ticks: Option<usize>,
+    metrics: Metrics,
+    frames: Vec<ReportFrame>,
 }
 
 enum CliCommand {
@@ -228,6 +265,40 @@ fn validate_config(config: &AppConfig) -> Result<(), String> {
     Ok(())
 }
 
+fn report_command_kind(runtime: &RuntimeConfig) -> &'static str {
+    if runtime.velocity.is_some() {
+        "velocity"
+    } else {
+        "motion_tokens"
+    }
+}
+
+fn report_command_data(runtime: &RuntimeConfig) -> Vec<f32> {
+    if let Some([vx, vy, yaw]) = runtime.velocity {
+        vec![vx, vy, yaw]
+    } else {
+        runtime.motion_tokens.clone()
+    }
+}
+
+fn write_run_report(path: &Path, report: &RunReport) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                format!(
+                    "failed to create report directory {}: {e}",
+                    parent.display()
+                )
+            })?;
+        }
+    }
+
+    let payload = serde_json::to_vec_pretty(report)
+        .map_err(|e| format!("failed to serialize run report as JSON: {e}"))?;
+    std::fs::write(path, payload)
+        .map_err(|e| format!("failed to write run report {}: {e}", path.display()))
+}
+
 const TEMPLATE_CONFIG: &str = r#"# RoboWBC configuration template.
 # Use this file as a starting point, then change policy/config paths.
 #
@@ -271,6 +342,17 @@ device = "cpu"
 [runtime]
 motion_tokens = [0.05, -0.1, 0.2, 0.0]
 max_ticks = 1
+
+# Optional machine-readable run summary.
+# [report]
+# output_path = "artifacts/run/report.json"
+# max_frames = 200
+
+# Optional Rerun recording (requires `--features robowbc-cli/vis`).
+# [vis]
+# app_id = "robowbc"
+# spawn_viewer = false
+# save_path = "artifacts/run/recording.rrd"
 "#;
 
 fn write_template(path: &Path) -> Result<(), String> {
@@ -316,6 +398,8 @@ fn run_control_loop_inner<T: RobotTransport>(
     comm: &CommConfig,
     runtime: &RuntimeConfig,
     running: &AtomicBool,
+    report_frames: &mut Vec<ReportFrame>,
+    report_max_frames: Option<usize>,
     #[cfg(feature = "vis")] visualizer: &mut Option<RerunVisualizer>,
 ) -> Result<(usize, usize, Duration), String> {
     let command = if let Some([vx, vy, yaw]) = runtime.velocity {
@@ -343,10 +427,8 @@ fn run_control_loop_inner<T: RobotTransport>(
         }
 
         let cycle_start = Instant::now();
-
-        // Capture per-tick data for vis logging; populated inside the closure.
-        #[cfg(feature = "vis")]
-        let mut tick_vis: Option<(Vec<f32>, Vec<f32>, Vec<f32>, f64)> = None;
+        let tick_index = ticks;
+        let mut captured_tick: Option<ReportFrame> = None;
 
         run_control_tick(transport, command.clone(), |obs| {
             let infer_start = Instant::now();
@@ -354,16 +436,16 @@ fn run_control_loop_inner<T: RobotTransport>(
             let elapsed = infer_start.elapsed();
             inference_total += elapsed;
 
-            #[cfg(feature = "vis")]
-            {
-                let positions = obs.joint_positions.clone();
-                let velocities = obs.joint_velocities.clone();
-                let targets = output
+            captured_tick = Some(ReportFrame {
+                tick: tick_index,
+                actual_positions: obs.joint_positions.clone(),
+                actual_velocities: obs.joint_velocities.clone(),
+                target_positions: output
                     .as_ref()
                     .map(|t| t.positions.clone())
-                    .unwrap_or_default();
-                tick_vis = Some((positions, velocities, targets, elapsed.as_secs_f64() * 1e3));
-            }
+                    .unwrap_or_default(),
+                inference_latency_ms: elapsed.as_secs_f64() * 1e3,
+            });
 
             output
         })
@@ -371,26 +453,31 @@ fn run_control_loop_inner<T: RobotTransport>(
 
         let cycle_elapsed = cycle_start.elapsed();
 
-        // Log joint state, targets, and metrics to Rerun (no-op when vis disabled).
-        #[cfg(feature = "vis")]
-        if let (Some(vis), Some((positions, velocities, targets, latency_ms))) =
-            (visualizer.as_mut(), tick_vis)
-        {
-            vis.advance_frame();
-            let _ = vis.log_joint_state(&positions, &velocities);
-            let _ = vis.log_joint_targets(&targets);
-            let _ = vis.log_inference_latency(latency_ms);
-            #[allow(clippy::cast_precision_loss)]
-            let freq = 1.0_f64 / cycle_elapsed.as_secs_f64().max(f64::EPSILON);
-            let _ = vis.log_control_frequency(freq);
-            match &command {
-                WbcCommand::Velocity(t) => {
-                    let _ = vis.log_velocity_command(t.linear[0], t.linear[1], t.angular[2]);
+        if let Some(frame) = captured_tick {
+            #[cfg(feature = "vis")]
+            if let Some(vis) = visualizer.as_mut() {
+                vis.advance_frame();
+                let _ = vis.log_joint_state(&frame.actual_positions, &frame.actual_velocities);
+                let _ = vis.log_joint_targets(&frame.target_positions);
+                let _ = vis.log_inference_latency(frame.inference_latency_ms);
+                #[allow(clippy::cast_precision_loss)]
+                let freq = 1.0_f64 / cycle_elapsed.as_secs_f64().max(f64::EPSILON);
+                let _ = vis.log_control_frequency(freq);
+                match &command {
+                    WbcCommand::Velocity(t) => {
+                        let _ = vis.log_velocity_command(t.linear[0], t.linear[1], t.angular[2]);
+                    }
+                    WbcCommand::MotionTokens(tokens) => {
+                        let _ = vis.log_motion_tokens(tokens);
+                    }
+                    _ => {}
                 }
-                WbcCommand::MotionTokens(tokens) => {
-                    let _ = vis.log_motion_tokens(tokens);
+            }
+
+            if let Some(max_frames) = report_max_frames {
+                if report_frames.len() < max_frames {
+                    report_frames.push(frame);
                 }
-                _ => {}
             }
         }
 
@@ -406,12 +493,14 @@ fn run_control_loop_inner<T: RobotTransport>(
     Ok((ticks, dropped_frames, inference_total))
 }
 
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 fn run_control_loop(
     policy: &dyn WbcPolicy,
+    policy_name: &str,
     robot: &RobotConfig,
     comm: &CommConfig,
     runtime: &RuntimeConfig,
+    report_config: Option<&ReportConfig>,
     running: &AtomicBool,
     hardware: Option<UnitreeG1Config>,
     #[cfg(feature = "sim")] sim_config: Option<MujocoConfig>,
@@ -441,6 +530,8 @@ fn run_control_loop(
     };
 
     let started_at = Instant::now();
+    let mut report_frames = Vec::new();
+    let report_max_frames = report_config.map(|cfg| cfg.max_frames);
 
     // Transport priority: hardware → sim (if feature enabled) → synthetic.
     #[cfg(feature = "sim")]
@@ -456,6 +547,8 @@ fn run_control_loop(
                 comm,
                 runtime,
                 running,
+                &mut report_frames,
+                report_max_frames,
                 #[cfg(feature = "vis")]
                 &mut visualizer,
             )?;
@@ -470,6 +563,8 @@ fn run_control_loop(
                 comm,
                 runtime,
                 running,
+                &mut report_frames,
+                report_max_frames,
                 #[cfg(feature = "vis")]
                 &mut visualizer,
             )?;
@@ -482,6 +577,8 @@ fn run_control_loop(
                 comm,
                 runtime,
                 running,
+                &mut report_frames,
+                report_max_frames,
                 #[cfg(feature = "vis")]
                 &mut visualizer,
             )?;
@@ -502,6 +599,8 @@ fn run_control_loop(
                 comm,
                 runtime,
                 running,
+                &mut report_frames,
+                report_max_frames,
                 #[cfg(feature = "vis")]
                 &mut visualizer,
             )?;
@@ -514,6 +613,8 @@ fn run_control_loop(
                 comm,
                 runtime,
                 running,
+                &mut report_frames,
+                report_max_frames,
                 #[cfg(feature = "vis")]
                 &mut visualizer,
             )?;
@@ -539,12 +640,31 @@ fn run_control_loop(
         "runtime metrics: ticks={ticks}, sent_commands={sent_count}, avg_inference_ms={average_inference_ms:.3}, achieved_hz={achieved_frequency_hz:.2}, dropped_frames={dropped_frames}",
     );
 
-    Ok(Metrics {
+    let metrics = Metrics {
         ticks,
         dropped_frames,
         average_inference_ms,
         achieved_frequency_hz,
-    })
+    };
+
+    if let Some(report_cfg) = report_config {
+        let report = RunReport {
+            report_version: 1,
+            policy_name: policy_name.to_owned(),
+            robot_name: robot.name.clone(),
+            joint_names: robot.joint_names.clone(),
+            command_kind: report_command_kind(runtime).to_owned(),
+            command_data: report_command_data(runtime),
+            control_frequency_hz: policy.control_frequency_hz(),
+            requested_max_ticks: runtime.max_ticks,
+            metrics: metrics.clone(),
+            frames: report_frames,
+        };
+        write_run_report(&report_cfg.output_path, &report)?;
+        println!("wrote run report to {}", report_cfg.output_path.display());
+    }
+
+    Ok(metrics)
 }
 
 fn main() {
@@ -604,11 +724,15 @@ fn main() {
         }
     }
 
+    let report_config = app.report.clone();
+
     match run_control_loop(
         &*policy,
+        &app.policy.name,
         &robot,
         &app.comm,
         &app.runtime,
+        report_config.as_ref(),
         &running,
         app.hardware,
         #[cfg(feature = "sim")]
@@ -697,6 +821,77 @@ device = "cpu"
     }
 
     #[test]
+    fn accepts_report_section() {
+        let config = r#"
+[policy]
+name = "gear_sonic"
+
+[robot]
+config_path = "configs/robots/unitree_g1_mock.toml"
+
+[communication]
+frequency_hz = 60
+
+[inference]
+backend = "ort"
+device = "cpu"
+
+[report]
+output_path = "/tmp/robowbc-showcase/report.json"
+max_frames = 12
+"#;
+
+        let parsed: AppConfig = toml::from_str(config).expect("config should parse");
+        let report = parsed.report.expect("report section should deserialize");
+        assert_eq!(
+            report.output_path,
+            PathBuf::from("/tmp/robowbc-showcase/report.json")
+        );
+        assert_eq!(report.max_frames, 12);
+    }
+
+    #[test]
+    fn write_run_report_creates_parent_dirs() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("robowbc-report-{unique}"));
+        let path = root.join("nested/report.json");
+
+        let report = RunReport {
+            report_version: 1,
+            policy_name: "decoupled_wbc".to_owned(),
+            robot_name: "unitree_g1_mock".to_owned(),
+            joint_names: vec!["j0".to_owned()],
+            command_kind: "velocity".to_owned(),
+            command_data: vec![0.2, 0.0, 0.1],
+            control_frequency_hz: 50,
+            requested_max_ticks: Some(1),
+            metrics: Metrics {
+                ticks: 1,
+                dropped_frames: 0,
+                average_inference_ms: 0.5,
+                achieved_frequency_hz: 50.0,
+            },
+            frames: vec![ReportFrame {
+                tick: 0,
+                actual_positions: vec![0.1],
+                actual_velocities: vec![0.0],
+                target_positions: vec![0.1],
+                inference_latency_ms: 0.5,
+            }],
+        };
+
+        write_run_report(&path, &report).expect("report should be written");
+        let raw = std::fs::read_to_string(&path).expect("report should be readable");
+        assert!(raw.contains("\"policy_name\": \"decoupled_wbc\""));
+        assert!(raw.contains("\"command_kind\": \"velocity\""));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn validate_config_rejects_unknown_inference_backend() {
         let config = AppConfig {
             policy: PolicySection {
@@ -712,6 +907,7 @@ device = "cpu"
                 device: "cpu".to_owned(),
             },
             runtime: RuntimeConfig::default(),
+            report: None,
             hardware: None,
             #[cfg(feature = "sim")]
             sim: None,
@@ -803,9 +999,11 @@ device = "cpu"
 
         let metrics = run_control_loop(
             &*policy,
+            "decoupled_wbc",
             &robot,
             &comm,
             &runtime,
+            None,
             &AtomicBool::new(true),
             None,
             #[cfg(feature = "sim")]
