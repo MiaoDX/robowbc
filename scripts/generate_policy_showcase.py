@@ -4,13 +4,18 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import datetime as dt
 import html
 import json
 import math
 import os
 from pathlib import Path
+import re
+import shutil
 import subprocess
+import tarfile
+import tempfile
 from typing import Iterable
 
 POLICIES = [
@@ -98,6 +103,7 @@ NOT_YET_SHOWCASED = [
 ]
 
 COLORS = ["#0f766e", "#dc2626", "#2563eb", "#d97706", "#7c3aed", "#0891b2"]
+RERUN_WEB_VIEWER_DIR = "_rerun_web_viewer"
 
 
 def parse_args() -> argparse.Namespace:
@@ -125,6 +131,79 @@ def resolve_ort_dylib(repo_root: Path) -> str | None:
         if providers.exists():
             return str(path)
     return str(candidates[0]) if candidates else None
+
+
+def resolve_rerun_web_viewer_version(repo_root: Path) -> str:
+    lock_text = (repo_root / "Cargo.lock").read_text(encoding="utf-8")
+    match = re.search(r'name = "rerun"\nversion = "([^"]+)"', lock_text)
+    if match is None:
+        raise SystemExit("failed to resolve rerun version from Cargo.lock")
+    return match.group(1)
+
+
+def vendor_rerun_web_viewer(repo_root: Path, output_dir: Path) -> dict[str, str]:
+    version = resolve_rerun_web_viewer_version(repo_root)
+    viewer_dir = output_dir / RERUN_WEB_VIEWER_DIR
+    viewer_dir.mkdir(parents=True, exist_ok=True)
+    version_file = viewer_dir / "VERSION"
+
+    target_files = {
+        "index_js": viewer_dir / "index.js",
+        "viewer_js": viewer_dir / "re_viewer.js",
+        "viewer_wasm": viewer_dir / "re_viewer_bg.wasm",
+    }
+    if (
+        all(path.exists() for path in target_files.values())
+        and version_file.exists()
+        and version_file.read_text(encoding="utf-8").strip() == version
+    ):
+        return {
+            "version": version,
+            "module_path": f"./{RERUN_WEB_VIEWER_DIR}/index.js",
+        }
+
+    if shutil.which("npm") is None:
+        raise SystemExit(
+            "npm is required to vendor the embedded Rerun web viewer assets for the policy showcase"
+        )
+
+    with tempfile.TemporaryDirectory(prefix="robowbc-rerun-web-viewer-") as tempdir:
+        temp_path = Path(tempdir)
+        proc = subprocess.run(
+            ["npm", "pack", f"@rerun-io/web-viewer@{version}"],
+            cwd=temp_path,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise SystemExit(
+                "failed to fetch @rerun-io/web-viewer via npm pack:\n"
+                f"{proc.stdout}\n--- STDERR ---\n{proc.stderr}"
+            )
+
+        tgz_files = list(temp_path.glob("rerun-io-web-viewer-*.tgz"))
+        if len(tgz_files) != 1:
+            raise SystemExit("unexpected npm pack output for @rerun-io/web-viewer")
+
+        with tarfile.open(tgz_files[0]) as tar:
+            try:
+                tar.extractall(temp_path, filter="data")
+            except TypeError:
+                tar.extractall(temp_path)
+
+        package_dir = temp_path / "package"
+        index_text = (package_dir / "index.js").read_text(encoding="utf-8")
+        index_text = index_text.replace('import("./re_viewer")', 'import("./re_viewer.js")')
+        target_files["index_js"].write_text(index_text, encoding="utf-8")
+        shutil.copy2(package_dir / "re_viewer.js", target_files["viewer_js"])
+        shutil.copy2(package_dir / "re_viewer_bg.wasm", target_files["viewer_wasm"])
+        version_file.write_text(version, encoding="utf-8")
+
+    return {
+        "version": version,
+        "module_path": f"./{RERUN_WEB_VIEWER_DIR}/index.js",
+    }
 
 
 def append_report_and_vis(base_toml: str, policy_id: str, json_path: Path, rrd_path: Path) -> str:
@@ -290,7 +369,28 @@ def pill(label: str, css_class: str) -> str:
     return f'<span class="pill {css_class}">{html.escape(label)}</span>'
 
 
-def render_html(entries: list[dict[str, object]], output_dir: Path) -> None:
+def inline_recording_payload(entries: list[dict[str, object]], output_dir: Path) -> list[dict[str, str]]:
+    payload: list[dict[str, str]] = []
+    for entry in entries:
+        if entry.get("status") != "ok":
+            continue
+        meta = entry["_meta"]
+        rrd_file = meta.get("rrd_file")
+        if not isinstance(rrd_file, str) or not rrd_file:
+            continue
+        rrd_path = output_dir / rrd_file
+        payload.append(
+            {
+                "policy_id": str(entry["policy_name"]),
+                "title": str(meta["title"]),
+                "rrd_file": rrd_file,
+                "base64": base64.b64encode(rrd_path.read_bytes()).decode("ascii"),
+            }
+        )
+    return payload
+
+
+def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: Path) -> None:
     generated_at = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
     sha = os.environ.get("GITHUB_SHA", "")
     repo = os.environ.get("GITHUB_REPOSITORY", "")
@@ -298,6 +398,8 @@ def render_html(entries: list[dict[str, object]], output_dir: Path) -> None:
     run_id = os.environ.get("GITHUB_RUN_ID", "")
     commit_link = f"{server}/{repo}/commit/{sha}" if sha and repo else ""
     run_link = f"{server}/{repo}/actions/runs/{run_id}" if run_id and repo else ""
+    viewer_assets = vendor_rerun_web_viewer(repo_root, output_dir)
+    recordings_json = json.dumps(inline_recording_payload(entries, output_dir), separators=(",", ":"))
 
     overview_rows: list[str] = []
     cards: list[str] = []
@@ -449,6 +551,18 @@ def render_html(entries: list[dict[str, object]], output_dir: Path) -> None:
       {spark_svg(latency_series)}
     </figure>
   </div>
+  <div class="rerun-block">
+    <div class="rerun-block-header">
+      <strong>Embedded Rerun viewer</strong>
+      <span class="muted">Loaded from the saved <code>{html.escape(str(meta['rrd_file']))}</code> recording.</span>
+    </div>
+    <div class="rerun-stage" data-rerun-policy="{html.escape(str(entry['policy_name']))}">
+      <div class="rerun-stage-placeholder">
+        <strong>Preparing interactive view</strong>
+        <span>Mounts automatically when this card enters the viewport.</span>
+      </div>
+    </div>
+  </div>
   <div class="details-grid">
     <div>
       <span>Command data</span>
@@ -548,6 +662,13 @@ def render_html(entries: list[dict[str, object]], output_dir: Path) -> None:
     .chart rect {{ fill: #fbfdff; stroke: var(--border); }}
     .chart .baseline {{ stroke: #d4dae3; stroke-width: 1; }}
     .details-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }}
+    .rerun-block {{ margin: 0 0 18px; }}
+    .rerun-block-header {{ display: flex; justify-content: space-between; gap: 12px; align-items: baseline; margin-bottom: 10px; flex-wrap: wrap; }}
+    .rerun-stage {{ min-height: 420px; border-radius: 18px; border: 1px solid var(--border); background: linear-gradient(180deg, #0f172a, #111827); overflow: hidden; position: relative; }}
+    .rerun-stage canvas {{ display: block; width: 100%; height: 420px; }}
+    .rerun-stage-placeholder, .rerun-stage-error {{ position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 20px; text-align: center; color: #e5edf8; font-size: 0.95rem; }}
+    .rerun-stage-placeholder strong, .rerun-stage-error strong {{ color: #ffffff; }}
+    .rerun-stage-error {{ background: linear-gradient(180deg, rgba(127, 29, 29, 0.95), rgba(69, 10, 10, 0.96)); }}
     .blocked-reason, .blocked-paths {{ margin-top: 18px; background: #fff7f7; border: 1px solid #f5c2c7; border-radius: 16px; padding: 14px; }}
     code {{ font-family: "IBM Plex Mono", "SFMono-Regular", monospace; font-size: 0.9rem; word-break: break-word; }}
     .links {{ margin-top: 16px; }}
@@ -565,6 +686,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path) -> None:
     <section class="hero">
       <h1>RoboWBC Policy Showcase</h1>
       <p>This artifact is generated automatically in CI from a mixed source set: fixture-backed policies that are always runnable in the repo, plus any real checkpoint integrations that are actually wired today. Missing real assets degrade to visible blocked cards instead of pretending the integration exists.</p>
+      <p class="muted">Each successful card now embeds its saved Rerun recording directly in-page. The raw <code>.rrd</code> files are still available for download, and serving the folder over HTTP remains the most reliable way to open the interactive viewer locally.</p>
       <div class="meta-row">
         <span>Generated: {html.escape(generated_at)}</span>
         <span>Commit: {commit_html or 'local'}</span>
@@ -594,6 +716,95 @@ def render_html(entries: list[dict[str, object]], output_dir: Path) -> None:
       <ul>{excluded}</ul>
     </section>
   </main>
+  <script id="rerun-recordings" type="application/json">{recordings_json}</script>
+  <script type="module">
+    import {{ WebViewer }} from "{viewer_assets['module_path']}";
+
+    const recordingData = JSON.parse(document.getElementById("rerun-recordings").textContent);
+    const recordings = new Map(recordingData.map((item) => [item.policy_id, item]));
+    const viewers = new Map();
+
+    function base64ToUint8Array(base64String) {{
+      const binary = atob(base64String);
+      const bytes = new Uint8Array(binary.length);
+      for (let idx = 0; idx < binary.length; idx += 1) {{
+        bytes[idx] = binary.charCodeAt(idx);
+      }}
+      return bytes;
+    }}
+
+    function recordingBlobUrl(policyId) {{
+      const recording = recordings.get(policyId);
+      if (!recording) {{
+        throw new Error(`missing embedded recording for ${{policyId}}`);
+      }}
+      if (!recording.blobUrl) {{
+        const bytes = base64ToUint8Array(recording.base64);
+        recording.blobUrl = URL.createObjectURL(new Blob([bytes], {{ type: "application/octet-stream" }}));
+        delete recording.base64;
+      }}
+      return recording.blobUrl;
+    }}
+
+    function showStageError(stage, message) {{
+      stage.replaceChildren();
+      const errorNode = document.createElement("div");
+      errorNode.className = "rerun-stage-error";
+      const title = document.createElement("strong");
+      title.textContent = "Viewer failed to start";
+      const body = document.createElement("span");
+      body.textContent = message;
+      errorNode.append(title, body);
+      stage.append(errorNode);
+    }}
+
+    async function mountStage(stage) {{
+      const policyId = stage.dataset.rerunPolicy;
+      if (!policyId || viewers.has(policyId)) {{
+        return;
+      }}
+
+      stage.dataset.loading = "true";
+      stage.replaceChildren();
+      try {{
+        const viewer = new WebViewer();
+        await viewer.start(recordingBlobUrl(policyId), stage, {{
+          width: "100%",
+          height: "420px",
+          hide_welcome_screen: true,
+          theme: "light",
+          render_backend: "webgl",
+        }});
+        viewers.set(policyId, viewer);
+        stage.dataset.loading = "false";
+      }} catch (error) {{
+        console.error(`failed to mount rerun viewer for ${{policyId}}`, error);
+        showStageError(stage, error instanceof Error ? error.message : String(error));
+      }}
+    }}
+
+    const observer = new IntersectionObserver((entries) => {{
+      for (const entry of entries) {{
+        if (!entry.isIntersecting) {{
+          continue;
+        }}
+        observer.unobserve(entry.target);
+        void mountStage(entry.target);
+      }}
+    }}, {{ rootMargin: "180px 0px" }});
+
+    const stages = [...document.querySelectorAll(".rerun-stage[data-rerun-policy]")];
+    if (stages.length > 0) {{
+      void mountStage(stages[0]);
+    }}
+    for (const stage of stages.slice(1)) {{
+      observer.observe(stage);
+    }}
+
+    if (window.location.protocol === "file:") {{
+      console.warn("Embedded Rerun viewers are most reliable when the showcase folder is served over HTTP.");
+    }}
+  </script>
 </body>
 </html>'''
 
@@ -616,7 +827,7 @@ def main() -> int:
         env.setdefault("ROBOWBC_ORT_DYLIB_PATH", dylib)
 
     entries = [run_policy(repo_root, binary, output_dir, policy, env) for policy in POLICIES]
-    render_html(entries, output_dir)
+    render_html(entries, output_dir, repo_root)
     print(f"wrote showcase report to {output_dir / 'index.html'}")
     return 0
 
