@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 description = "ONNX Runtime inference backend for RoboWBC"
+build = "build.rs"
 
 [lib]
 path = "src/lib.rs"
@@ -12,12 +13,22 @@ path = "src/lib.rs"
 [dependencies]
 inventory = "0.3"
 ndarray = "0.16"
-ort = { version = "2.0.0-rc.12", default-features = true }
 robowbc-core = { path = "../robowbc-core" }
 robowbc-registry = { path = "../robowbc-registry" }
 serde = { workspace = true }
 thiserror = "2"
 toml = { workspace = true }
+
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["api-24", "load-dynamic", "ndarray", "std", "tls-native", "tracing"] }
+
+[target.'cfg(not(all(target_os = "linux", target_arch = "x86_64")))'.dependencies]
+ort = { version = "2.0.0-rc.12", default-features = true }
+
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.build-dependencies]
+flate2 = "1"
+tar = "0.4"
+ureq = { version = "3", features = ["native-tls"] }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
