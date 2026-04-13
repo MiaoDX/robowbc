@@ -50,17 +50,30 @@ currently runnable policy integrations and emits one static HTML report.
 
 ```bash
 cargo build --bin robowbc --features robowbc-cli/vis
+# npm is used once to vendor the Rerun web viewer beside the report.
 python scripts/generate_policy_showcase.py \
   --repo-root . \
   --robowbc-binary ./target/debug/robowbc \
   --output-dir ./artifacts/policy-showcase
 ```
 
-Open `./artifacts/policy-showcase/index.html` locally after the script
-finishes. If real GEAR-SONIC checkpoints are present, the report includes a
-real CPU `gear_sonic` planner card; otherwise that card is rendered as blocked
-with the missing-path reason. The same generator is used in CI for the
-downloadable `policy-showcase` artifact.
+The output folder contains:
+
+- `index.html` with embedded interactive Rerun viewers for each successful run
+- raw `*.rrd`, `*.json`, and `*.log` files per policy
+- `_rerun_web_viewer/`, the vendored web runtime used by the embedded panes
+
+For the most reliable local viewing path, serve that folder over HTTP:
+
+```bash
+cd ./artifacts/policy-showcase
+python -m http.server 8000
+```
+
+Then open `http://127.0.0.1:8000`. If real GEAR-SONIC checkpoints are present,
+the report includes a real CPU `gear_sonic` planner card; otherwise that card
+is rendered as blocked with the missing-path reason. The same generator is used
+in CI for the downloadable `policy-showcase` artifact.
 
 ## Run GEAR-SONIC with real checkpoints
 

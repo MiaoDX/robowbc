@@ -139,6 +139,7 @@ Build the CLI with visualization enabled, then run the showcase generator:
 
 ```bash
 cargo build --bin robowbc --features robowbc-cli/vis
+# npm is used once to vendor the Rerun web viewer into the output folder.
 python scripts/generate_policy_showcase.py \
   --repo-root . \
   --robowbc-binary ./target/debug/robowbc \
@@ -147,18 +148,29 @@ python scripts/generate_policy_showcase.py \
 
 That produces:
 
-- `index.html`: static mixed-source comparison report across runnable policies
+- `index.html`: mixed-source comparison report with embedded interactive Rerun panes
 - `manifest.json`: machine-readable manifest of all runs
 - `*.json`: per-policy run summaries written by the CLI `[report]` section
-- `*.rrd`: downloadable Rerun recordings for each policy
+- `*.rrd`: raw downloadable Rerun recordings for each policy
 - `*.log`: raw stdout/stderr from each showcase run
+- `_rerun_web_viewer/`: vendored Rerun web-viewer runtime used by the embedded panes
+
+For the most reliable local viewing path, serve the output directory over HTTP:
+
+```bash
+cd ./artifacts/policy-showcase
+python -m http.server 8000
+```
+
+Then open `http://127.0.0.1:8000`. The page still keeps the raw `.rrd` links
+for downloading or opening in the desktop Rerun app.
 
 ### CI policy showcase
 
 The CI workflow warms a cached `models/gear-sonic/` checkpoint directory,
 builds the same mixed-source showcase, and uploads it as the
 `policy-showcase` artifact. Each run contains an auto-generated `index.html`
-plus per-policy `.json`, `.rrd`, and `.log` files for the real CPU
+plus per-policy `.json`, `.rrd`, `.log`, and embedded Rerun viewer assets for the real CPU
 `gear_sonic` planner path and the fixture-backed `decoupled_wbc`, `bfm_zero`,
 `hover`, and `wbc_agile` cards.
 
