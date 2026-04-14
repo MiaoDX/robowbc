@@ -23,17 +23,23 @@ control loops, latency, and target trajectories with the same data pipeline.
   (`configs/sonic_g1.toml`), `decoupled_wbc` on G1
   (`configs/decoupled_g1.toml`), and `wbc_agile` on G1
   (`configs/wbc_agile_g1.toml`).
+- `bfm_zero` now has the real public G1 tracking contract wired in
+  `configs/bfm_zero_g1.toml`, including 721D input reconstruction, latent
+  context loading, and upstream action postprocessing. Running it still
+  requires manually prepared upstream assets.
+- The repo-owned simulation + zenoh wire paths now carry IMU angular velocity;
+  legacy gravity-only low-state payloads still decode with zero gyro for
+  backward compatibility.
 - No-download smoke paths remain available through
   `configs/decoupled_smoke.toml` and `configs/decoupled_h1.toml`, both backed
   by the checked-in dynamic identity ONNX fixture.
-- `configs/wholebody_vla_x2.toml`, `configs/bfm_zero_g1.toml`,
-  `configs/hover_h1.toml`, and `configs/wbc_agile_t1.toml` are honest blocked
-  configs today: the wrappers load, but they still need public or user-exported
-  model assets.
+- `configs/wholebody_vla_x2.toml`, `configs/hover_h1.toml`, and
+  `configs/wbc_agile_t1.toml` are honest blocked configs today: the wrappers
+  load, but they still need public or user-exported model assets.
 - CI runs Rust build/test/lint/format checks, Rust API docs, `mdBook`, Python
   wheel smoke tests, and a mixed-source policy showcase artifact with real CPU
-  `gear_sonic`, `decoupled_wbc`, and `wbc_agile` cards plus clearly-labeled
-  fixture / blocked comparison cards, all exported as `index.html`, JSON
+  `gear_sonic`, `decoupled_wbc`, and `wbc_agile` cards plus honest blocked
+  cards for asset-gated policies, all exported as `index.html`, JSON
   summaries, logs, and Rerun recordings.
 
 ## Repo layout
@@ -104,6 +110,19 @@ published model commands 14 lower-body joints; RoboWBC maps those outputs back
 into the 35-DOF robot ordering and holds the remaining joints at their current
 positions.
 
+### Prepare and run BFM-Zero G1 assets
+
+```bash
+python scripts/prepare_bfm_zero_assets.py \
+  --source /path/to/BFM-Zero/model \
+  --output models/bfm_zero
+cargo run --release --bin robowbc -- run --config configs/bfm_zero_g1.toml
+```
+
+`configs/bfm_zero_g1.toml` targets the public G1 tracking contract. It expects
+`models/bfm_zero/bfm_zero_g1.onnx` plus `models/bfm_zero/zs_walking.npy`, both
+produced by the prep script after you download the upstream asset bundle.
+
 ### Generate a new config template
 
 ```bash
@@ -119,10 +138,10 @@ without copying an existing example by hand.
 |--------|-------------------|---------|-------|
 | `gear_sonic` | `configs/sonic_g1.toml` | `robowbc-ort` | Real `planner_sonic.onnx` velocity path today; encoder/decoder tracking contract still pending |
 | `decoupled_wbc` | `configs/decoupled_smoke.toml`, `configs/decoupled_g1.toml`, `configs/decoupled_h1.toml` | `robowbc-ort` | Real public G1 history contract plus fixture-backed smoke paths |
-| `hover` | `configs/hover_h1.toml` | `robowbc-ort` | H1-oriented ONNX wrapper; still needs a user-exported/public checkpoint |
-| `wbc_agile` | `configs/wbc_agile_g1.toml`, `configs/wbc_agile_t1.toml` | `robowbc-ort` | Real public G1 checkpoint; T1 still expects a user-exported model |
-| `bfm_zero` | `configs/bfm_zero_g1.toml` | `robowbc-ort` | Wrapper in tree; real public latent / prompt contract still pending |
-| `wholebody_vla` | `configs/wholebody_vla_x2.toml` | `robowbc-ort` | CLI now supports `KinematicPose`, but no public X2 checkpoint is wired yet |
+| `hover` | `configs/hover_h1.toml` | `robowbc-ort` | Real H1 wrapper is wired, but upstream does not ship public pretrained ONNX weights; provide a user-exported checkpoint |
+| `wbc_agile` | `configs/wbc_agile_g1.toml`, `configs/wbc_agile_t1.toml` | `robowbc-ort` | Real public G1 checkpoint; the T1 config still expects a user-exported ONNX model |
+| `bfm_zero` | `configs/bfm_zero_g1.toml` | `robowbc-ort` | Real public G1 tracking contract is wired; run `scripts/prepare_bfm_zero_assets.py` to normalize the upstream ONNX + `zs_walking` context assets |
+| `wholebody_vla` | `configs/wholebody_vla_x2.toml` | `robowbc-ort` | Real `KinematicPose` wrapper is wired, but no public X2 ONNX checkpoint is available yet |
 | `py_model` | user-supplied TOML | `robowbc-pyo3` | Loads Python scripts or PyTorch checkpoints through PyO3 |
 
 ## Visualization and reports
@@ -204,7 +223,8 @@ and `models/wbc-agile/` checkpoint directories, builds the same mixed-source
 showcase, and uploads it as the `policy-showcase` artifact. Each run contains
 an auto-generated `index.html` plus per-policy `.json`, `.rrd`, `.log`, and
 embedded Rerun viewer assets for the real CPU `gear_sonic`, `decoupled_wbc`,
-and `wbc_agile` cards, plus the fixture-backed `bfm_zero` and `hover` cards.
+and `wbc_agile` cards, plus honest blocked cards for `bfm_zero`, `hover`, and
+`wholebody_vla` whenever their assets are unavailable.
 
 ## Python SDK
 
@@ -229,6 +249,7 @@ obs = Observation(
     joint_positions=[0.0] * 4,
     joint_velocities=[0.0] * 4,
     gravity_vector=[0.0, 0.0, -1.0],
+    angular_velocity=[0.0, 0.0, 0.0],
     command_type="velocity",
     command_data=[0.2, 0.0, 0.0],
 )

@@ -363,6 +363,7 @@ mod tests {
             joint_positions: vec![0.1, 0.2, 0.3],
             joint_velocities: vec![0.0, 0.0, 0.0],
             gravity_vector: [0.0, 0.0, -9.81],
+            angular_velocity: [0.1, -0.2, 0.3],
             timestamp: Instant::now(),
         };
         let payload = wire::encode_state(&state);
@@ -375,6 +376,7 @@ mod tests {
         let received = node.recv_state().await.unwrap();
         assert_eq!(received.joint_positions, state.joint_positions);
         assert_eq!(received.gravity_vector, state.gravity_vector);
+        assert_eq!(received.angular_velocity, state.angular_velocity);
 
         // Publish a command and verify it doesn't error.
         let targets = JointPositionTargets {
