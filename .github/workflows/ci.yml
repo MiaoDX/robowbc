@@ -84,13 +84,18 @@ jobs:
             models/gear-sonic
             models/decoupled-wbc
             models/wbc-agile
-          key: live-policy-models-${{ runner.os }}-v2
+            models/bfm_zero
+          key: live-policy-models-${{ runner.os }}-v3
+
+      - name: Install BFM-Zero asset prep dependencies
+        run: pip install numpy joblib
 
       - name: Warm live policy checkpoint cache
         run: |
           bash scripts/download_gear_sonic_models.sh models/gear-sonic
           bash scripts/download_decoupled_wbc_models.sh models/decoupled-wbc
           bash scripts/download_wbc_agile_models.sh models/wbc-agile
+          bash scripts/download_bfm_zero_models.sh models/bfm_zero
 
       - name: Build robowbc with vis feature
         run: cargo build --bin robowbc --features robowbc-cli/vis

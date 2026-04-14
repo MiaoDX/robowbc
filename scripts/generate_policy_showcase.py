@@ -69,7 +69,7 @@ POLICIES = [
             "models/bfm_zero/bfm_zero_g1.onnx",
             "models/bfm_zero/zs_walking.npy",
         ],
-        "blocked_reason": "Requires manually prepared BFM-Zero assets. Download the upstream model bundle, then run scripts/prepare_bfm_zero_assets.py to create the ONNX checkpoint and zs_walking.npy context.",
+        "blocked_reason": "Requires public BFM-Zero assets. Run scripts/download_bfm_zero_models.sh or warm the CI cache to fetch the ONNX checkpoint and zs_walking.npy context automatically.",
     },
     {
         "id": "hover",
@@ -719,7 +719,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
   <main>
     <section class="hero">
       <h1>RoboWBC Policy Showcase</h1>
-      <p>This artifact is generated automatically in CI from a mixed source set: fixture-backed policies that are always runnable in the repo, plus any real checkpoint integrations that are actually wired today. Missing real assets degrade to visible blocked cards instead of pretending the integration exists.</p>
+      <p>This artifact is generated automatically in CI from the set of real policy integrations that are wired today. When a public checkpoint bundle is cached, the card runs live; when assets are unavailable, the page degrades to a visible blocked card instead of pretending the integration exists.</p>
       <p class="muted">Each successful card now embeds its saved Rerun recording directly in-page. The raw <code>.rrd</code> files are still available for download, and serving the folder over HTTP remains the most reliable way to open the interactive viewer locally.</p>
       <div class="meta-row">
         <span>Generated: {html.escape(generated_at)}</span>
@@ -730,7 +730,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
 
     <section class="overview">
       <h2>Compared policies</h2>
-      <p class="muted">Fixture cards use checked-in ONNX test models for repeatable CI coverage. Real cards use published checkpoints cached by CI and are only shown when the runtime path is actually executable.</p>
+      <p class="muted">Successful cards use real checkpoints or public asset bundles cached by CI. Blocked cards surface the exact missing files or unavailable upstream artifacts instead of falling back to mock output.</p>
       <table>
         <thead>
           <tr><th>Policy</th><th>Status</th><th>Provenance</th><th>Coverage</th><th>Ticks</th><th>Avg inference</th><th>Achieved rate</th><th>Dropped frames</th></tr>
