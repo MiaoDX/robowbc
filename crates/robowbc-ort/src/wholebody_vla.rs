@@ -32,16 +32,15 @@
 //! [ joint_position_targets(n) ]
 //! ```
 //!
-//! ## ONNX export
+//! ## ONNX contract
 //!
-//! After training with the `WholeBodyVLA` repository:
-//! ```bash
-//! python export_onnx.py --checkpoint checkpoints/wholebody_vla_x2.pt \
-//!     --output models/wholebody_vla_x2.onnx \
-//!     --num_ee_links 4
-//! ```
-//! The exported model should have one input of shape `[1, 2*n+3+7*L]` and one
-//! output of shape `[1, n]`.
+//! The public `WholeBodyVLA` repository does not currently ship runnable
+//! training/export code or a ready-to-run checkpoint. Treat the layout below as
+//! the expected contract for a compatible local/private ONNX export when one
+//! becomes available.
+//!
+//! The model should have one input of shape `[1, 2*n+3+7*L]` and one output of
+//! shape `[1, n]`.
 
 use crate::{OrtBackend, OrtConfig};
 use robowbc_core::{
@@ -428,9 +427,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires real WholeBodyVLA ONNX weights; run manually after downloading"]
+    #[ignore = "requires a locally provided WholeBodyVLA ONNX checkpoint; public upstream release does not provide one"]
     fn wholebody_vla_real_model_inference() {
-        // Set WHOLEBODY_VLA_MODEL_PATH env var to point at a real WholeBodyVLA checkpoint.
+        // Set WHOLEBODY_VLA_MODEL_PATH env var to point at a compatible local WholeBodyVLA checkpoint.
         let model_path =
             std::env::var("WHOLEBODY_VLA_MODEL_PATH").expect("WHOLEBODY_VLA_MODEL_PATH not set");
         let policy = WholeBodyVlaPolicy::new(WholeBodyVlaConfig {

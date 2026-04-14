@@ -17,15 +17,12 @@
 #
 # ## Obtaining the model
 #
-# WholeBodyVLA does not yet ship a pre-built ONNX checkpoint.
-# After training with the WholeBodyVLA repository:
+# The public WholeBodyVLA repo does not currently ship runnable training or
+# export code, and it does not provide a ready-to-run ONNX checkpoint.
+# This config therefore documents the expected WBC contract if a compatible
+# local/private X2 checkpoint becomes available.
 #
-#   python export_onnx.py \
-#       --checkpoint checkpoints/wholebody_vla_x2.pt \
-#       --output models/wholebody_vla_x2.onnx \
-#       --num_ee_links 4
-#
-# Then update `policy.config.model.model_path` below.
+# Point `policy.config.model.model_path` below at that local ONNX file.
 #
 # ## Running
 #

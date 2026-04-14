@@ -20,8 +20,12 @@
 //!
 //! | Variant | Filled indices | Mode |
 //! |---|---|---|
-//! | `Velocity(twist)` | 0=vx, 1=vy, 2=yaw_rate | Locomotion |
-//! | `KinematicPose(body_pose)` | 3=height, 4=roll, 5=yaw | Body pose |
+//! | `Velocity(twist)` | `0=vx`, `1=vy`, `2=yaw_rate` | Locomotion |
+//! | `KinematicPose(body_pose)` | `3=height`, `4=roll`, `5=yaw` | Body pose |
+//!
+//! The public HOVER repo includes deployment code, but it does not ship a
+//! pretrained H1 checkpoint. Real-model validation therefore requires a
+//! user-provided ONNX export.
 
 use crate::{OrtBackend, OrtConfig};
 use robowbc_core::{
@@ -738,6 +742,42 @@ default_pose = [0.0, 0.0]
             .predict(&obs)
             .expect_err("missing pelvis link should fail");
         assert!(matches!(err, WbcError::InvalidObservation(_)));
+    }
+
+    #[test]
+    #[ignore = "requires a user-provided HOVER ONNX checkpoint; public upstream release does not provide one"]
+    fn hover_real_model_inference() {
+        let model_path = std::env::var("HOVER_MODEL_PATH").expect("HOVER_MODEL_PATH not set");
+        let policy = HoverPolicy::new(HoverConfig {
+            model: OrtConfig {
+                model_path: PathBuf::from(&model_path),
+                execution_provider: crate::ExecutionProvider::Cpu,
+                optimization_level: crate::OptimizationLevel::Extended,
+                num_threads: 1,
+            },
+            robot: test_robot_config(19),
+            command_dim: 15,
+            mode_mask: locomotion_mask(15),
+            control_frequency_hz: 50,
+        })
+        .expect("policy should build from real model");
+
+        let obs = Observation {
+            joint_positions: vec![0.0; 19],
+            joint_velocities: vec![0.0; 19],
+            gravity_vector: [0.0, 0.0, -1.0],
+            angular_velocity: [0.0, 0.0, 0.0],
+            command: WbcCommand::Velocity(Twist {
+                linear: [0.3, 0.0, 0.0],
+                angular: [0.0, 0.0, 0.1],
+            }),
+            timestamp: Instant::now(),
+        };
+
+        let targets = policy
+            .predict(&obs)
+            .expect("real model inference should succeed");
+        assert_eq!(targets.positions.len(), 19);
     }
 
     #[test]
