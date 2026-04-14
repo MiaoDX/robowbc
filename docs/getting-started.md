@@ -71,10 +71,10 @@ python -m http.server 8000
 ```
 
 Then open `http://127.0.0.1:8000`. If the public checkpoints are present, the
-report includes real CPU `gear_sonic`, `decoupled_wbc`, and `wbc_agile` cards;
-otherwise those cards are rendered as blocked with explicit missing-path
-reasons. The same generator is used in CI for the downloadable
-`policy-showcase` artifact.
+report includes real CPU `gear_sonic`, `decoupled_wbc`, `wbc_agile`, and
+`bfm_zero` cards; otherwise missing integrations are rendered as blocked with
+explicit missing-path reasons. The same generator is used in CI for the
+downloadable `policy-showcase` artifact.
 
 ## Run GEAR-SONIC with real checkpoints
 
@@ -95,6 +95,25 @@ cargo run --release --bin robowbc -- run --config configs/sonic_g1.toml
 The default CLI config exercises the published `planner_sonic.onnx` velocity
 path at 50 Hz until you press Ctrl-C or `max_ticks` is reached. The real
 encoder/decoder tracking contract is not integrated into the Rust runtime yet.
+
+## Run BFM-Zero with the public G1 bundle
+
+### Step 1 — download and normalize the assets
+
+```bash
+bash scripts/download_bfm_zero_models.sh
+# Fetches the public ONNX + tracking context bundle into models/bfm_zero/
+# and converts zs_walking.pkl into zs_walking.npy for the Rust runtime.
+```
+
+### Step 2 — run inference
+
+```bash
+cargo run --release --bin robowbc -- run --config configs/bfm_zero_g1.toml
+```
+
+On this repo's current CPU path, the public BFM-Zero G1 config runs at roughly
+50 Hz with single-digit millisecond average inference on a standard dev box.
 
 ## Generate a new config from the template
 
