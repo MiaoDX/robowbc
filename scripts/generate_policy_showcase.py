@@ -40,14 +40,19 @@ POLICIES = [
     {
         "id": "decoupled_wbc",
         "title": "Decoupled WBC",
-        "config": "configs/showcase/decoupled_wbc_mock.toml",
+        "config": "configs/showcase/decoupled_wbc_real.toml",
         "source": "NVIDIA GR00T",
-        "summary": "Lower-body RL outputs targets for joints 0-1 while the upper body holds the default pose.",
-        "coverage": "Lower body RL + upper body baseline",
-        "execution_kind": "fixture",
-        "checkpoint_source": "Checked-in test ONNX fixture",
+        "summary": "Real public GR00T WholeBodyControl run using the official 516D history contract plus separate balance and walk checkpoints.",
+        "coverage": "Lower body RL + upper body default-pose baseline",
+        "execution_kind": "real",
+        "checkpoint_source": "Published GR00T WholeBodyControl ONNX checkpoints",
         "command_source": "runtime.velocity",
-        "model_artifact": "crates/robowbc-ort/tests/fixtures/test_dynamic_identity.onnx",
+        "model_artifact": "models/decoupled-wbc/GR00T-WholeBodyControl-Walk.onnx",
+        "required_paths": [
+            "models/decoupled-wbc/GR00T-WholeBodyControl-Balance.onnx",
+            "models/decoupled-wbc/GR00T-WholeBodyControl-Walk.onnx",
+        ],
+        "blocked_reason": "Requires downloaded GR00T WholeBodyControl checkpoints. Run scripts/download_decoupled_wbc_models.sh or let CI warm the cache first.",
     },
     {
         "id": "bfm_zero",
@@ -76,14 +81,18 @@ POLICIES = [
     {
         "id": "wbc_agile",
         "title": "WBC-AGILE",
-        "config": "configs/showcase/wbc_agile_mock.toml",
+        "config": "configs/showcase/wbc_agile_real.toml",
         "source": "NVIDIA Isaac",
-        "summary": "A single whole-body policy over all actuated joints, using the same mock fixture for CI reproducibility.",
-        "coverage": "Full-body velocity policy",
-        "execution_kind": "fixture",
-        "checkpoint_source": "Checked-in test ONNX fixture",
+        "summary": "Real public G1 checkpoint using the published recurrent history tensors and lower-body target mapping.",
+        "coverage": "Published G1 locomotion checkpoint",
+        "execution_kind": "real",
+        "checkpoint_source": "Published NVIDIA Isaac G1 ONNX checkpoint",
         "command_source": "runtime.velocity",
-        "model_artifact": "crates/robowbc-ort/tests/fixtures/test_dynamic_identity.onnx",
+        "model_artifact": "models/wbc-agile/unitree_g1_velocity_e2e.onnx",
+        "required_paths": [
+            "models/wbc-agile/unitree_g1_velocity_e2e.onnx",
+        ],
+        "blocked_reason": "Requires downloaded WBC-AGILE G1 checkpoint. Run scripts/download_wbc_agile_models.sh or let CI warm the cache first.",
     },
 ]
 
@@ -94,7 +103,7 @@ NOT_YET_SHOWCASED = [
     },
     {
         "name": "wholebody_vla",
-        "reason": "The current showcase flow does not synthesize KinematicPose commands for an end-to-end CLI run.",
+        "reason": "The CLI now synthesizes KinematicPose commands, but no public WholeBodyVLA ONNX checkpoint is available yet.",
     },
     {
         "name": "py_model",

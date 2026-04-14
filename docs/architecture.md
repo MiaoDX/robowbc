@@ -114,7 +114,7 @@ registry. Switching models means changing `policy.name` in the TOML:
 name = "decoupled_wbc"   # change this to switch policies
 
 [policy.config.rl_model]
-model_path = "models/decoupled/locomotion.onnx"
+model_path = "models/decoupled-wbc/GR00T-WholeBodyControl-Walk.onnx"
 execution_provider = { type = "cpu" }
 ```
 

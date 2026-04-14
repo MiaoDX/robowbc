@@ -72,14 +72,15 @@ Change only `policy.name` (and the matching `[policy.config.*]` keys) to switch 
 name = "decoupled_wbc"
 
 [policy.config.rl_model]
-model_path = "models/decoupled/locomotion.onnx"
+model_path = "models/decoupled-wbc/GR00T-WholeBodyControl-Walk.onnx"
 execution_provider = { type = "cpu" }
 optimization_level = "extended"
 num_threads = 1
 
 [policy.config]
 lower_body_joints = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
-upper_body_joints  = [12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
+upper_body_joints  = [15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]
+contract = "groot_g1_history"
 control_frequency_hz = 50
 
 [robot]
@@ -92,7 +93,7 @@ frequency_hz = 50
 velocity = [0.2, 0.0, 0.1]
 ```
 
-See `configs/decoupled_g1.toml` for a complete working example using mock ONNX fixtures.
+See `configs/decoupled_smoke.toml` for a no-download fixture example, and `configs/decoupled_g1.toml` for the public GR00T G1 checkpoint path.
 
 ## Validation rules
 

@@ -40,6 +40,7 @@ execution_provider = { type = "cpu" }
 optimization_level = "extended"
 num_threads = 1
 
+[policy.config]
 # Number of end-effector links whose SE3 poses are fed into the WBC model.
 # Each link contributes 7 floats [x, y, z, qx, qy, qz, qw].
 num_ee_links = 4
@@ -53,6 +54,25 @@ topics = { joint_state = "agibot/x2/joint_state", imu = "agibot/x2/imu", joint_t
 
 [runtime]
 # WholeBodyVLA uses KinematicPose commands produced by the VLA layer.
-# For testing without a running VLA, supply a zero velocity fallback:
-velocity = [0.0, 0.0, 0.0]
+# This static pose block lets the CLI exercise the WBC path without a live VLA.
 max_ticks = 200
+
+[[runtime.kinematic_pose.links]]
+name = "left_wrist"
+translation = [0.35, 0.20, 0.95]
+rotation_xyzw = [0.0, 0.0, 0.0, 1.0]
+
+[[runtime.kinematic_pose.links]]
+name = "right_wrist"
+translation = [0.35, -0.20, 0.95]
+rotation_xyzw = [0.0, 0.0, 0.0, 1.0]
+
+[[runtime.kinematic_pose.links]]
+name = "left_hand"
+translation = [0.42, 0.26, 0.90]
+rotation_xyzw = [0.0, 0.0, 0.0, 1.0]
+
+[[runtime.kinematic_pose.links]]
+name = "right_hand"
+translation = [0.42, -0.26, 0.90]
+rotation_xyzw = [0.0, 0.0, 0.0, 1.0]

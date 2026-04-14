@@ -2,7 +2,9 @@ use robowbc_comm::{
     run_control_tick, CommConfig, CommError, ImuSample, JointState, RobotTransport,
     UnitreeG1Config, UnitreeG1Transport,
 };
-use robowbc_core::{JointPositionTargets, RobotConfig, Twist, WbcCommand, WbcPolicy};
+use robowbc_core::{
+    BodyPose, JointPositionTargets, LinkPose, RobotConfig, Twist, WbcCommand, WbcPolicy, SE3,
+};
 use robowbc_registry::{RegistryError, WbcRegistry};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -36,6 +38,18 @@ struct RobotSection {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+struct KinematicPoseLinkConfig {
+    name: String,
+    translation: [f32; 3],
+    rotation_xyzw: [f32; 4],
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct KinematicPoseConfig {
+    links: Vec<KinematicPoseLinkConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 struct RuntimeConfig {
     #[serde(default = "default_motion_tokens")]
     motion_tokens: Vec<f32>,
@@ -43,6 +57,11 @@ struct RuntimeConfig {
     /// `WbcCommand::Velocity` instead of `WbcCommand::MotionTokens`.
     #[serde(default)]
     velocity: Option<[f32; 3]>,
+    /// Whole-body kinematic pose targets. When set, uses
+    /// `WbcCommand::KinematicPose` instead of the velocity or motion-token
+    /// command paths.
+    #[serde(default)]
+    kinematic_pose: Option<KinematicPoseConfig>,
     #[serde(default)]
     max_ticks: Option<usize>,
 }
@@ -56,6 +75,7 @@ impl Default for RuntimeConfig {
         Self {
             motion_tokens: default_motion_tokens(),
             velocity: None,
+            kinematic_pose: None,
             max_ticks: Some(200),
         }
     }
@@ -262,11 +282,23 @@ fn validate_config(config: &AppConfig) -> Result<(), String> {
     if config.inference.device.trim().is_empty() {
         return Err("inference.device must not be empty".to_owned());
     }
+    if let Some(kinematic_pose) = &config.runtime.kinematic_pose {
+        if kinematic_pose.links.is_empty() {
+            return Err("runtime.kinematic_pose.links must not be empty".to_owned());
+        }
+        for link in &kinematic_pose.links {
+            if link.name.trim().is_empty() {
+                return Err("runtime.kinematic_pose.links[].name must not be empty".to_owned());
+            }
+        }
+    }
     Ok(())
 }
 
 fn report_command_kind(runtime: &RuntimeConfig) -> &'static str {
-    if runtime.velocity.is_some() {
+    if runtime.kinematic_pose.is_some() {
+        "kinematic_pose"
+    } else if runtime.velocity.is_some() {
         "velocity"
     } else {
         "motion_tokens"
@@ -274,11 +306,48 @@ fn report_command_kind(runtime: &RuntimeConfig) -> &'static str {
 }
 
 fn report_command_data(runtime: &RuntimeConfig) -> Vec<f32> {
-    if let Some([vx, vy, yaw]) = runtime.velocity {
+    if let Some(kinematic_pose) = &runtime.kinematic_pose {
+        let mut flattened = Vec::with_capacity(kinematic_pose.links.len() * 7);
+        for link in &kinematic_pose.links {
+            flattened.extend_from_slice(&link.translation);
+            flattened.extend_from_slice(&link.rotation_xyzw);
+        }
+        flattened
+    } else if let Some([vx, vy, yaw]) = runtime.velocity {
         vec![vx, vy, yaw]
     } else {
         runtime.motion_tokens.clone()
     }
+}
+
+fn build_runtime_command(runtime: &RuntimeConfig) -> Result<WbcCommand, String> {
+    if let Some(kinematic_pose) = &runtime.kinematic_pose {
+        let links = kinematic_pose
+            .links
+            .iter()
+            .map(|link| LinkPose {
+                link_name: link.name.clone(),
+                pose: SE3 {
+                    translation: link.translation,
+                    rotation_xyzw: link.rotation_xyzw,
+                },
+            })
+            .collect();
+        return Ok(WbcCommand::KinematicPose(BodyPose { links }));
+    }
+
+    if let Some([vx, vy, yaw]) = runtime.velocity {
+        return Ok(WbcCommand::Velocity(Twist {
+            linear: [vx, vy, 0.0],
+            angular: [0.0, 0.0, yaw],
+        }));
+    }
+
+    if runtime.motion_tokens.is_empty() {
+        return Err("runtime.motion_tokens must not be empty".to_owned());
+    }
+
+    Ok(WbcCommand::MotionTokens(runtime.motion_tokens.clone()))
 }
 
 fn write_run_report(path: &Path, report: &RunReport) -> Result<(), String> {
@@ -305,7 +374,7 @@ const TEMPLATE_CONFIG: &str = r#"# RoboWBC configuration template.
 # To switch policies, change policy.name and update [policy.config.*] to
 # match the new policy's required fields.  Available policies:
 #   gear_sonic     — real planner_sonic velocity path + fixture motion-token chain
-#   decoupled_wbc  — RL lower-body + analytical IK upper-body (see configs/decoupled_g1.toml)
+#   decoupled_wbc  — RL lower-body + analytical IK upper-body (see configs/decoupled_smoke.toml)
 
 [policy]
 name = "gear_sonic"
@@ -405,17 +474,7 @@ fn run_control_loop_inner<T: RobotTransport>(
     report_max_frames: Option<usize>,
     #[cfg(feature = "vis")] visualizer: &mut Option<RerunVisualizer>,
 ) -> Result<(usize, usize, Duration), String> {
-    let command = if let Some([vx, vy, yaw]) = runtime.velocity {
-        WbcCommand::Velocity(Twist {
-            linear: [vx, vy, 0.0],
-            angular: [0.0, 0.0, yaw],
-        })
-    } else {
-        if runtime.motion_tokens.is_empty() {
-            return Err("runtime.motion_tokens must not be empty".to_owned());
-        }
-        WbcCommand::MotionTokens(runtime.motion_tokens.clone())
-    };
+    let command = build_runtime_command(runtime)?;
     let period = Duration::from_secs_f64(1.0 / f64::from(comm.frequency_hz));
 
     let mut ticks: usize = 0;
@@ -473,6 +532,7 @@ fn run_control_loop_inner<T: RobotTransport>(
                     WbcCommand::MotionTokens(tokens) => {
                         let _ = vis.log_motion_tokens(tokens);
                     }
+                    WbcCommand::KinematicPose(_) => {}
                     _ => {}
                 }
             }
@@ -854,6 +914,46 @@ max_frames = 12
     }
 
     #[test]
+    fn accepts_kinematic_pose_runtime_config() {
+        let config = r#"
+[policy]
+name = "wholebody_vla"
+
+[robot]
+config_path = "configs/robots/agibot_x2.toml"
+
+[communication]
+frequency_hz = 50
+
+[inference]
+backend = "ort"
+device = "cpu"
+
+[runtime]
+max_ticks = 8
+
+[[runtime.kinematic_pose.links]]
+name = "left_wrist"
+translation = [0.1, 0.2, 0.3]
+rotation_xyzw = [0.0, 0.0, 0.0, 1.0]
+"#;
+
+        let parsed: AppConfig = toml::from_str(config).expect("config should parse");
+        let kinematic_pose = parsed
+            .runtime
+            .kinematic_pose
+            .as_ref()
+            .expect("kinematic pose should deserialize");
+        assert_eq!(kinematic_pose.links.len(), 1);
+        assert_eq!(kinematic_pose.links[0].name, "left_wrist");
+        assert_eq!(report_command_kind(&parsed.runtime), "kinematic_pose");
+        assert_eq!(
+            report_command_data(&parsed.runtime),
+            vec![0.1, 0.2, 0.3, 0.0, 0.0, 0.0, 1.0]
+        );
+    }
+
+    #[test]
     fn write_run_report_creates_parent_dirs() {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -997,6 +1097,7 @@ max_frames = 12
         let runtime = RuntimeConfig {
             motion_tokens: vec![0.0],
             velocity: Some([0.2, 0.0, 0.1]),
+            kinematic_pose: None,
             max_ticks: Some(1),
         };
 
