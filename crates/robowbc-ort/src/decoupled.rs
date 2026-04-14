@@ -1,10 +1,14 @@
 //! Decoupled WBC policy combining RL lower-body control with analytical
 //! upper-body inverse kinematics.
 //!
-//! The policy runs a single ONNX model for locomotion (lower body) and
-//! returns the robot's default pose for upper-body joints. The RL model
-//! receives proprioceptive state and a velocity command, producing joint
-//! position targets for the lower-body joints.
+//! Two execution contracts are supported:
+//! - `flat`: the legacy single-input fixture/export path used by the repo tests
+//! - `groot_g1_history`: the public GR00T `WholeBodyControl` G1 checkpoints,
+//!   which consume a 6-step 516D observation history and emit 15 lower-body
+//!   actions
+//!
+//! In both modes the upper body falls back to the configured robot default pose,
+//! matching the repo's analytical-IK baseline.
 
 use crate::{OrtBackend, OrtConfig};
 use robowbc_core::{
@@ -13,10 +17,35 @@ use robowbc_core::{
 };
 use robowbc_registry::{RegistryPolicy, WbcRegistration};
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::sync::Mutex;
+
+const GROOT_G1_HISTORY_SINGLE_OBS_DIM: usize = 86;
+const GROOT_G1_HISTORY_LEN: usize = 6;
+const GROOT_G1_HISTORY_OBS_DIM: usize = GROOT_G1_HISTORY_SINGLE_OBS_DIM * GROOT_G1_HISTORY_LEN;
+const GROOT_G1_NUM_ACTIONS: usize = 15;
+const GROOT_G1_HISTORY_OBS_DIM_I64: i64 = 516;
+const GROOT_G1_ACTION_SCALE: f32 = 0.25;
+const GROOT_G1_ANG_VEL_SCALE: f32 = 0.5;
+const GROOT_G1_DOF_POS_SCALE: f32 = 1.0;
+const GROOT_G1_DOF_VEL_SCALE: f32 = 0.05;
+const GROOT_G1_CMD_SCALE: [f32; 3] = [2.0, 2.0, 0.5];
+const GROOT_G1_HEIGHT_CMD: f32 = 0.74;
+const GROOT_G1_COMMAND_SWITCH_THRESHOLD: f32 = 0.05;
+const GROOT_G1_MODEL_INPUT_SHAPE: [i64; 2] = [1, GROOT_G1_HISTORY_OBS_DIM_I64];
 
 fn default_control_frequency_hz() -> u32 {
     50
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DecoupledObservationContract {
+    /// Legacy flat single-input contract used by fixture models in tests.
+    #[default]
+    Flat,
+    /// Public GR00T `WholeBodyControl` G1 locomotion contract.
+    GrootG1History,
 }
 
 /// Configuration for a Decoupled WBC policy.
@@ -24,28 +53,76 @@ fn default_control_frequency_hz() -> u32 {
 pub struct DecoupledWbcConfig {
     /// ONNX model for the RL lower-body locomotion policy.
     pub rl_model: OrtConfig,
+    /// Optional standing / balance checkpoint for the GR00T history contract.
+    #[serde(default)]
+    pub stand_model: Option<OrtConfig>,
     /// Robot configuration.
     pub robot: RobotConfig,
     /// Joint indices controlled by the RL policy (lower body).
     pub lower_body_joints: Vec<usize>,
     /// Joint indices controlled by the analytical IK solver (upper body).
     pub upper_body_joints: Vec<usize>,
+    /// Input/output contract used by this checkpoint.
+    #[serde(default)]
+    pub contract: DecoupledObservationContract,
     /// Control frequency in Hz.
     #[serde(default = "default_control_frequency_hz")]
     pub control_frequency_hz: u32,
 }
 
+struct DecoupledHistoryRuntime {
+    walk_backend: OrtBackend,
+    stand_backend: Option<OrtBackend>,
+    obs_history: VecDeque<Vec<f32>>,
+    last_action: Vec<f32>,
+    default_lower_body_pose: Vec<f32>,
+}
+
+impl DecoupledHistoryRuntime {
+    fn new(config: &DecoupledWbcConfig, walk_backend: OrtBackend) -> CoreResult<Self> {
+        if config.lower_body_joints.len() != GROOT_G1_NUM_ACTIONS {
+            return Err(WbcError::InvalidObservation(
+                "groot_g1_history expects 15 lower_body_joints",
+            ));
+        }
+
+        let stand_backend = match &config.stand_model {
+            Some(stand_model) => Some(
+                OrtBackend::new(stand_model)
+                    .map_err(|e| WbcError::InferenceFailed(e.to_string()))?,
+            ),
+            None => None,
+        };
+
+        let default_lower_body_pose = config
+            .lower_body_joints
+            .iter()
+            .map(|&idx| config.robot.default_pose[idx])
+            .collect();
+
+        Ok(Self {
+            walk_backend,
+            stand_backend,
+            obs_history: VecDeque::with_capacity(GROOT_G1_HISTORY_LEN),
+            last_action: vec![0.0; GROOT_G1_NUM_ACTIONS],
+            default_lower_body_pose,
+        })
+    }
+}
+
+enum DecoupledRuntime {
+    Flat(OrtBackend),
+    GrootG1History(DecoupledHistoryRuntime),
+}
+
 /// Decoupled WBC policy combining RL lower-body control with analytical
 /// upper-body inverse kinematics.
-///
-/// The lower body is driven by an ONNX reinforcement-learning policy that
-/// accepts velocity commands. The upper body holds the robot's default pose
-/// (analytical IK baseline).
 pub struct DecoupledWbcPolicy {
-    rl_backend: Mutex<OrtBackend>,
+    runtime: Mutex<DecoupledRuntime>,
     robot: RobotConfig,
     lower_body_joints: Vec<usize>,
     upper_body_joints: Vec<usize>,
+    contract: DecoupledObservationContract,
     control_frequency_hz: u32,
 }
 
@@ -88,23 +165,28 @@ impl DecoupledWbcPolicy {
             ));
         }
 
-        let rl_backend = OrtBackend::new(&config.rl_model)
+        let walk_backend = OrtBackend::new(&config.rl_model)
             .map_err(|e| WbcError::InferenceFailed(e.to_string()))?;
+        let runtime = match config.contract {
+            DecoupledObservationContract::Flat => DecoupledRuntime::Flat(walk_backend),
+            DecoupledObservationContract::GrootG1History => DecoupledRuntime::GrootG1History(
+                DecoupledHistoryRuntime::new(&config, walk_backend)?,
+            ),
+        };
 
         Ok(Self {
-            rl_backend: Mutex::new(rl_backend),
+            runtime: Mutex::new(runtime),
             robot: config.robot,
             lower_body_joints: config.lower_body_joints,
             upper_body_joints: config.upper_body_joints,
+            contract: config.contract,
             control_frequency_hz: config.control_frequency_hz,
         })
     }
 
-    /// Builds the RL model input vector from the observation and velocity
+    /// Builds the legacy flat RL input vector from the observation and velocity
     /// command.
-    ///
-    /// Layout: `[lower_positions, lower_velocities, gravity(3), vx, vy, yaw_rate]`
-    fn build_rl_input(&self, obs: &Observation, twist: &Twist) -> Vec<f32> {
+    fn build_flat_input(&self, obs: &Observation, twist: &Twist) -> Vec<f32> {
         let cap = self.lower_body_joints.len() * 2 + 6;
         let mut input = Vec::with_capacity(cap);
 
@@ -120,6 +202,118 @@ impl DecoupledWbcPolicy {
         input.push(twist.angular[2]);
 
         input
+    }
+
+    fn predict_flat(
+        &self,
+        backend: &mut OrtBackend,
+        obs: &Observation,
+        twist: &Twist,
+    ) -> CoreResult<JointPositionTargets> {
+        let rl_input = self.build_flat_input(obs, twist);
+        let input_name = backend
+            .input_names()
+            .first()
+            .ok_or(WbcError::InferenceFailed(
+                "RL model has no inputs".to_owned(),
+            ))?
+            .clone();
+        let input_len = i64::try_from(rl_input.len())
+            .map_err(|_| WbcError::InferenceFailed("input shape overflow".to_owned()))?;
+        let outputs = backend
+            .run(&[(&input_name, &rl_input, &[1, input_len])])
+            .map_err(|e| WbcError::InferenceFailed(e.to_string()))?;
+        let rl_output = outputs.into_iter().next().ok_or(WbcError::InferenceFailed(
+            "RL model returned no outputs".to_owned(),
+        ))?;
+
+        if rl_output.len() < self.lower_body_joints.len() {
+            return Err(WbcError::InvalidTargets(
+                "RL model output has fewer elements than lower_body_joints count",
+            ));
+        }
+
+        let mut positions = vec![0.0_f32; self.robot.joint_count];
+        for (i, &idx) in self.lower_body_joints.iter().enumerate() {
+            positions[idx] = rl_output[i];
+        }
+        for &idx in &self.upper_body_joints {
+            positions[idx] = self.robot.default_pose[idx];
+        }
+
+        Ok(JointPositionTargets {
+            positions,
+            timestamp: obs.timestamp,
+        })
+    }
+
+    fn predict_groot_g1_history(
+        &self,
+        runtime: &mut DecoupledHistoryRuntime,
+        obs: &Observation,
+        twist: &Twist,
+    ) -> CoreResult<JointPositionTargets> {
+        let single_obs = build_groot_g1_single_observation(
+            obs,
+            twist,
+            &self.lower_body_joints,
+            &runtime.default_lower_body_pose,
+            &runtime.last_action,
+        );
+        push_history_frame(&mut runtime.obs_history, single_obs);
+        let obs_buffer = history_to_flat_buffer(&runtime.obs_history);
+
+        let command_norm =
+            (twist.linear[0].powi(2) + twist.linear[1].powi(2) + twist.angular[2].powi(2)).sqrt();
+        let backend = if command_norm < GROOT_G1_COMMAND_SWITCH_THRESHOLD {
+            runtime
+                .stand_backend
+                .as_mut()
+                .unwrap_or(&mut runtime.walk_backend)
+        } else {
+            &mut runtime.walk_backend
+        };
+
+        let input_name = backend
+            .input_names()
+            .first()
+            .ok_or(WbcError::InferenceFailed(
+                "RL model has no inputs".to_owned(),
+            ))?
+            .clone();
+        let outputs = backend
+            .run(&[(&input_name, &obs_buffer, &GROOT_G1_MODEL_INPUT_SHAPE)])
+            .map_err(|e| WbcError::InferenceFailed(e.to_string()))?;
+        let raw_action = outputs.into_iter().next().ok_or(WbcError::InferenceFailed(
+            "RL model returned no outputs".to_owned(),
+        ))?;
+
+        if raw_action.len() < GROOT_G1_NUM_ACTIONS {
+            return Err(WbcError::InvalidTargets(
+                "GR00T G1 checkpoint returned fewer than 15 lower-body actions",
+            ));
+        }
+
+        runtime.last_action = raw_action[..GROOT_G1_NUM_ACTIONS].to_vec();
+        let lower_body_targets: Vec<f32> = runtime
+            .last_action
+            .iter()
+            .zip(&runtime.default_lower_body_pose)
+            .map(|(action, default_pose)| action * GROOT_G1_ACTION_SCALE + default_pose)
+            .collect();
+
+        let mut positions = self.robot.default_pose.clone();
+        for (value, &joint_idx) in lower_body_targets.iter().zip(&self.lower_body_joints) {
+            positions[joint_idx] = *value;
+        }
+        for &idx in &self.upper_body_joints {
+            positions[idx] = self.robot.default_pose[idx];
+        }
+
+        Ok(JointPositionTargets {
+            positions,
+            timestamp: obs.timestamp,
+        })
     }
 }
 
@@ -142,53 +336,16 @@ impl robowbc_core::WbcPolicy for DecoupledWbcPolicy {
             ));
         };
 
-        // Run RL model for lower body.
-        let rl_input = self.build_rl_input(obs, twist);
-        let rl_output = {
-            let mut backend = self
-                .rl_backend
-                .lock()
-                .map_err(|_| WbcError::InferenceFailed("rl_backend mutex poisoned".to_owned()))?;
-            let input_name = backend
-                .input_names()
-                .first()
-                .ok_or(WbcError::InferenceFailed(
-                    "RL model has no inputs".to_owned(),
-                ))?
-                .clone();
-            let input_len = i64::try_from(rl_input.len())
-                .map_err(|_| WbcError::InferenceFailed("input shape overflow".to_owned()))?;
-            let outputs = backend
-                .run(&[(&input_name, &rl_input, &[1, input_len])])
-                .map_err(|e| WbcError::InferenceFailed(e.to_string()))?;
-            outputs.into_iter().next().ok_or(WbcError::InferenceFailed(
-                "RL model returned no outputs".to_owned(),
-            ))?
-        };
-
-        if rl_output.len() < self.lower_body_joints.len() {
-            return Err(WbcError::InvalidTargets(
-                "RL model output has fewer elements than lower_body_joints count",
-            ));
+        let mut runtime = self
+            .runtime
+            .lock()
+            .map_err(|_| WbcError::InferenceFailed("rl_backend mutex poisoned".to_owned()))?;
+        match &mut *runtime {
+            DecoupledRuntime::Flat(backend) => self.predict_flat(backend, obs, twist),
+            DecoupledRuntime::GrootG1History(history) => {
+                self.predict_groot_g1_history(history, obs, twist)
+            }
         }
-
-        // Assemble full joint target vector.
-        let mut positions = vec![0.0_f32; self.robot.joint_count];
-
-        // Lower body: first N values from RL model output.
-        for (i, &idx) in self.lower_body_joints.iter().enumerate() {
-            positions[idx] = rl_output[i];
-        }
-
-        // Upper body: hold default pose (analytical IK baseline).
-        for &idx in &self.upper_body_joints {
-            positions[idx] = self.robot.default_pose[idx];
-        }
-
-        Ok(JointPositionTargets {
-            positions,
-            timestamp: obs.timestamp,
-        })
     }
 
     fn control_frequency_hz(&self) -> u32 {
@@ -205,6 +362,7 @@ impl std::fmt::Debug for DecoupledWbcPolicy {
         f.debug_struct("DecoupledWbcPolicy")
             .field("lower_body_joints", &self.lower_body_joints)
             .field("upper_body_joints", &self.upper_body_joints)
+            .field("contract", &self.contract)
             .field("control_frequency_hz", &self.control_frequency_hz)
             .finish_non_exhaustive()
     }
@@ -220,6 +378,56 @@ impl RegistryPolicy for DecoupledWbcPolicy {
     }
 }
 
+fn build_groot_g1_single_observation(
+    obs: &Observation,
+    twist: &Twist,
+    lower_body_joints: &[usize],
+    default_lower_body_pose: &[f32],
+    last_action: &[f32],
+) -> Vec<f32> {
+    let mut single_obs = vec![0.0_f32; GROOT_G1_HISTORY_SINGLE_OBS_DIM];
+    single_obs[0] = twist.linear[0] * GROOT_G1_CMD_SCALE[0];
+    single_obs[1] = twist.linear[1] * GROOT_G1_CMD_SCALE[1];
+    single_obs[2] = twist.angular[2] * GROOT_G1_CMD_SCALE[2];
+    single_obs[3] = GROOT_G1_HEIGHT_CMD;
+    single_obs[7] = 0.0 * GROOT_G1_ANG_VEL_SCALE;
+    single_obs[8] = 0.0 * GROOT_G1_ANG_VEL_SCALE;
+    single_obs[9] = 0.0 * GROOT_G1_ANG_VEL_SCALE;
+    single_obs[10..13].copy_from_slice(&obs.gravity_vector);
+
+    for (i, (&joint_idx, &default_pose)) in lower_body_joints
+        .iter()
+        .zip(default_lower_body_pose.iter())
+        .enumerate()
+    {
+        single_obs[13 + i] =
+            (obs.joint_positions[joint_idx] - default_pose) * GROOT_G1_DOF_POS_SCALE;
+        single_obs[13 + GROOT_G1_NUM_ACTIONS + i] =
+            obs.joint_velocities[joint_idx] * GROOT_G1_DOF_VEL_SCALE;
+        single_obs[13 + 2 * GROOT_G1_NUM_ACTIONS + i] = last_action[i];
+    }
+
+    single_obs
+}
+
+fn push_history_frame(history: &mut VecDeque<Vec<f32>>, frame: Vec<f32>) {
+    history.push_back(frame);
+    while history.len() < GROOT_G1_HISTORY_LEN {
+        history.push_front(vec![0.0; GROOT_G1_HISTORY_SINGLE_OBS_DIM]);
+    }
+    while history.len() > GROOT_G1_HISTORY_LEN {
+        let _ = history.pop_front();
+    }
+}
+
+fn history_to_flat_buffer(history: &VecDeque<Vec<f32>>) -> Vec<f32> {
+    let mut buffer = Vec::with_capacity(GROOT_G1_HISTORY_OBS_DIM);
+    for frame in history {
+        buffer.extend_from_slice(frame);
+    }
+    buffer
+}
+
 inventory::submit! {
     WbcRegistration::new::<DecoupledWbcPolicy>("decoupled_wbc")
 }
@@ -231,7 +439,7 @@ pub fn force_link() {}
 mod tests {
     use super::*;
     use robowbc_core::{JointLimit, PdGains, WbcPolicy};
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::Instant;
 
     fn dynamic_model_path() -> PathBuf {
@@ -271,13 +479,22 @@ mod tests {
         }
     }
 
+    fn g1_robot_config() -> RobotConfig {
+        RobotConfig::from_toml_file(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("../../configs/robots/unitree_g1.toml"),
+        )
+        .expect("robot config should load")
+    }
+
     #[test]
     fn config_round_trips_through_toml() {
         let config = DecoupledWbcConfig {
             rl_model: test_ort_config(PathBuf::from("model.onnx")),
+            stand_model: Some(test_ort_config(PathBuf::from("stand.onnx"))),
             robot: test_robot_config(4),
             lower_body_joints: vec![0, 1],
             upper_body_joints: vec![2, 3],
+            contract: DecoupledObservationContract::Flat,
             control_frequency_hz: 50,
         };
 
@@ -287,7 +504,9 @@ mod tests {
 
         assert_eq!(parsed.lower_body_joints, vec![0, 1]);
         assert_eq!(parsed.upper_body_joints, vec![2, 3]);
+        assert_eq!(parsed.contract, DecoupledObservationContract::Flat);
         assert_eq!(parsed.control_frequency_hz, 50);
+        assert!(parsed.stand_model.is_some());
     }
 
     #[test]
@@ -299,9 +518,11 @@ mod tests {
 
         let config = DecoupledWbcConfig {
             rl_model: test_ort_config(dynamic_model_path()),
+            stand_model: None,
             robot: test_robot_config(4),
             lower_body_joints: vec![0, 1, 99],
             upper_body_joints: vec![2, 3],
+            contract: DecoupledObservationContract::Flat,
             control_frequency_hz: 50,
         };
 
@@ -318,9 +539,11 @@ mod tests {
 
         let config = DecoupledWbcConfig {
             rl_model: test_ort_config(dynamic_model_path()),
+            stand_model: None,
             robot: test_robot_config(4),
             lower_body_joints: vec![0, 1],
-            upper_body_joints: vec![2], // missing joint 3
+            upper_body_joints: vec![2],
+            contract: DecoupledObservationContract::Flat,
             control_frequency_hz: 50,
         };
 
@@ -338,9 +561,11 @@ mod tests {
 
         let config = DecoupledWbcConfig {
             rl_model: test_ort_config(dynamic_model_path()),
+            stand_model: None,
             robot: test_robot_config(4),
             lower_body_joints: vec![0, 1, 2, 3],
             upper_body_joints: vec![],
+            contract: DecoupledObservationContract::Flat,
             control_frequency_hz: 50,
         };
 
@@ -366,14 +591,13 @@ mod tests {
             return;
         }
 
-        // 4 joints total: 2 lower body, 2 upper body.
-        // RL input: 2 pos + 2 vel + 3 gravity + 3 velocity = 10 elements.
-        // Dynamic identity model echoes 10 values; we take first 2 for lower body.
         let config = DecoupledWbcConfig {
             rl_model: test_ort_config(dynamic_model_path()),
+            stand_model: None,
             robot: test_robot_config(4),
             lower_body_joints: vec![0, 1],
             upper_body_joints: vec![2, 3],
+            contract: DecoupledObservationContract::Flat,
             control_frequency_hz: 50,
         };
 
@@ -392,17 +616,10 @@ mod tests {
 
         let targets = policy.predict(&obs).expect("prediction should succeed");
 
-        // Lower body (indices 0,1): first 2 values from RL output.
-        // Identity model echoes input, so RL output[0] = joint_positions[0] = 0.5,
-        // RL output[1] = joint_positions[1] = -0.3.
         assert!((targets.positions[0] - 0.5).abs() < 1e-6);
         assert!((targets.positions[1] - (-0.3)).abs() < 1e-6);
-
-        // Upper body (indices 2,3): default pose values.
-        // test_robot_config default_pose = [0.0, 0.1, 0.2, 0.3].
         assert!((targets.positions[2] - 0.2).abs() < 1e-6);
         assert!((targets.positions[3] - 0.3).abs() < 1e-6);
-
         assert_eq!(policy.control_frequency_hz(), 50);
         assert_eq!(policy.supported_robots().len(), 1);
     }
@@ -416,9 +633,11 @@ mod tests {
 
         let config = DecoupledWbcConfig {
             rl_model: test_ort_config(dynamic_model_path()),
+            stand_model: None,
             robot: test_robot_config(4),
             lower_body_joints: vec![0, 1, 2, 3],
             upper_body_joints: vec![],
+            contract: DecoupledObservationContract::Flat,
             control_frequency_hz: 100,
         };
 
@@ -437,12 +656,10 @@ mod tests {
 
         let targets = policy.predict(&obs).expect("prediction should succeed");
 
-        // All joints from RL. Identity echoes input; first 4 values are positions.
         assert!((targets.positions[0] - 0.1).abs() < 1e-6);
         assert!((targets.positions[1] - 0.2).abs() < 1e-6);
         assert!((targets.positions[2] - 0.3).abs() < 1e-6);
         assert!((targets.positions[3] - 0.4).abs() < 1e-6);
-
         assert_eq!(policy.control_frequency_hz(), 100);
     }
 
@@ -483,13 +700,6 @@ mod tests {
         assert_eq!(policy.control_frequency_hz(), 50);
     }
 
-    /// Verify that `DecoupledWbcPolicy` runs on Unitree H1 (19 DOF) using the
-    /// dynamic-identity fixture model.  This satisfies issue #14 acceptance
-    /// criterion 2: "at least one policy runs on the new hardware."
-    ///
-    /// Joint split mirrors `configs/decoupled_h1.toml`:
-    ///   lower body — indices 0–9  (10 leg joints)
-    ///   upper body — indices 10–18 (torso + arm joints, held at default pose)
     #[test]
     fn decoupled_wbc_runs_on_unitree_h1() {
         const N: usize = 19;
@@ -509,7 +719,7 @@ mod tests {
             joint_limits: vec![
                 JointLimit {
                     min: -1.57,
-                    max: 1.57
+                    max: 1.57,
                 };
                 N
             ],
@@ -518,19 +728,126 @@ mod tests {
             joint_velocity_limits: None,
         };
 
+        let policy = DecoupledWbcPolicy::new(DecoupledWbcConfig {
+            rl_model: test_ort_config(dynamic_model_path()),
+            stand_model: None,
+            robot,
+            lower_body_joints: lower,
+            upper_body_joints: upper,
+            contract: DecoupledObservationContract::Flat,
+            control_frequency_hz: 50,
+        })
+        .expect("policy should build");
+
+        let obs = Observation {
+            joint_positions: vec![0.0; N],
+            joint_velocities: vec![0.0; N],
+            gravity_vector: [0.0, 0.0, -1.0],
+            command: WbcCommand::Velocity(Twist {
+                linear: [0.2, 0.0, 0.0],
+                angular: [0.0, 0.0, 0.0],
+            }),
+            timestamp: Instant::now(),
+        };
+
+        let targets = policy.predict(&obs).expect("prediction should succeed");
+        assert_eq!(targets.positions.len(), N);
+    }
+
+    #[test]
+    fn groot_history_requires_15_lower_body_joints() {
+        if !has_dynamic_model() {
+            eprintln!("skipping: dynamic model not found");
+            return;
+        }
+
         let config = DecoupledWbcConfig {
             rl_model: test_ort_config(dynamic_model_path()),
-            robot,
-            lower_body_joints: lower.clone(),
-            upper_body_joints: upper,
+            stand_model: None,
+            robot: g1_robot_config(),
+            lower_body_joints: (0..14).collect(),
+            upper_body_joints: (14..29).collect(),
+            contract: DecoupledObservationContract::GrootG1History,
             control_frequency_hz: 50,
         };
 
-        let policy = DecoupledWbcPolicy::new(config).expect("H1 policy should build");
+        let err = DecoupledWbcPolicy::new(config).expect_err("contract should be rejected");
+        assert!(matches!(err, WbcError::InvalidObservation(_)));
+    }
+
+    #[test]
+    fn groot_history_builds_expected_single_observation() {
+        let robot = g1_robot_config();
+        let lower_body_joints: Vec<usize> = (0..15).collect();
+        let default_lower_body_pose = lower_body_joints
+            .iter()
+            .map(|&idx| robot.default_pose[idx])
+            .collect::<Vec<_>>();
+        let obs = Observation {
+            joint_positions: robot.default_pose.clone(),
+            joint_velocities: vec![0.0; robot.joint_count],
+            gravity_vector: [0.0, 0.0, -1.0],
+            command: WbcCommand::Velocity(Twist {
+                linear: [0.5, 0.1, 0.0],
+                angular: [0.0, 0.0, 0.2],
+            }),
+            timestamp: Instant::now(),
+        };
+        let twist = match &obs.command {
+            WbcCommand::Velocity(twist) => twist,
+            _ => unreachable!("constructed as velocity"),
+        };
+
+        let single_obs = build_groot_g1_single_observation(
+            &obs,
+            twist,
+            &lower_body_joints,
+            &default_lower_body_pose,
+            &[0.0; GROOT_G1_NUM_ACTIONS],
+        );
+
+        assert_eq!(single_obs.len(), GROOT_G1_HISTORY_SINGLE_OBS_DIM);
+        assert!((single_obs[0] - 1.0).abs() < 1e-6);
+        assert!((single_obs[1] - 0.2).abs() < 1e-6);
+        assert!((single_obs[2] - 0.1).abs() < 1e-6);
+        assert!((single_obs[3] - GROOT_G1_HEIGHT_CMD).abs() < 1e-6);
+        assert!((single_obs[10] - 0.0).abs() < 1e-6);
+        assert!((single_obs[11] - 0.0).abs() < 1e-6);
+        assert!((single_obs[12] + 1.0).abs() < 1e-6);
+    }
+
+    /// Integration test requiring the published GR00T WholeBodyControl ONNX checkpoints.
+    ///
+    /// To run once weights are available:
+    /// ```bash
+    /// bash scripts/download_decoupled_wbc_models.sh
+    /// cargo test -p robowbc-ort -- --ignored decoupled_wbc_real_model_inference
+    /// ```
+    #[test]
+    #[ignore = "requires real GR00T WholeBodyControl ONNX weights; run scripts/download_decoupled_wbc_models.sh first"]
+    fn decoupled_wbc_real_model_inference() {
+        let walk_model = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../models/decoupled-wbc/GR00T-WholeBodyControl-Walk.onnx");
+        let stand_model = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../models/decoupled-wbc/GR00T-WholeBodyControl-Balance.onnx");
+        assert!(walk_model.exists(), "model not found: {walk_model:?}");
+        assert!(stand_model.exists(), "model not found: {stand_model:?}");
+
+        let robot = g1_robot_config();
+        let policy = DecoupledWbcPolicy::new(DecoupledWbcConfig {
+            rl_model: test_ort_config(walk_model),
+            stand_model: Some(test_ort_config(stand_model)),
+            robot: robot.clone(),
+            lower_body_joints: (0..15).collect(),
+            upper_body_joints: (15..robot.joint_count).collect(),
+            contract: DecoupledObservationContract::GrootG1History,
+            control_frequency_hz: 50,
+        })
+        .expect("real model should load");
 
         let obs = Observation {
-            joint_positions: vec![0.1; N],
-            joint_velocities: vec![0.0; N],
+            joint_positions: robot.default_pose.clone(),
+            joint_velocities: vec![0.0; robot.joint_count],
             gravity_vector: [0.0, 0.0, -1.0],
             command: WbcCommand::Velocity(Twist {
                 linear: [0.3, 0.0, 0.0],
@@ -539,27 +856,7 @@ mod tests {
             timestamp: Instant::now(),
         };
 
-        let targets = policy.predict(&obs).expect("H1 prediction should succeed");
-
-        assert_eq!(
-            targets.positions.len(),
-            N,
-            "output must cover all {N} H1 joints"
-        );
-        // Lower body (indices 0–9): identity model echoes input; first element
-        // of RL input is joint_positions[0] = 0.1.
-        assert!(
-            (targets.positions[0] - 0.1).abs() < 1e-5,
-            "lower-body target[0] should echo joint_positions[0]"
-        );
-        // Upper body (indices 10–18): default pose = 0.0 (held analytically).
-        assert!(
-            (targets.positions[10] - 0.0).abs() < 1e-6,
-            "upper-body target[10] should equal default pose"
-        );
-
-        assert_eq!(policy.control_frequency_hz(), 50);
-        assert_eq!(policy.supported_robots().len(), 1);
-        assert_eq!(policy.supported_robots()[0].joint_count, N);
+        let targets = policy.predict(&obs).expect("real inference should succeed");
+        assert_eq!(targets.positions.len(), robot.joint_count);
     }
 }

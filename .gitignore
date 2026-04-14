@@ -1,5 +1,6 @@
 # Auto-generated files
 /target/
+/models/
 *.onnx
 # Allow small test fixture models
 !crates/robowbc-ort/tests/fixtures/*.onnx

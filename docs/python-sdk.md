@@ -115,7 +115,7 @@ Factory for building registered policies.
 from robowbc import Registry, Observation
 
 # Same observation, different policy — just change the config file
-for config in ["configs/sonic_g1.toml", "configs/decoupled_g1.toml"]:
+for config in ["configs/sonic_g1.toml", "configs/decoupled_smoke.toml"]:
     policy = Registry.build("gear_sonic" if "sonic" in config else "decoupled_wbc", config)
     print(f"{config}: {policy.control_frequency_hz()} Hz")
 ```

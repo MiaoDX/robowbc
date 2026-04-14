@@ -77,14 +77,20 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Cache GEAR-Sonic checkpoints
+      - name: Cache live policy checkpoints
         uses: actions/cache@v4
         with:
-          path: models/gear-sonic
-          key: gear-sonic-${{ runner.os }}-v1
+          path: |
+            models/gear-sonic
+            models/decoupled-wbc
+            models/wbc-agile
+          key: live-policy-models-${{ runner.os }}-v2
 
-      - name: Warm GEAR-Sonic checkpoint cache
-        run: bash scripts/download_gear_sonic_models.sh models/gear-sonic
+      - name: Warm live policy checkpoint cache
+        run: |
+          bash scripts/download_gear_sonic_models.sh models/gear-sonic
+          bash scripts/download_decoupled_wbc_models.sh models/decoupled-wbc
+          bash scripts/download_wbc_agile_models.sh models/wbc-agile
 
       - name: Build robowbc with vis feature
         run: cargo build --bin robowbc --features robowbc-cli/vis

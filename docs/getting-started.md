@@ -32,10 +32,10 @@ require real model checkpoints or hardware and are skipped in CI).
 The fastest local path is the checked-in `decoupled_wbc` fixture:
 
 ```bash
-cargo run --bin robowbc -- run --config configs/decoupled_g1.toml
+cargo run --bin robowbc -- run --config configs/decoupled_smoke.toml
 ```
 
-`decoupled_g1.toml` uses the bundled
+`decoupled_smoke.toml` uses the bundled
 `crates/robowbc-ort/tests/fixtures/test_dynamic_identity.onnx` model and is the
 intended no-download local smoke path.
 
@@ -70,10 +70,11 @@ cd ./artifacts/policy-showcase
 python -m http.server 8000
 ```
 
-Then open `http://127.0.0.1:8000`. If real GEAR-SONIC checkpoints are present,
-the report includes a real CPU `gear_sonic` planner card; otherwise that card
-is rendered as blocked with the missing-path reason. The same generator is used
-in CI for the downloadable `policy-showcase` artifact.
+Then open `http://127.0.0.1:8000`. If the public checkpoints are present, the
+report includes real CPU `gear_sonic`, `decoupled_wbc`, and `wbc_agile` cards;
+otherwise those cards are rendered as blocked with explicit missing-path
+reasons. The same generator is used in CI for the downloadable
+`policy-showcase` artifact.
 
 ## Run GEAR-SONIC with real checkpoints
 

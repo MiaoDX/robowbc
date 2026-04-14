@@ -19,12 +19,22 @@ control loops, latency, and target trajectories with the same data pipeline.
   and Rerun visualization.
 - Registered policies on `main`: `gear_sonic`, `decoupled_wbc`, `hover`,
   `wbc_agile`, `bfm_zero`, `wholebody_vla`, and `py_model`.
-- A checked-in fixture config exists at `configs/decoupled_g1.toml` for local
-  smoke testing without model downloads.
+- Real published checkpoint runs are wired today for `gear_sonic`
+  (`configs/sonic_g1.toml`), `decoupled_wbc` on G1
+  (`configs/decoupled_g1.toml`), and `wbc_agile` on G1
+  (`configs/wbc_agile_g1.toml`).
+- No-download smoke paths remain available through
+  `configs/decoupled_smoke.toml` and `configs/decoupled_h1.toml`, both backed
+  by the checked-in dynamic identity ONNX fixture.
+- `configs/wholebody_vla_x2.toml`, `configs/bfm_zero_g1.toml`,
+  `configs/hover_h1.toml`, and `configs/wbc_agile_t1.toml` are honest blocked
+  configs today: the wrappers load, but they still need public or user-exported
+  model assets.
 - CI runs Rust build/test/lint/format checks, Rust API docs, `mdBook`, Python
-  wheel smoke tests, and a mixed-source policy showcase artifact with one
-  real CPU `gear_sonic` planner card plus fixture-backed comparison cards,
-  all exported as `index.html`, JSON summaries, logs, and Rerun recordings.
+  wheel smoke tests, and a mixed-source policy showcase artifact with real CPU
+  `gear_sonic`, `decoupled_wbc`, and `wbc_agile` cards plus clearly-labeled
+  fixture / blocked comparison cards, all exported as `index.html`, JSON
+  summaries, logs, and Rerun recordings.
 
 ## Repo layout
 
@@ -48,10 +58,10 @@ control loops, latency, and target trajectories with the same data pipeline.
 rustc --version
 cargo --version
 cargo build
-cargo run --bin robowbc -- run --config configs/decoupled_g1.toml
+cargo run --bin robowbc -- run --config configs/decoupled_smoke.toml
 ```
 
-`configs/decoupled_g1.toml` uses
+`configs/decoupled_smoke.toml` uses
 `crates/robowbc-ort/tests/fixtures/test_dynamic_identity.onnx`, so it is the
 intended no-download local smoke path.
 
@@ -72,6 +82,28 @@ real encoder/decoder tracking contract is not integrated into the Rust runtime
 yet, so the CLI config keeps `motion_tokens` as a documented fixture-only /
 experimental path for now.
 
+### Run real Decoupled WBC G1 checkpoints
+
+```bash
+bash scripts/download_decoupled_wbc_models.sh
+cargo run --release --bin robowbc -- run --config configs/decoupled_g1.toml
+```
+
+`configs/decoupled_g1.toml` uses NVIDIA's public balance + walk checkpoints and
+the official 516D history contract for the Unitree G1 lower body.
+
+### Run real WBC-AGILE G1 checkpoint
+
+```bash
+bash scripts/download_wbc_agile_models.sh
+cargo run --release --bin robowbc -- run --config configs/wbc_agile_g1.toml
+```
+
+`configs/wbc_agile_g1.toml` uses NVIDIA's public recurrent G1 checkpoint. The
+published model commands 14 lower-body joints; RoboWBC maps those outputs back
+into the 35-DOF robot ordering and holds the remaining joints at their current
+positions.
+
 ### Generate a new config template
 
 ```bash
@@ -86,11 +118,11 @@ without copying an existing example by hand.
 | Policy | Example config(s) | Backend | Notes |
 |--------|-------------------|---------|-------|
 | `gear_sonic` | `configs/sonic_g1.toml` | `robowbc-ort` | Real `planner_sonic.onnx` velocity path today; encoder/decoder tracking contract still pending |
-| `decoupled_wbc` | `configs/decoupled_g1.toml`, `configs/decoupled_h1.toml` | `robowbc-ort` | Best local smoke-test path; checked-in fixture available |
-| `hover` | `configs/hover_h1.toml` | `robowbc-ort` | H1-oriented ONNX wrapper; bring your own exported checkpoint |
-| `wbc_agile` | `configs/wbc_agile_g1.toml`, `configs/wbc_agile_t1.toml` | `robowbc-ort` | NVIDIA WBC-AGILE style policy wrapper |
-| `bfm_zero` | `configs/bfm_zero_g1.toml` | `robowbc-ort` | G1-oriented ONNX policy integration |
-| `wholebody_vla` | `configs/wholebody_vla_x2.toml` | `robowbc-ort` | WholeBodyVLA / AGIBOT X2 wrapper |
+| `decoupled_wbc` | `configs/decoupled_smoke.toml`, `configs/decoupled_g1.toml`, `configs/decoupled_h1.toml` | `robowbc-ort` | Real public G1 history contract plus fixture-backed smoke paths |
+| `hover` | `configs/hover_h1.toml` | `robowbc-ort` | H1-oriented ONNX wrapper; still needs a user-exported/public checkpoint |
+| `wbc_agile` | `configs/wbc_agile_g1.toml`, `configs/wbc_agile_t1.toml` | `robowbc-ort` | Real public G1 checkpoint; T1 still expects a user-exported model |
+| `bfm_zero` | `configs/bfm_zero_g1.toml` | `robowbc-ort` | Wrapper in tree; real public latent / prompt contract still pending |
+| `wholebody_vla` | `configs/wholebody_vla_x2.toml` | `robowbc-ort` | CLI now supports `KinematicPose`, but no public X2 checkpoint is wired yet |
 | `py_model` | user-supplied TOML | `robowbc-pyo3` | Loads Python scripts or PyTorch checkpoints through PyO3 |
 
 ## Visualization and reports
@@ -121,7 +153,7 @@ max_frames = 120
 Then run:
 
 ```bash
-cargo run --bin robowbc --features robowbc-cli/vis -- run --config configs/decoupled_g1.toml
+cargo run --bin robowbc --features robowbc-cli/vis -- run --config configs/decoupled_smoke.toml
 ```
 
 Open the saved recording with a local Rerun install:
@@ -167,12 +199,12 @@ for downloading or opening in the desktop Rerun app.
 
 ### CI policy showcase
 
-The CI workflow warms a cached `models/gear-sonic/` checkpoint directory,
-builds the same mixed-source showcase, and uploads it as the
-`policy-showcase` artifact. Each run contains an auto-generated `index.html`
-plus per-policy `.json`, `.rrd`, `.log`, and embedded Rerun viewer assets for the real CPU
-`gear_sonic` planner path and the fixture-backed `decoupled_wbc`, `bfm_zero`,
-`hover`, and `wbc_agile` cards.
+The CI workflow warms cached `models/gear-sonic/`, `models/decoupled-wbc/`,
+and `models/wbc-agile/` checkpoint directories, builds the same mixed-source
+showcase, and uploads it as the `policy-showcase` artifact. Each run contains
+an auto-generated `index.html` plus per-policy `.json`, `.rrd`, `.log`, and
+embedded Rerun viewer assets for the real CPU `gear_sonic`, `decoupled_wbc`,
+and `wbc_agile` cards, plus the fixture-backed `bfm_zero` and `hover` cards.
 
 ## Python SDK
 
@@ -192,7 +224,7 @@ That exposes the same registry-driven runtime from Python:
 ```python
 from robowbc import Observation, Registry
 
-policy = Registry.build("decoupled_wbc", "configs/decoupled_g1.toml")
+policy = Registry.build("decoupled_wbc", "configs/decoupled_smoke.toml")
 obs = Observation(
     joint_positions=[0.0] * 4,
     joint_velocities=[0.0] * 4,
