@@ -188,6 +188,7 @@ impl RobotTransport for SyntheticTransport {
         self.step = self.step.saturating_add(1);
         Ok(ImuSample {
             gravity_vector: [0.0, 0.0, -1.0],
+            angular_velocity: [0.0, 0.0, 0.0],
             timestamp: Instant::now(),
         })
     }

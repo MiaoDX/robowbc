@@ -1,27 +1,30 @@
 # BFM-Zero policy on Unitree G1 (29 DOF).
 #
-# BFM-Zero is a CMU reinforcement-learning whole-body controller.
-# License: CC BY-NC 4.0  (non-commercial use only).
-# Hardware: Unitree G1 (29 DOF).
+# BFM-Zero (CMU, CC BY-NC 4.0) publishes a promptable ONNX policy plus latent
+# context files on its public deploy path. This config targets the real G1
+# tracking contract wired in `robowbc-ort`.
 #
-# ## Obtaining the model
+# ## Preparing assets
 #
-# BFM-Zero does not yet ship a pre-built ONNX checkpoint. To export one:
+# 1. Download the upstream BFM-Zero `model/` folder after accepting the Hugging Face terms.
+# 2. Convert it into RoboWBC's normalized layout:
 #
-#   git clone https://github.com/... bfm-zero
-#   cd bfm-zero
-#   python export_onnx.py \
-#       --checkpoint checkpoints/bfm_zero_g1.pt \
-#       --output models/bfm_zero_g1.onnx
+#      python scripts/prepare_bfm_zero_assets.py #          --source /path/to/BFM-Zero/model #          --output models/bfm_zero
 #
-# Then update `policy.config.model.model_path` below.
+#    The script copies the exported ONNX checkpoint to
+#    `models/bfm_zero/bfm_zero_g1.onnx` and converts `zs_walking.pkl` into
+#    `models/bfm_zero/zs_walking.npy`.
 #
-# ## Running
+# 3. Run:
 #
-#   robowbc run --config configs/bfm_zero_g1.toml
+#      robowbc run --config configs/bfm_zero_g1.toml
 
 [policy]
 name = "bfm_zero"
+
+[policy.config]
+contract = "g1_tracking"
+action_rescale = 5.0
 
 [policy.config.model]
 model_path = "models/bfm_zero/bfm_zero_g1.onnx"
@@ -29,7 +32,12 @@ execution_provider = { type = "cpu" }
 optimization_level = "extended"
 num_threads = 1
 
-# Switch to CUDA once the model is validated on CPU:
+[policy.config.tracking]
+context_path = "models/bfm_zero/zs_walking.npy"
+gamma = 0.8
+window_size = 3
+
+# Switch to CUDA once the checkpoint is validated on your machine:
 # execution_provider = { type = "cuda", device_id = 0 }
 
 [robot]
@@ -40,7 +48,8 @@ frequency_hz = 50
 topics = { joint_state = "unitree/g1/joint_state", imu = "unitree/g1/imu", joint_target_command = "unitree/g1/command/joint_position" }
 
 [runtime]
-# BFM-Zero uses a velocity command: [vx m/s, vy m/s, yaw_rate rad/s].
-# The runtime section uses the `velocity` field to select WbcCommand::Velocity.
-velocity = [0.3, 0.0, 0.0]
+# The real G1 tracking path advances its latent sequence from the converted
+# `tracking.context_path`. `motion_tokens` are ignored unless you explicitly
+# pass a full 256D latent override.
+motion_tokens = [0.0]
 max_ticks = 200

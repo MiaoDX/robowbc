@@ -79,6 +79,8 @@ pub struct JointState {
 pub struct ImuSample {
     /// Gravity vector in body frame.
     pub gravity_vector: [f32; 3],
+    /// Body-frame angular velocity from the IMU gyro in rad/s.
+    pub angular_velocity: [f32; 3],
     /// Capture time for this sample.
     pub timestamp: Instant,
 }
@@ -210,6 +212,7 @@ where
         joint_positions: joint.positions,
         joint_velocities: joint.velocities,
         gravity_vector: imu.gravity_vector,
+        angular_velocity: imu.angular_velocity,
         command,
         timestamp: std::cmp::max(joint.timestamp, imu.timestamp),
     };
@@ -301,6 +304,7 @@ mod tests {
     fn sample_imu(ts: Instant) -> ImuSample {
         ImuSample {
             gravity_vector: [0.0, 0.0, -1.0],
+            angular_velocity: [0.0, 0.0, 0.0],
             timestamp: ts,
         }
     }

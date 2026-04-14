@@ -62,6 +62,8 @@ pub struct Observation {
     pub joint_velocities: Vec<f32>,
     /// Gravity vector in robot body frame.
     pub gravity_vector: [f32; 3],
+    /// Body-frame angular velocity from the IMU gyro in rad/s.
+    pub angular_velocity: [f32; 3],
     /// High-level command payload.
     pub command: WbcCommand,
     /// Sample timestamp.
@@ -294,6 +296,7 @@ mod tests {
             joint_positions: vec![0.1, -0.2],
             joint_velocities: vec![0.0, 0.1],
             gravity_vector: [0.0, 0.0, -1.0],
+            angular_velocity: [0.0, 0.0, 0.0],
             command: WbcCommand::Velocity(Twist {
                 linear: [0.2, 0.0, 0.0],
                 angular: [0.0, 0.0, 0.3],
@@ -438,6 +441,7 @@ mod tests {
             joint_positions: vec![0.3, -0.1],
             joint_velocities: vec![0.1, -0.1],
             gravity_vector: [0.0, 0.0, -1.0],
+            angular_velocity: [0.0, 0.0, 0.0],
             command: WbcCommand::MotionTokens(vec![1.0, 2.0]),
             timestamp: now,
         };
