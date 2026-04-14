@@ -4,7 +4,7 @@
 //!
 //! | Message     | Layout                                              |
 //! |-------------|-----------------------------------------------------|
-//! | Low State   | `[u32 n][f32×n pos][f32×n vel][f32×3 gravity]`      |
+//! | Low State   | `[u32 n][f32×n pos][f32×n vel][f32×3 gravity][f32×3 ang_vel]` |
 //! | Low Command | `[u32 n][f32×n pos][f32×n kp][f32×n kd]`            |
 
 use std::time::Instant;
@@ -23,6 +23,8 @@ pub struct WireJointState {
     pub joint_velocities: Vec<f32>,
     /// Gravity vector in the robot body frame.
     pub gravity_vector: [f32; 3],
+    /// Body-frame angular velocity in rad/s.
+    pub angular_velocity: [f32; 3],
     /// Local reception timestamp.
     pub timestamp: Instant,
 }
@@ -40,10 +42,14 @@ pub enum WireError {
     },
 }
 
+const fn legacy_state_payload_len(n: usize) -> usize {
+    4 + 8 * n + 12 // header + 2×f32 per joint + gravity
+}
+
 /// Expected byte count for a state payload with `n` joints.
 #[must_use]
 pub const fn state_payload_len(n: usize) -> usize {
-    4 + 8 * n + 12 // header + 2×f32 per joint + gravity
+    4 + 8 * n + 24 // header + 2×f32 per joint + gravity + angular velocity
 }
 
 /// Expected byte count for a command payload with `n` joints.
@@ -61,6 +67,7 @@ pub fn encode_state(state: &WireJointState) -> Vec<u8> {
     extend_f32_slice(&mut buf, &state.joint_positions);
     extend_f32_slice(&mut buf, &state.joint_velocities);
     extend_f32_slice(&mut buf, &state.gravity_vector);
+    extend_f32_slice(&mut buf, &state.angular_velocity);
     buf
 }
 
@@ -78,7 +85,8 @@ pub fn decode_state(bytes: &[u8]) -> Result<WireJointState, WireError> {
     }
     let n = read_u32(bytes, 0) as usize;
     let expected = state_payload_len(n);
-    if bytes.len() != expected {
+    let legacy_expected = legacy_state_payload_len(n);
+    if bytes.len() != expected && bytes.len() != legacy_expected {
         return Err(WireError::InvalidPayload {
             expected,
             actual: bytes.len(),
@@ -90,10 +98,20 @@ pub fn decode_state(bytes: &[u8]) -> Result<WireJointState, WireError> {
     let gx = read_f32(bytes, &mut off);
     let gy = read_f32(bytes, &mut off);
     let gz = read_f32(bytes, &mut off);
+    let angular_velocity = if bytes.len() == expected {
+        [
+            read_f32(bytes, &mut off),
+            read_f32(bytes, &mut off),
+            read_f32(bytes, &mut off),
+        ]
+    } else {
+        [0.0, 0.0, 0.0]
+    };
     Ok(WireJointState {
         joint_positions: positions,
         joint_velocities: velocities,
         gravity_vector: [gx, gy, gz],
+        angular_velocity,
         timestamp: Instant::now(),
     })
 }
@@ -199,6 +217,7 @@ mod tests {
             joint_positions: vec![0.1, -0.2, 0.3],
             joint_velocities: vec![1.0, -1.0, 0.5],
             gravity_vector: [0.0, 0.0, -9.81],
+            angular_velocity: [0.1, -0.2, 0.3],
             timestamp: Instant::now(),
         };
         let bytes = encode_state(&original);
@@ -208,6 +227,7 @@ mod tests {
         assert_eq!(decoded.joint_positions, original.joint_positions);
         assert_eq!(decoded.joint_velocities, original.joint_velocities);
         assert_eq!(decoded.gravity_vector, original.gravity_vector);
+        assert_eq!(decoded.angular_velocity, original.angular_velocity);
     }
 
     #[test]
@@ -229,7 +249,7 @@ mod tests {
 
     #[test]
     fn state_payload_len_29_joints() {
-        assert_eq!(state_payload_len(29), 248);
+        assert_eq!(state_payload_len(29), 260);
     }
 
     #[test]
@@ -261,6 +281,7 @@ mod tests {
             joint_positions: vec![],
             joint_velocities: vec![],
             gravity_vector: [0.0, 0.0, -9.81],
+            angular_velocity: [0.0, 0.0, 0.0],
             timestamp: Instant::now(),
         };
         let bytes = encode_state(&state);
@@ -268,5 +289,22 @@ mod tests {
         let decoded = decode_state(&bytes).unwrap();
         assert!(decoded.joint_positions.is_empty());
         assert_eq!(decoded.gravity_vector, state.gravity_vector);
+        assert_eq!(decoded.angular_velocity, state.angular_velocity);
+    }
+
+    #[test]
+    #[allow(clippy::float_cmp)]
+    fn decode_legacy_state_defaults_angular_velocity_to_zero() {
+        let mut bytes = Vec::with_capacity(legacy_state_payload_len(2));
+        bytes.extend_from_slice(&u32_to_le(2));
+        extend_f32_slice(&mut bytes, &[0.1, -0.2]);
+        extend_f32_slice(&mut bytes, &[1.0, -1.5]);
+        extend_f32_slice(&mut bytes, &[0.0, 0.0, -9.81]);
+
+        let decoded = decode_state(&bytes).unwrap();
+        assert_eq!(decoded.joint_positions, vec![0.1, -0.2]);
+        assert_eq!(decoded.joint_velocities, vec![1.0, -1.5]);
+        assert_eq!(decoded.gravity_vector, [0.0, 0.0, -9.81]);
+        assert_eq!(decoded.angular_velocity, [0.0, 0.0, 0.0]);
     }
 }

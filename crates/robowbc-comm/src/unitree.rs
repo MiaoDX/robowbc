@@ -164,6 +164,10 @@ pub struct UnitreeG1Transport {
     node: crate::zenoh_comm::CommNode,
     // IMU gravity vector from the last joint-state message.
     cached_gravity: [f32; 3],
+    // IMU angular velocity from the last joint-state message.
+    cached_angular_velocity: [f32; 3],
+    // IMU sample timestamp from the last joint-state message.
+    cached_imu_timestamp: Instant,
     // Last sent positions — used for velocity-limit delta clamping.
     prev_positions: Vec<f32>,
     robot: RobotConfig,
@@ -211,6 +215,8 @@ impl UnitreeG1Transport {
             rt,
             node,
             cached_gravity: [0.0, 0.0, -1.0],
+            cached_angular_velocity: [0.0, 0.0, 0.0],
+            cached_imu_timestamp: Instant::now(),
             prev_positions,
             robot,
             frequency_hz,
@@ -226,8 +232,10 @@ impl RobotTransport for UnitreeG1Transport {
             .map_err(|_| CommError::JointStateUnavailable)?;
 
         // The Unitree wire format combines joint state + IMU in one message.
-        // Cache the gravity vector for the subsequent `recv_imu()` call.
+        // Cache the IMU sample for the subsequent `recv_imu()` call.
         self.cached_gravity = wire.gravity_vector;
+        self.cached_angular_velocity = wire.angular_velocity;
+        self.cached_imu_timestamp = wire.timestamp;
 
         Ok(JointState {
             positions: wire.joint_positions,
@@ -237,11 +245,11 @@ impl RobotTransport for UnitreeG1Transport {
     }
 
     fn recv_imu(&mut self) -> Result<ImuSample, CommError> {
-        // Return the gravity cached by the most recent `recv_joint_state`.
+        // Return the IMU sample cached by the most recent `recv_joint_state`.
         Ok(ImuSample {
             gravity_vector: self.cached_gravity,
-            angular_velocity: [0.0, 0.0, 0.0],
-            timestamp: Instant::now(),
+            angular_velocity: self.cached_angular_velocity,
+            timestamp: self.cached_imu_timestamp,
         })
     }
 
@@ -454,6 +462,7 @@ mod tests {
             joint_positions: vec![0.1, 0.2, 0.3],
             joint_velocities: vec![0.0, 0.0, 0.0],
             gravity_vector: [0.0, 0.0, -1.0],
+            angular_velocity: [0.2, -0.1, 0.05],
             timestamp: Instant::now(),
         };
         let payload = crate::wire::encode_state(&wire_state);
@@ -469,7 +478,9 @@ mod tests {
         #[allow(clippy::float_cmp)]
         {
             assert_eq!(imu.gravity_vector, [0.0_f32, 0.0, -1.0]);
+            assert_eq!(imu.angular_velocity, [0.2_f32, -0.1, 0.05]);
         }
+        assert_eq!(imu.timestamp, js.timestamp);
 
         // Position clamping: request 2.0 rad — should be clipped to 1.0.
         let targets = make_targets(vec![2.0, -2.0, 0.5]);
