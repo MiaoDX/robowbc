@@ -85,7 +85,7 @@ POLICIES = [
         "required_paths": [
             "models/hover/hover_h1.onnx",
         ],
-        "blocked_reason": "HOVER does not ship public pretrained ONNX weights. Export your own checkpoint from the upstream training repo to enable this card.",
+        "blocked_reason": "HOVER ships public code and deployment tooling, but the public repo/releases do not include pretrained checkpoints. Provide your own exported ONNX model to enable this card.",
     },
     {
         "id": "wbc_agile",
@@ -108,16 +108,16 @@ POLICIES = [
         "title": "WholeBodyVLA",
         "config": "configs/wholebody_vla_x2.toml",
         "source": "OpenDriveLab",
-        "summary": "Real AGIBOT X2 kinematic-pose wrapper for WholeBodyVLA, ready to run when a user-exported ONNX checkpoint is available.",
-        "coverage": "KinematicPose-driven whole-body VLA handoff",
-        "execution_kind": "real",
-        "checkpoint_source": "User-exported WholeBodyVLA ONNX checkpoint",
+        "summary": "Experimental AGIBOT X2 kinematic-pose contract wrapper for WholeBodyVLA. The public upstream project does not yet expose a runnable inference release, so this card documents the expected handoff shape and stays blocked until a compatible local model exists.",
+        "coverage": "Experimental KinematicPose contract placeholder",
+        "execution_kind": "experimental",
+        "checkpoint_source": "Local/private WholeBodyVLA ONNX checkpoint",
         "command_source": "runtime.kinematic_pose",
         "model_artifact": "models/wholebody_vla/wholebody_vla_x2.onnx",
         "required_paths": [
             "models/wholebody_vla/wholebody_vla_x2.onnx",
         ],
-        "blocked_reason": "WholeBodyVLA does not publish a ready-to-run ONNX checkpoint. Export one from the upstream training repo to enable this card.",
+        "blocked_reason": "The public WholeBodyVLA repo does not currently provide runnable code or ONNX checkpoints. This wrapper remains blocked until a compatible local model is available.",
     },
 ]
 
@@ -651,6 +651,8 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
       --shadow: 0 18px 50px rgba(20, 32, 51, 0.08);
       --real-bg: #e7f7ef;
       --real-fg: #11643a;
+      --experimental-bg: #fff4e5;
+      --experimental-fg: #9a3412;
       --fixture-bg: #e7f0ff;
       --fixture-fg: #1146a6;
       --blocked-bg: #fff1f2;
@@ -679,6 +681,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
     .badge-row {{ display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }}
     .pill {{ border-radius: 999px; padding: 8px 12px; font-size: 0.82rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; display: inline-flex; align-items: center; }}
     .pill.real {{ background: var(--real-bg); color: var(--real-fg); }}
+    .pill.experimental {{ background: var(--experimental-bg); color: var(--experimental-fg); }}
     .pill.fixture {{ background: var(--fixture-bg); color: var(--fixture-fg); }}
     .pill.blocked {{ background: var(--blocked-bg); color: var(--blocked-fg); }}
     .pill.ok {{ background: var(--real-bg); color: var(--real-fg); }}

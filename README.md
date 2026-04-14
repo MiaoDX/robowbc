@@ -34,9 +34,13 @@ control loops, latency, and target trajectories with the same data pipeline.
 - No-download smoke paths remain available through
   `configs/decoupled_smoke.toml` and `configs/decoupled_h1.toml`, both backed
   by the checked-in dynamic identity ONNX fixture.
-- `configs/wholebody_vla_x2.toml`, `configs/hover_h1.toml`, and
-  `configs/wbc_agile_t1.toml` are honest blocked configs today: the wrappers
-  load, but they still need public or user-exported model assets.
+- `configs/hover_h1.toml`, `configs/wbc_agile_t1.toml`, and
+  `configs/wholebody_vla_x2.toml` remain honest blocked configs today:
+  `hover` needs a user-trained/exported checkpoint because the public upstream
+  repo ships deployment code but no pretrained model, `wbc_agile_t1` still
+  needs a matching user export, and `wholebody_vla` is an experimental
+  contract wrapper because the public upstream repo does not yet ship runnable
+  code or ONNX weights.
 - CI runs Rust build/test/lint/format checks, Rust API docs, `mdBook`, Python
   wheel smoke tests, and a mixed-source policy showcase artifact with real CPU
   `gear_sonic`, `decoupled_wbc`, `wbc_agile`, and `bfm_zero` cards plus honest
@@ -151,10 +155,10 @@ without copying an existing example by hand.
 |--------|-------------------|---------|-------|
 | `gear_sonic` | `configs/sonic_g1.toml` | `robowbc-ort` | Real `planner_sonic.onnx` velocity path today; encoder/decoder tracking contract still pending |
 | `decoupled_wbc` | `configs/decoupled_smoke.toml`, `configs/decoupled_g1.toml`, `configs/decoupled_h1.toml` | `robowbc-ort` | Real public G1 history contract plus fixture-backed smoke paths |
-| `hover` | `configs/hover_h1.toml` | `robowbc-ort` | Real H1 wrapper is wired, but upstream does not ship public pretrained ONNX weights; provide a user-exported checkpoint |
+| `hover` | `configs/hover_h1.toml` | `robowbc-ort` | Real H1 wrapper is wired, but the public repo/releases do not include pretrained checkpoints; provide a user-trained/exported ONNX model |
 | `wbc_agile` | `configs/wbc_agile_g1.toml`, `configs/wbc_agile_t1.toml` | `robowbc-ort` | Real public G1 checkpoint; the T1 config still expects a user-exported ONNX model |
 | `bfm_zero` | `configs/bfm_zero_g1.toml` | `robowbc-ort` | Real public G1 tracking contract is wired; `scripts/download_bfm_zero_models.sh` fetches and normalizes the upstream ONNX + tracking context automatically |
-| `wholebody_vla` | `configs/wholebody_vla_x2.toml` | `robowbc-ort` | Real `KinematicPose` wrapper is wired, but no public X2 ONNX checkpoint is available yet |
+| `wholebody_vla` | `configs/wholebody_vla_x2.toml` | `robowbc-ort` | Experimental X2 `KinematicPose` contract wrapper; the public upstream repo does not yet provide runnable code or ONNX checkpoints |
 | `py_model` | user-supplied TOML | `robowbc-pyo3` | Loads Python scripts or PyTorch checkpoints through PyO3 |
 
 ## Visualization and reports

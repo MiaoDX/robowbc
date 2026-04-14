@@ -6,10 +6,11 @@
 # This config selects locomotion mode (indices 0–2 active: vx, vy, yaw_rate).
 # Change `mode_mask` to enable body-pose mode (indices 3–5) or other modes.
 #
-# Model download: trained weights are not publicly distributed.
-# To export your own HOVER model from the NVIDIA HOVER codebase:
-#   1. Train in Isaac Lab: python train.py --task HoverH1
-#   2. Export to ONNX: python export_onnx.py --checkpoint <path> --output models/hover/
+# Model availability: the public HOVER repo ships deployment code, but it does
+# not include pretrained H1 checkpoints or ONNX exports.
+# To use this config today you must train or otherwise obtain your own HOVER
+# checkpoint, then export it with your own tooling to
+# `models/hover/hover_h1.onnx`.
 # Expected model I/O shape:
 #   input:  [1, 2*n + 3 + 2*command_dim]  (n = 19 for H1, command_dim = 15)
 #   output: [1, n]  (19 joint position targets)
