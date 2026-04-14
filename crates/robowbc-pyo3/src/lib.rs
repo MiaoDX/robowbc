@@ -8,7 +8,7 @@
 //!
 //! The Python callable receives a 1-D `numpy.ndarray` of `float32` values:
 //! ```text
-//! [joint_positions (N), joint_velocities (N), gravity_vector (3), command_floats...]
+//! [joint_positions (N), joint_velocities (N), gravity_vector (3), angular_velocity (3), command_floats...]
 //! ```
 //! where `command_floats` are:
 //! - `MotionTokens(v)` → `v`
@@ -256,11 +256,12 @@ impl robowbc_core::WbcPolicy for PyModelPolicy {
             ));
         }
 
-        // Build flat observation: [positions, velocities, gravity, command...]
-        let mut obs_flat: Vec<f32> = Vec::with_capacity(self.robot.joint_count * 2 + 3);
+        // Build flat observation: [positions, velocities, gravity, angular_velocity, command...]
+        let mut obs_flat: Vec<f32> = Vec::with_capacity(self.robot.joint_count * 2 + 6);
         obs_flat.extend_from_slice(&obs.joint_positions);
         obs_flat.extend_from_slice(&obs.joint_velocities);
         obs_flat.extend_from_slice(&obs.gravity_vector);
+        obs_flat.extend_from_slice(&obs.angular_velocity);
         obs_flat.extend(command_to_floats(&obs.command));
 
         Python::attach(|py| {
@@ -362,6 +363,7 @@ mod tests {
             joint_positions: (0..n).map(|i| i as f32 * 0.1).collect(),
             joint_velocities: vec![0.0; n],
             gravity_vector: [0.0, 0.0, -1.0],
+            angular_velocity: [0.0, 0.0, 0.0],
             command: WbcCommand::MotionTokens(vec![0.5; 4]),
             timestamp: Instant::now(),
         }
@@ -511,6 +513,7 @@ mod tests {
             joint_positions: vec![0.1, 0.2, 0.3, 0.4],
             joint_velocities: vec![0.0; 4],
             gravity_vector: [0.0, 0.0, -1.0],
+            angular_velocity: [0.0, 0.0, 0.0],
             command: WbcCommand::Velocity(Twist {
                 linear: [0.5, 0.0, 0.0],
                 angular: [0.0, 0.0, 0.3],

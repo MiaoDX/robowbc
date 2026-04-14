@@ -20,6 +20,7 @@ Interface mapping
 | ``observation.velocity``            | ``joint_velocities``                     |
 +-------------------------------------+------------------------------------------+
 | ``observation.imu[:3]``             | ``gravity_vector``                       |
+| ``observation.imu[3:6]``            | ``angular_velocity``                     |
 +-------------------------------------+------------------------------------------+
 | ``observation.task_cmd``            | ``command_data`` (``command_type="velocity"``) |
 +-------------------------------------+------------------------------------------+
@@ -135,6 +136,12 @@ class RoboWBCController:
         # Gravity vector: projected_gravity is imu[:3].
         gravity = [float(imu[0]), float(imu[1]), float(imu[2])]
 
+        angular_velocity = [
+            float(imu[3]) if len(imu) > 3 else 0.0,
+            float(imu[4]) if len(imu) > 4 else 0.0,
+            float(imu[5]) if len(imu) > 5 else 0.0,
+        ]
+
         # Velocity command: expand [vx, vy, omega] → [vx, vy, vz, wx, wy, wz].
         cmd_list = [float(v) for v in cmd]
         if len(cmd_list) == 3:
@@ -151,6 +158,7 @@ class RoboWBCController:
             joint_positions=[float(v) for v in obs_dict["observation.state"]],
             joint_velocities=[float(v) for v in obs_dict["observation.velocity"]],
             gravity_vector=(gravity[0], gravity[1], gravity[2]),
+            angular_velocity=(angular_velocity[0], angular_velocity[1], angular_velocity[2]),
             command_type="velocity",
             command_data=cmd_6,
         )

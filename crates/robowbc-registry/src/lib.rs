@@ -228,6 +228,7 @@ mod tests {
             joint_positions: vec![0.5, -1.0],
             joint_velocities: vec![0.0, 0.0],
             gravity_vector: [0.0, 0.0, -1.0],
+            angular_velocity: [0.0, 0.0, 0.0],
             command: robowbc_core::WbcCommand::MotionTokens(vec![0.1]),
             timestamp: Instant::now(),
         };
@@ -259,6 +260,7 @@ gain = 3.0
             joint_positions: vec![1.0],
             joint_velocities: vec![0.0],
             gravity_vector: [0.0, 0.0, -1.0],
+            angular_velocity: [0.0, 0.0, 0.0],
             command: robowbc_core::WbcCommand::MotionTokens(vec![0.1]),
             timestamp: Instant::now(),
         };

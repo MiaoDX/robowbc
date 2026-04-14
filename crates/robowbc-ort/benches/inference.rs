@@ -194,6 +194,7 @@ fn bench_gear_sonic_predict(c: &mut Criterion) {
         joint_positions: vec![0.0; n],
         joint_velocities: vec![0.0; n],
         gravity_vector: [0.0, 0.0, -1.0],
+        angular_velocity: [0.0, 0.0, 0.0],
         command: WbcCommand::MotionTokens(vec![0.0; 4]),
         timestamp: Instant::now(),
     };
@@ -232,6 +233,7 @@ fn bench_decoupled_wbc_predict(c: &mut Criterion) {
         joint_positions: vec![0.5, -0.3, 0.1, 0.2],
         joint_velocities: vec![0.01, -0.02, 0.0, 0.0],
         gravity_vector: [0.0, 0.0, -1.0],
+        angular_velocity: [0.0, 0.0, 0.0],
         command: WbcCommand::Velocity(robowbc_core::Twist {
             linear: [0.2, 0.0, 0.0],
             angular: [0.0, 0.0, 0.1],

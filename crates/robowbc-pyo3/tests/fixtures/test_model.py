@@ -5,7 +5,7 @@ Defines a ``predict`` callable that accepts a 1-D numpy float32 array
 length 4 (matching the 4-joint test robot).
 
 The observation layout is:
-  [joint_positions (4), joint_velocities (4), gravity (3), command...]
+  [joint_positions (4), joint_velocities (4), gravity (3), angular_velocity (3), command...]
 
 This fixture intentionally uses no PyTorch so the test suite can run in
 any environment that has Python 3.10+ and NumPy.

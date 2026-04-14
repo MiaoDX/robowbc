@@ -240,6 +240,7 @@ impl RobotTransport for UnitreeG1Transport {
         // Return the gravity cached by the most recent `recv_joint_state`.
         Ok(ImuSample {
             gravity_vector: self.cached_gravity,
+            angular_velocity: [0.0, 0.0, 0.0],
             timestamp: Instant::now(),
         })
     }

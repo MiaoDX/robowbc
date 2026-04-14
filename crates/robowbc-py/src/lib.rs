@@ -28,6 +28,7 @@
 //!     joint_positions=[0.0] * 23,
 //!     joint_velocities=[0.0] * 23,
 //!     gravity_vector=[0.0, 0.0, -1.0],
+//!     angular_velocity=[0.0, 0.0, 0.0],
 //!     command_type="velocity",
 //!     command_data=[0.5, 0.0, 0.0, 0.0, 0.0, 0.3],
 //! )
@@ -103,6 +104,8 @@ fn load_from_config(config_path: &str) -> PyResult<PyPolicy> {
 ///     Current joint velocities in rad/s, same length as `joint_positions`.
 /// `gravity_vector` : tuple[float, float, float]
 ///     Gravity direction in the robot body frame (typically `[0, 0, -1]`).
+/// `angular_velocity` : tuple[float, float, float], optional
+///     Body-frame angular velocity from the IMU gyro in rad/s. Defaults to zeros.
 /// `command_type` : str
 ///     One of `"velocity"`, `"motion_tokens"`, or `"joint_targets"`.
 /// `command_data` : list[float]
@@ -119,6 +122,9 @@ pub struct PyObservation {
     /// Gravity vector in robot body frame.
     #[pyo3(get, set)]
     pub gravity_vector: [f32; 3],
+    /// Body-frame angular velocity from the IMU gyro in rad/s.
+    #[pyo3(get, set)]
+    pub angular_velocity: [f32; 3],
     /// Command variant name.
     #[pyo3(get, set)]
     pub command_type: String,
@@ -130,18 +136,20 @@ pub struct PyObservation {
 #[pymethods]
 impl PyObservation {
     #[new]
-    #[pyo3(signature = (joint_positions, joint_velocities, gravity_vector, command_type, command_data))]
+    #[pyo3(signature = (joint_positions, joint_velocities, gravity_vector, command_type, command_data, angular_velocity=None))]
     fn new(
         joint_positions: Vec<f32>,
         joint_velocities: Vec<f32>,
         gravity_vector: [f32; 3],
         command_type: String,
         command_data: Vec<f32>,
+        angular_velocity: Option<[f32; 3]>,
     ) -> Self {
         Self {
             joint_positions,
             joint_velocities,
             gravity_vector,
+            angular_velocity: angular_velocity.unwrap_or([0.0, 0.0, 0.0]),
             command_type,
             command_data,
         }
@@ -191,6 +199,7 @@ fn into_observation(obs: &PyObservation) -> PyResult<Observation> {
         joint_positions: obs.joint_positions.clone(),
         joint_velocities: obs.joint_velocities.clone(),
         gravity_vector: obs.gravity_vector,
+        angular_velocity: obs.angular_velocity,
         command,
         timestamp: Instant::now(),
     })

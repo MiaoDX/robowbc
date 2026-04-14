@@ -574,6 +574,7 @@ mod tests {
             joint_positions: vec![0.0; 4],
             joint_velocities: vec![0.0; 4],
             gravity_vector: [0.0, 0.0, -1.0],
+            angular_velocity: [0.0, 0.0, 0.0],
             command: WbcCommand::MotionTokens(vec![1.0]),
             timestamp: Instant::now(),
         };
@@ -607,6 +608,7 @@ mod tests {
             joint_positions: vec![0.5, -0.3, 0.1, 0.2],
             joint_velocities: vec![0.01, -0.02, 0.0, 0.0],
             gravity_vector: [0.0, 0.0, -1.0],
+            angular_velocity: [0.0, 0.0, 0.0],
             command: WbcCommand::Velocity(Twist {
                 linear: [0.2, 0.0, 0.0],
                 angular: [0.0, 0.0, 0.1],
@@ -647,6 +649,7 @@ mod tests {
             joint_positions: vec![0.1, 0.2, 0.3, 0.4],
             joint_velocities: vec![0.0; 4],
             gravity_vector: [0.0, 0.0, -1.0],
+            angular_velocity: [0.0, 0.0, 0.0],
             command: WbcCommand::Velocity(Twist {
                 linear: [0.5, 0.0, 0.0],
                 angular: [0.0, 0.0, 0.0],
@@ -743,6 +746,7 @@ mod tests {
             joint_positions: vec![0.0; N],
             joint_velocities: vec![0.0; N],
             gravity_vector: [0.0, 0.0, -1.0],
+            angular_velocity: [0.0, 0.0, 0.0],
             command: WbcCommand::Velocity(Twist {
                 linear: [0.2, 0.0, 0.0],
                 angular: [0.0, 0.0, 0.0],
@@ -787,6 +791,7 @@ mod tests {
             joint_positions: robot.default_pose.clone(),
             joint_velocities: vec![0.0; robot.joint_count],
             gravity_vector: [0.0, 0.0, -1.0],
+            angular_velocity: [0.0, 0.0, 0.0],
             command: WbcCommand::Velocity(Twist {
                 linear: [0.5, 0.1, 0.0],
                 angular: [0.0, 0.0, 0.2],
@@ -849,6 +854,7 @@ mod tests {
             joint_positions: robot.default_pose.clone(),
             joint_velocities: vec![0.0; robot.joint_count],
             gravity_vector: [0.0, 0.0, -1.0],
+            angular_velocity: [0.0, 0.0, 0.0],
             command: WbcCommand::Velocity(Twist {
                 linear: [0.3, 0.0, 0.0],
                 angular: [0.0, 0.0, 0.0],

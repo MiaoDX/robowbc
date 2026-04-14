@@ -21,6 +21,8 @@ pub struct MujocoTransport {
     jointpos_offset: usize,
     /// Sensor-data index where the 29 jointvel sensors begin.
     jointvel_offset: usize,
+    /// Sensor-data index of the IMU gyro (3 values).
+    gyro_offset: usize,
     /// Sensor-data index of the IMU accelerometer (3 values).
     accel_offset: usize,
 }
@@ -51,6 +53,7 @@ impl MujocoTransport {
         let joint_count = robot_config.joint_count;
         let jointpos_offset = 0;
         let jointvel_offset = joint_count;
+        let gyro_offset = joint_count * 2 + 4;
         // framequat(4) + gyro(3) = 7 values between jointvel end and accelerometer
         let accel_offset = joint_count * 2 + 4 + 3;
 
@@ -61,6 +64,7 @@ impl MujocoTransport {
             config,
             jointpos_offset,
             jointvel_offset,
+            gyro_offset,
             accel_offset,
         })
     }
@@ -103,6 +107,12 @@ impl RobotTransport for MujocoTransport {
     fn recv_imu(&mut self) -> Result<ImuSample, CommError> {
         let sensor = self.data.sensordata();
 
+        let angular_velocity = [
+            sensor[self.gyro_offset] as f32,
+            sensor[self.gyro_offset + 1] as f32,
+            sensor[self.gyro_offset + 2] as f32,
+        ];
+
         // Read accelerometer (3 values). When stationary the accelerometer
         // measures the reaction to gravity: roughly [0, 0, +9.81].
         // The policy expects a unit gravity vector in body frame, so we
@@ -120,6 +130,7 @@ impl RobotTransport for MujocoTransport {
 
         Ok(ImuSample {
             gravity_vector,
+            angular_velocity,
             timestamp: Instant::now(),
         })
     }

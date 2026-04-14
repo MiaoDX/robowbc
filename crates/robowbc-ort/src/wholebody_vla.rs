@@ -311,6 +311,7 @@ mod tests {
             joint_positions: vec![0.0; 4],
             joint_velocities: vec![0.0; 4],
             gravity_vector: [0.0, 0.0, -1.0],
+            angular_velocity: [0.0, 0.0, 0.0],
             command: WbcCommand::MotionTokens(vec![1.0]),
             timestamp: Instant::now(),
         };
@@ -343,6 +344,7 @@ mod tests {
             joint_positions: vec![0.1, 0.2, 0.3, 0.4],
             joint_velocities: vec![0.01, 0.02, 0.03, 0.04],
             gravity_vector: [0.0, 0.0, -1.0],
+            angular_velocity: [0.0, 0.0, 0.0],
             command: WbcCommand::KinematicPose(BodyPose {
                 links: vec![LinkPose {
                     link_name: "left_wrist".to_owned(),
@@ -386,6 +388,7 @@ mod tests {
             joint_positions: vec![0.5, -0.5, 0.3, -0.3],
             joint_velocities: vec![0.0; 4],
             gravity_vector: [0.0, 0.0, -1.0],
+            angular_velocity: [0.0, 0.0, 0.0],
             command: WbcCommand::KinematicPose(BodyPose { links: vec![] }),
             timestamp: Instant::now(),
         };
@@ -447,6 +450,7 @@ mod tests {
             joint_positions: vec![0.0; 23],
             joint_velocities: vec![0.0; 23],
             gravity_vector: [0.0, 0.0, -1.0],
+            angular_velocity: [0.0, 0.0, 0.0],
             command: WbcCommand::KinematicPose(BodyPose {
                 links: vec![
                     LinkPose {
