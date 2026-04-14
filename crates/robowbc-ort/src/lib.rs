@@ -167,11 +167,21 @@ static ORT_RUNTIME_INIT: OnceLock<Result<(), String>> = OnceLock::new();
 fn ensure_onnxruntime_loaded() -> Result<(), OrtError> {
     ORT_RUNTIME_INIT
         .get_or_init(|| {
-            let builder = match resolved_onnxruntime_dylib_path() {
-                Some(path) => ort::init_from(path).map_err(|e| e.to_string())?,
-                None => ort::init(),
-            };
-            let _ = builder.commit();
+            // Fail fast when no library path is known. Falling back to
+            // ort::init() with no path can trigger a runtime HTTPS download
+            // that hangs indefinitely on networks with untrusted TLS certificates.
+            let path = resolved_onnxruntime_dylib_path().ok_or_else(|| {
+                "ONNX Runtime shared library not found. \
+                 Build the crate in a network-accessible environment so the \
+                 build script can download it, or point ROBOWBC_ORT_DYLIB_PATH \
+                 / ORT_DYLIB_PATH at a local libonnxruntime.so file."
+                    .to_owned()
+            })?;
+            if !ort::init_from(path).map_err(|e| e.to_string())?.commit() {
+                return Err(
+                    "OrtEnvironment commit returned false; ORT initialization failed".to_owned(),
+                );
+            }
             Ok(())
         })
         .clone()
