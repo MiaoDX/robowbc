@@ -327,6 +327,15 @@ def run_policy(repo_root: Path, binary: Path, output_dir: Path, policy: dict[str
         raise SystemExit(
             f"policy showcase run failed for {policy_id} with exit code {proc.returncode}; see {log_path}"
         )
+    if not json_path.exists():
+        raise SystemExit(
+            f"policy showcase run for {policy_id} did not write the expected report JSON at {json_path}; see {log_path}"
+        )
+    if not rrd_path.exists():
+        raise SystemExit(
+            f"policy showcase run for {policy_id} did not write the expected Rerun recording at {rrd_path}; "
+            "build robowbc with --features robowbc-cli/vis before running the showcase generator"
+        )
 
     report = json.loads(json_path.read_text(encoding="utf-8"))
     report["status"] = "ok"
@@ -854,6 +863,10 @@ def main() -> int:
     repo_root = Path(args.repo_root).resolve()
     output_dir = Path(args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    # GitHub Pages ignores underscore-prefixed asset directories unless the site
+    # root opts out of Jekyll processing. The embedded Rerun viewer lives under
+    # _rerun_web_viewer/, so always emit the marker for deployed reports.
+    (output_dir / ".nojekyll").write_text("", encoding="utf-8")
     binary = Path(args.robowbc_binary).resolve()
     if not binary.exists():
         raise SystemExit(f"robowbc binary not found: {binary}")
