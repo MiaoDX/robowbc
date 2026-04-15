@@ -73,8 +73,9 @@ python -m http.server 8000
 Then open `http://127.0.0.1:8000`. If the public checkpoints are present, the
 report includes real CPU `gear_sonic`, `decoupled_wbc`, `wbc_agile`, and
 `bfm_zero` cards; otherwise missing integrations are rendered as blocked with
-explicit missing-path reasons. The same generator is used in CI for the
-downloadable `policy-showcase` artifact.
+explicit missing-path reasons. The same generator is used in CI for both the
+downloadable `policy-showcase` artifact and the `main`-branch GitHub Pages
+site.
 
 ## Run GEAR-SONIC with real checkpoints
 
