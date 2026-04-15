@@ -52,6 +52,9 @@ control loops, latency, and target trajectories with the same data pipeline.
   blocked cards for `hover` plus an experimental blocked card for
   `wholebody_vla`, all exported as `index.html`, JSON summaries, logs, and
   Rerun recordings.
+- The current visual harness compares RoboWBC runs against themselves across
+  policies and surfaces blocked integrations honestly; it does not yet execute
+  or overlay the upstream official C++/Python runtimes as parity baselines.
 
 ## Repo layout
 
@@ -275,7 +278,9 @@ python -m http.server 8000
 ```
 
 Then open `http://127.0.0.1:8000`. The page still keeps the raw `.rrd` links
-for downloading or opening in the desktop Rerun app.
+for downloading or opening in the desktop Rerun app. Today this report reflects
+RoboWBC-native runs only; official-runtime parity overlays are tracked
+separately.
 
 ### CI policy showcase
 
