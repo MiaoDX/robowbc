@@ -17,7 +17,7 @@ control loops, latency, and target trajectories with the same data pipeline.
 - Rust workspace with core abstractions, policy registry, ONNX Runtime
   backends, Python-backed policy loading, CLI, communication, MuJoCo transport,
   and Rerun visualization.
-- Registered policies on `main`: `gear_sonic`, `decoupled_wbc`, `hover`,
+- Registered policies in the current codebase: `gear_sonic`, `decoupled_wbc`, `hover`,
   `wbc_agile`, `bfm_zero`, `wholebody_vla`, and `py_model`.
 - Real public asset-backed runs are wired today for `gear_sonic`
   (`configs/sonic_g1.toml`), `decoupled_wbc` on G1
@@ -34,6 +34,11 @@ control loops, latency, and target trajectories with the same data pipeline.
 - No-download smoke paths remain available through
   `configs/decoupled_smoke.toml` and `configs/decoupled_h1.toml`, both backed
   by the checked-in dynamic identity ONNX fixture.
+- Honest runtime state today: live public-policy paths are `gear_sonic`,
+  `decoupled_wbc`, `wbc_agile`, and `bfm_zero`; `hover` remains blocked until
+  you provide your own exported checkpoint; `wholebody_vla` remains an
+  experimental blocked contract wrapper; `py_model` remains user-supplied by
+  design.
 - `configs/hover_h1.toml`, `configs/wbc_agile_t1.toml`, and
   `configs/wholebody_vla_x2.toml` remain honest blocked configs today:
   `hover` needs a user-trained/exported checkpoint because the public upstream
@@ -44,8 +49,9 @@ control loops, latency, and target trajectories with the same data pipeline.
 - CI runs Rust build/test/lint/format checks, Rust API docs, `mdBook`, Python
   wheel smoke tests, and a mixed-source policy showcase artifact with real CPU
   `gear_sonic`, `decoupled_wbc`, `wbc_agile`, and `bfm_zero` cards plus honest
-  blocked cards for the remaining asset-gated policies, all exported as
-  `index.html`, JSON summaries, logs, and Rerun recordings.
+  blocked cards for `hover` plus an experimental blocked card for
+  `wholebody_vla`, all exported as `index.html`, JSON summaries, logs, and
+  Rerun recordings.
 
 ## Repo layout
 
@@ -161,6 +167,44 @@ without copying an existing example by hand.
 | `wholebody_vla` | `configs/wholebody_vla_x2.toml` | `robowbc-ort` | Experimental X2 `KinematicPose` contract wrapper; the public upstream repo does not yet provide runnable code or ONNX checkpoints |
 | `py_model` | user-supplied TOML | `robowbc-pyo3` | Loads Python scripts or PyTorch checkpoints through PyO3 |
 
+## Manual real-model verification
+
+The repo also exposes ignored integration tests for the real-model paths. Use
+these when you want to validate the wrappers directly inside `robowbc-ort`
+instead of running the CLI configs.
+
+Public-download paths:
+
+```bash
+bash scripts/download_gear_sonic_models.sh
+cargo test -p robowbc-ort -- --ignored gear_sonic_real_model_inference
+
+bash scripts/download_decoupled_wbc_models.sh
+cargo test -p robowbc-ort -- --ignored decoupled_wbc_real_model_inference
+
+bash scripts/download_wbc_agile_models.sh
+cargo test -p robowbc-ort -- --ignored wbc_agile_real_model_inference
+
+bash scripts/download_bfm_zero_models.sh
+BFM_ZERO_MODEL_PATH=models/bfm_zero/bfm_zero_g1.onnx \
+BFM_ZERO_CONTEXT_PATH=models/bfm_zero/zs_walking.npy \
+cargo test -p robowbc-ort bfm_zero_real_model_inference -- --ignored --nocapture
+```
+
+Local/private-model paths:
+
+```bash
+HOVER_MODEL_PATH=models/hover/hover_h1.onnx \
+cargo test -p robowbc-ort hover_real_model_inference -- --ignored --nocapture
+
+WHOLEBODY_VLA_MODEL_PATH=models/wholebody_vla/wholebody_vla_x2.onnx \
+cargo test -p robowbc-ort wholebody_vla_real_model_inference -- --ignored --nocapture
+```
+
+`hover` still requires a user-trained/exported ONNX checkpoint. `wholebody_vla`
+still requires a compatible local/private checkpoint because the public
+upstream repo does not yet expose a runnable inference release.
+
 ## Visualization and reports
 
 RoboWBC records per-tick joint state, policy targets, command inputs, and
@@ -240,8 +284,9 @@ The CI workflow warms cached `models/gear-sonic/`, `models/decoupled-wbc/`,
 mixed-source showcase, and uploads it as the `policy-showcase` artifact. Each
 run contains an auto-generated `index.html` plus per-policy `.json`, `.rrd`,
 `.log`, and embedded Rerun viewer assets for the real CPU `gear_sonic`,
-`decoupled_wbc`, `wbc_agile`, and `bfm_zero` cards, plus honest blocked cards
-for `hover` and `wholebody_vla` whenever their assets are unavailable.
+`decoupled_wbc`, `wbc_agile`, and `bfm_zero` cards, plus an honest blocked
+`hover` card and an experimental blocked `wholebody_vla` card whenever those
+local assets are unavailable.
 
 ## Python SDK
 
