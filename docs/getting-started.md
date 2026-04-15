@@ -59,23 +59,29 @@ python scripts/generate_policy_showcase.py \
 
 The output folder contains:
 
-- `index.html` with embedded interactive Rerun viewers for each successful run
+- `index.html` with lazy-loaded interactive Rerun panes for each successful run
 - raw `*.rrd`, `*.json`, and `*.log` files per policy
-- `_rerun_web_viewer/`, the vendored web runtime used by the embedded panes
+- `_rerun_web_viewer/`, the vendored web runtime used by those panes
 
 For the most reliable local viewing path, serve that folder over HTTP:
 
 ```bash
-cd ./artifacts/policy-showcase
-python -m http.server 8000
+python scripts/serve_showcase.py \
+  --dir ./artifacts/policy-showcase \
+  --port 8000 \
+  --open
 ```
 
-Then open `http://127.0.0.1:8000`. If the public checkpoints are present, the
-report includes real CPU `gear_sonic`, `decoupled_wbc`, `wbc_agile`, and
-`bfm_zero` cards; otherwise missing integrations are rendered as blocked with
-explicit missing-path reasons. The same generator is used in CI for both the
-downloadable `policy-showcase` artifact and the `main`-branch GitHub Pages
-site.
+Then open `http://127.0.0.1:8000`. Do not open the generated `index.html`
+directly via `file://`; the interactive viewer expects an HTTP-served folder.
+The helper script also accepts `--bind` if you want to expose the local preview
+to another machine on the same network. If the public checkpoints are present,
+the report includes real CPU
+`gear_sonic`, `decoupled_wbc`, `wbc_agile`, and `bfm_zero` cards; otherwise
+missing integrations are rendered as blocked with explicit missing-path
+reasons. The page lazy-loads each `.rrd` recording when a card becomes visible,
+which keeps the same static bundle usable in CI artifacts and on the
+`main`-branch GitHub Pages site.
 
 ## Run GEAR-SONIC with real checkpoints
 
