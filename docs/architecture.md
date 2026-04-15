@@ -2,6 +2,12 @@
 
 ## Overview
 
+![RoboWBC architecture](assets/architecture.svg)
+
+The diagram below reflects the current crate split, policy backends,
+transport loop, and reporting path used by the CLI and the published HTML
+report.
+
 ```
 ┌─────────────────────────────────────────────────┐
 │  robowbc-cli  — config loading → control loop    │

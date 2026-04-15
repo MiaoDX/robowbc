@@ -1,38 +1,46 @@
 # RoboWBC
 
-**RoboWBC** is an open-source inference runtime that lets you run humanoid
-whole-body control (WBC) policies through one unified interface. Swap models
-by changing a single TOML file — no code changes required.
+**RoboWBC** is an open-source inference runtime for humanoid whole-body control
+policies. Swap models by changing a single TOML file, then emit the same JSON
+and Rerun reports across smoke tests, MuJoCo runs, and hardware-oriented
+transports.
 
-## What it does
+[Open Live Policy Reports](https://miaodx.com/robowbc/) ·
+[Getting Started](getting-started.md) ·
+[Architecture](architecture.md) ·
+[Python SDK](python-sdk.md)
 
-```
-VLA model (GR00T, LeRobot, StarVLA)
-       ↓  SE3 poses + velocity commands
-  RoboWBC  ← you are here
-       ↓  joint position PD targets @ 50 Hz
-  Robot PD controllers
-```
+![RoboWBC architecture](assets/architecture.svg)
 
-Every WBC model surveyed (GEAR-SONIC, Decoupled WBC, HOVER, OmniH2O, HumanPlus, ExBody)
-shares the same output contract: joint position PD targets at 50 Hz. RoboWBC
-exploits this uniformity to provide a single runtime for all of them.
+## Current status
 
-## Quick links
+| Area | State |
+|------|-------|
+| Live public-policy paths | `gear_sonic`, `decoupled_wbc`, `wbc_agile`, `bfm_zero` |
+| Honest blocked wrappers | `hover` needs a user-exported checkpoint, `wholebody_vla` has no runnable public upstream release |
+| User-supplied backend | `py_model` via `robowbc-pyo3` |
+| Published report | `main` is wired to publish the generated policy report to the live report link above |
 
-- [Getting Started](getting-started.md) — build, download models, run first inference
-- [Adding a New Policy](adding-a-model.md) — integrate a new WBC model in ~50 lines
-- [Adding a New Robot](adding-a-robot.md) — add a TOML config for a new hardware target
-- [Configuration Reference](configuration.md) — full TOML schema documentation
-- [Architecture](architecture.md) — trait design, registry pattern, inference backends
+## Policy coverage
 
-## Supported policies
+| Policy | Example config | Status |
+|--------|----------------|--------|
+| `gear_sonic` | `configs/sonic_g1.toml` | Live public planner path |
+| `decoupled_wbc` | `configs/decoupled_g1.toml` | Live public G1 path |
+| `wbc_agile` | `configs/wbc_agile_g1.toml` | Live public G1 path |
+| `bfm_zero` | `configs/bfm_zero_g1.toml` | Live public G1 path |
+| `hover` | `configs/hover_h1.toml` | Wrapper present, blocked on user checkpoint |
+| `wholebody_vla` | `configs/wholebody_vla_x2.toml` | Experimental contract wrapper |
+| `py_model` | user TOML | User supplied |
 
-| Policy | Format | Hardware | Status |
-|--------|--------|----------|--------|
-| GEAR-SONIC | ONNX (3 models) | Unitree G1 | First target |
-| Decoupled WBC | ONNX | Unitree G1 | Implemented |
+## Start here
+
+- [Getting Started](getting-started.md), build the workspace and run the smoke config
+- [Configuration Reference](configuration.md), understand the TOML surface
+- [Adding a New Policy](adding-a-model.md), wire a new model into the registry
+- [Adding a New Robot](adding-a-robot.md), add a new hardware target
+- [Architecture](architecture.md), understand the crate split and runtime flow
 
 ## License
 
-Apache 2.0 — see `LICENSE`.
+MIT

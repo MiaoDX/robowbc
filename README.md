@@ -2,77 +2,50 @@
 
 Unified inference runtime for humanoid whole-body control policies.
 
-RoboWBC gives you one runtime for loading multiple WBC policies, switching them
-by TOML config, and running them through synthetic, simulation, or hardware
-transports from the same codebase.
+<p>
+  <a href="https://miaodx.com/robowbc/"><strong>Open Live Policy Reports</strong></a>
+  ·
+  <a href="docs/getting-started.md"><strong>Getting Started</strong></a>
+  ·
+  <a href="docs/architecture.md"><strong>Architecture</strong></a>
+  ·
+  <a href="docs/python-sdk.md"><strong>Python SDK</strong></a>
+  ·
+  <a href="docs/founding-document.md"><strong>Founding Document</strong></a>
+</p>
 
-### **[View Interactive Visual Reports →](https://miaodx.com/roboharness/)**
+RoboWBC gives you one config-driven runtime for loading multiple WBC policies,
+running them through the same Rust CLI, and exporting the same JSON + Rerun
+report pipeline across smoke tests, MuJoCo runs, and hardware-oriented
+transports.
 
-Browser-native visual reports live in the companion `roboharness` project.
-RoboWBC itself records Rerun `.rrd` traces locally and in CI, so you can inspect
-control loops, latency, and target trajectories with the same data pipeline.
+![RoboWBC architecture](docs/assets/architecture.svg)
 
-## Current status
+## What ships today
 
-- Rust workspace with core abstractions, policy registry, ONNX Runtime
-  backends, Python-backed policy loading, CLI, communication, MuJoCo transport,
-  and Rerun visualization.
-- Registered policies in the current codebase: `gear_sonic`, `decoupled_wbc`, `hover`,
-  `wbc_agile`, `bfm_zero`, `wholebody_vla`, and `py_model`.
-- Real public asset-backed runs are wired today for `gear_sonic`
-  (`configs/sonic_g1.toml`), `decoupled_wbc` on G1
-  (`configs/decoupled_g1.toml`), `wbc_agile` on G1
-  (`configs/wbc_agile_g1.toml`), and `bfm_zero` on G1
-  (`configs/bfm_zero_g1.toml`).
-- `bfm_zero` now has an automated public download path through
-  `scripts/download_bfm_zero_models.sh`, which fetches the upstream ONNX
-  checkpoint and tracking context, then normalizes them into the RoboWBC model
-  layout used by the runtime and CI showcase.
-- The repo-owned simulation + zenoh wire paths now carry IMU angular velocity;
-  legacy gravity-only low-state payloads still decode with zero gyro for
-  backward compatibility.
-- No-download smoke paths remain available through
-  `configs/decoupled_smoke.toml` and `configs/decoupled_h1.toml`, both backed
-  by the checked-in dynamic identity ONNX fixture.
-- Honest runtime state today: live public-policy paths are `gear_sonic`,
-  `decoupled_wbc`, `wbc_agile`, and `bfm_zero`; `hover` remains blocked until
-  you provide your own exported checkpoint; `wholebody_vla` remains an
-  experimental blocked contract wrapper; `py_model` remains user-supplied by
-  design.
-- `configs/hover_h1.toml`, `configs/wbc_agile_t1.toml`, and
-  `configs/wholebody_vla_x2.toml` remain honest blocked configs today:
-  `hover` needs a user-trained/exported checkpoint because the public upstream
-  repo ships deployment code but no pretrained model, `wbc_agile_t1` still
-  needs a matching user export, and `wholebody_vla` is an experimental
-  contract wrapper because the public upstream repo does not yet ship runnable
-  code or ONNX weights.
-- CI runs Rust build/test/lint/format checks, Rust API docs, `mdBook`, Python
-  wheel smoke tests, and a mixed-source policy showcase artifact with real CPU
-  `gear_sonic`, `decoupled_wbc`, `wbc_agile`, and `bfm_zero` cards plus honest
-  blocked cards for `hover` plus an experimental blocked card for
-  `wholebody_vla`, all exported as `index.html`, JSON summaries, logs, and
-  Rerun recordings.
-- The current visual harness compares RoboWBC runs against themselves across
-  policies and surfaces blocked integrations honestly; it does not yet execute
-  or overlay the upstream official C++/Python runtimes as parity baselines.
+| Area | Status |
+|------|--------|
+| Runtime | Rust workspace with registry-driven policy loading, ONNX Runtime and PyO3 backends, MuJoCo and communication transports, plus JSON and Rerun reporting |
+| Live public-policy paths | `gear_sonic`, `decoupled_wbc`, `wbc_agile`, `bfm_zero` |
+| Honest blocked wrappers | `hover` needs a user-exported checkpoint, `wholebody_vla` still lacks a runnable public upstream release |
+| Published visual report | The `main` workflow is wired to build the same HTML report in CI and publish it to the live report link above |
 
-## Repo layout
+## Policy status
 
-| Path | Purpose |
-|------|---------|
-| `crates/robowbc-core` | `WbcPolicy`, `Observation`, `WbcCommand`, `JointPositionTargets`, `RobotConfig` |
-| `crates/robowbc-registry` | `inventory`-based policy registration and factory |
-| `crates/robowbc-ort` | ONNX Runtime backends and policy wrappers |
-| `crates/robowbc-pyo3` | Python-backed runtime policy (`py_model`) for `.py`, `.pt`, and `.pth` models |
-| `crates/robowbc-comm` | Control-loop plumbing and robot transports |
-| `crates/robowbc-sim` | MuJoCo transport for hardware-free execution |
-| `crates/robowbc-vis` | Rerun visualization and `.rrd` recording |
-| `crates/robowbc-cli` | `robowbc` CLI binary |
-| `crates/robowbc-py` | Standalone `maturin` package for the Python SDK |
+| Policy | Status | Public assets | Example config | Notes |
+|--------|--------|---------------|----------------|-------|
+| `gear_sonic` | Live | Yes | [configs/sonic_g1.toml](configs/sonic_g1.toml) | Uses the published `planner_sonic.onnx` path today; the encoder and decoder tracking contract is still pending |
+| `decoupled_wbc` | Live | Yes | [configs/decoupled_g1.toml](configs/decoupled_g1.toml) | Public G1 balance and walk checkpoints; [configs/decoupled_smoke.toml](configs/decoupled_smoke.toml) stays as the no-download smoke path |
+| `wbc_agile` | Live | Yes | [configs/wbc_agile_g1.toml](configs/wbc_agile_g1.toml) | Published G1 recurrent checkpoint is wired; the T1 path still expects a user export |
+| `bfm_zero` | Live | Yes | [configs/bfm_zero_g1.toml](configs/bfm_zero_g1.toml) | Public ONNX plus tracking context bundle is normalized by `scripts/download_bfm_zero_models.sh` |
+| `hover` | Blocked | No | [configs/hover_h1.toml](configs/hover_h1.toml) | Wrapper exists, but the public upstream repo does not ship a pretrained checkpoint |
+| `wholebody_vla` | Experimental | No | [configs/wholebody_vla_x2.toml](configs/wholebody_vla_x2.toml) | Contract wrapper only; the public upstream repo does not yet expose a runnable inference release |
+| `py_model` | User supplied | N/A | user TOML | Loads Python modules or PyTorch checkpoints through `robowbc-pyo3` |
+
+The generated HTML report includes every currently working public-asset policy:
+`gear_sonic`, `decoupled_wbc`, `wbc_agile`, and `bfm_zero`.
 
 ## Quick start
-
-### Rust CLI smoke test
 
 ```bash
 rustc --version
@@ -81,102 +54,56 @@ cargo build
 cargo run --bin robowbc -- run --config configs/decoupled_smoke.toml
 ```
 
-`configs/decoupled_smoke.toml` uses
-`crates/robowbc-ort/tests/fixtures/test_dynamic_identity.onnx`, so it is the
-intended no-download local smoke path.
+`configs/decoupled_smoke.toml` uses the checked-in dynamic identity ONNX
+fixture, so it is the intended no-download local smoke path.
 
-If an ONNX-backed run stalls before the first tick on Linux/x86_64, point
-`ROBOWBC_ORT_DYLIB_PATH` at a fully extracted `libonnxruntime.so.1.24.2` under
-`target/debug/build/robowbc-ort-*/out/onnxruntime-linux-x64-1.24.2/lib/`.
-
-### Run real GEAR-SONIC checkpoints
+<details>
+<summary><strong>Run the live public policies</strong></summary>
 
 ```bash
 bash scripts/download_gear_sonic_models.sh
 cargo run --release --bin robowbc -- run --config configs/sonic_g1.toml
-```
 
-`configs/sonic_g1.toml` downloads NVIDIA's three public GEAR-SONIC checkpoints,
-then runs the published `planner_sonic.onnx` velocity path by default. The
-real encoder/decoder tracking contract is not integrated into the Rust runtime
-yet, so the CLI config keeps `motion_tokens` as a documented fixture-only /
-experimental path for now.
-
-### Run real Decoupled WBC G1 checkpoints
-
-```bash
 bash scripts/download_decoupled_wbc_models.sh
 cargo run --release --bin robowbc -- run --config configs/decoupled_g1.toml
-```
 
-`configs/decoupled_g1.toml` uses NVIDIA's public balance + walk checkpoints and
-the official 516D history contract for the Unitree G1 lower body.
-
-### Run real WBC-AGILE G1 checkpoint
-
-```bash
 bash scripts/download_wbc_agile_models.sh
 cargo run --release --bin robowbc -- run --config configs/wbc_agile_g1.toml
-```
 
-`configs/wbc_agile_g1.toml` uses NVIDIA's public recurrent G1 checkpoint. The
-published model commands 14 lower-body joints; RoboWBC maps those outputs back
-into the 35-DOF robot ordering and holds the remaining joints at their current
-positions.
-
-### Run real BFM-Zero G1 assets
-
-```bash
 bash scripts/download_bfm_zero_models.sh
-# Downloads the public ONNX + tracking context bundle into models/bfm_zero/
-# and converts zs_walking.pkl into zs_walking.npy for the Rust runtime.
 cargo run --release --bin robowbc -- run --config configs/bfm_zero_g1.toml
 ```
 
-`configs/bfm_zero_g1.toml` targets the public G1 tracking contract. The helper
-script fetches `FBcprAuxModel.onnx` and `zs_walking.pkl` from the public
-upstream BFM-Zero release, then normalizes them into
-`models/bfm_zero/bfm_zero_g1.onnx` and `models/bfm_zero/zs_walking.npy` for
-the runtime and CI showcase.
+`gear_sonic` currently exercises the published `planner_sonic.onnx` velocity
+path. `bfm_zero` fetches the public ONNX plus tracking bundle and converts the
+context into the runtime layout used by both the CLI and CI.
+</details>
 
-If you already have an upstream checkout or want to prepare the assets
-manually, the lower-level conversion step is still available:
+<details>
+<summary><strong>Open or generate the visual report</strong></summary>
 
-```bash
-python scripts/prepare_bfm_zero_assets.py \
-  --source /path/to/BFM-Zero/model \
-  --output models/bfm_zero
-cargo run --release --bin robowbc -- run --config configs/bfm_zero_g1.toml
-```
-
-### Generate a new config template
+The same report generator powers both the local HTML bundle and the published
+GitHub Pages site.
 
 ```bash
-cargo run --bin robowbc -- init --output robowbc.template.toml
+cargo build --bin robowbc --features robowbc-cli/vis
+python scripts/generate_policy_showcase.py \
+  --repo-root . \
+  --robowbc-binary ./target/debug/robowbc \
+  --output-dir ./artifacts/policy-showcase
+
+cd ./artifacts/policy-showcase
+python -m http.server 8000
 ```
 
-The generated file is the fastest way to start a new policy or robot config
-without copying an existing example by hand.
+The output folder contains `index.html`, `manifest.json`, per-policy `*.json`
+run summaries, raw `*.rrd` recordings, logs, and the embedded Rerun web viewer
+runtime. Pull requests keep the downloadable `policy-showcase` artifact, and
+`main` publishes the generated site to the live report link above.
+</details>
 
-## Registered policies
-
-| Policy | Example config(s) | Backend | Notes |
-|--------|-------------------|---------|-------|
-| `gear_sonic` | `configs/sonic_g1.toml` | `robowbc-ort` | Real `planner_sonic.onnx` velocity path today; encoder/decoder tracking contract still pending |
-| `decoupled_wbc` | `configs/decoupled_smoke.toml`, `configs/decoupled_g1.toml`, `configs/decoupled_h1.toml` | `robowbc-ort` | Real public G1 history contract plus fixture-backed smoke paths |
-| `hover` | `configs/hover_h1.toml` | `robowbc-ort` | Real H1 wrapper is wired, but the public repo/releases do not include pretrained checkpoints; provide a user-trained/exported ONNX model |
-| `wbc_agile` | `configs/wbc_agile_g1.toml`, `configs/wbc_agile_t1.toml` | `robowbc-ort` | Real public G1 checkpoint; the T1 config still expects a user-exported ONNX model |
-| `bfm_zero` | `configs/bfm_zero_g1.toml` | `robowbc-ort` | Real public G1 tracking contract is wired; `scripts/download_bfm_zero_models.sh` fetches and normalizes the upstream ONNX + tracking context automatically |
-| `wholebody_vla` | `configs/wholebody_vla_x2.toml` | `robowbc-ort` | Experimental X2 `KinematicPose` contract wrapper; the public upstream repo does not yet provide runnable code or ONNX checkpoints |
-| `py_model` | user-supplied TOML | `robowbc-pyo3` | Loads Python scripts or PyTorch checkpoints through PyO3 |
-
-## Manual real-model verification
-
-The repo also exposes ignored integration tests for the real-model paths. Use
-these when you want to validate the wrappers directly inside `robowbc-ort`
-instead of running the CLI configs.
-
-Public-download paths:
+<details>
+<summary><strong>Manual real-model verification</strong></summary>
 
 ```bash
 bash scripts/download_gear_sonic_models.sh
@@ -194,111 +121,13 @@ BFM_ZERO_CONTEXT_PATH=models/bfm_zero/zs_walking.npy \
 cargo test -p robowbc-ort bfm_zero_real_model_inference -- --ignored --nocapture
 ```
 
-Local/private-model paths:
+`hover` still requires a user-trained exported checkpoint, and `wholebody_vla`
+still requires a compatible private or local model because no runnable public
+release exists upstream today.
+</details>
 
-```bash
-HOVER_MODEL_PATH=models/hover/hover_h1.onnx \
-cargo test -p robowbc-ort hover_real_model_inference -- --ignored --nocapture
-
-WHOLEBODY_VLA_MODEL_PATH=models/wholebody_vla/wholebody_vla_x2.onnx \
-cargo test -p robowbc-ort wholebody_vla_real_model_inference -- --ignored --nocapture
-```
-
-`hover` still requires a user-trained/exported ONNX checkpoint. `wholebody_vla`
-still requires a compatible local/private checkpoint because the public
-upstream repo does not yet expose a runnable inference release.
-
-## Visualization and reports
-
-RoboWBC records per-tick joint state, policy targets, command inputs, and
-timing data through `robowbc-vis`, and the CLI can also write a JSON run
-summary for downstream tooling or static report generation.
-
-Build the CLI with visualization enabled:
-
-```bash
-cargo build --bin robowbc --features robowbc-cli/vis
-```
-
-Add a `[vis]` section to any config:
-
-```toml
-[vis]
-app_id = "robowbc"
-spawn_viewer = false
-save_path = "recording.rrd"
-
-[report]
-output_path = "artifacts/run/report.json"
-max_frames = 120
-```
-
-Then run:
-
-```bash
-cargo run --bin robowbc --features robowbc-cli/vis -- run --config configs/decoupled_smoke.toml
-```
-
-Open the saved recording with a local Rerun install:
-
-```bash
-rerun recording.rrd
-```
-
-If you only need the machine-readable summary, `[report]` works on the default
-CLI build too.
-
-### Generate the local policy showcase
-
-Build the CLI with visualization enabled, then run the showcase generator:
-
-```bash
-cargo build --bin robowbc --features robowbc-cli/vis
-# npm is used once to vendor the Rerun web viewer into the output folder.
-python scripts/generate_policy_showcase.py \
-  --repo-root . \
-  --robowbc-binary ./target/debug/robowbc \
-  --output-dir ./artifacts/policy-showcase
-```
-
-That produces:
-
-- `index.html`: mixed-source comparison report with embedded interactive Rerun panes
-- `manifest.json`: machine-readable manifest of all runs
-- `*.json`: per-policy run summaries written by the CLI `[report]` section
-- `*.rrd`: raw downloadable Rerun recordings for each policy
-- `*.log`: raw stdout/stderr from each showcase run
-- `_rerun_web_viewer/`: vendored Rerun web-viewer runtime used by the embedded panes
-
-For the most reliable local viewing path, serve the output directory over HTTP:
-
-```bash
-cd ./artifacts/policy-showcase
-python -m http.server 8000
-```
-
-Then open `http://127.0.0.1:8000`. The page still keeps the raw `.rrd` links
-for downloading or opening in the desktop Rerun app. Today this report reflects
-RoboWBC-native runs only; official-runtime parity overlays are tracked
-separately.
-
-### CI policy showcase
-
-The CI workflow warms cached `models/gear-sonic/`, `models/decoupled-wbc/`,
-`models/wbc-agile/`, and `models/bfm_zero/` directories, builds the same
-mixed-source showcase, and uploads it as the `policy-showcase` artifact. Each
-run contains an auto-generated `index.html` plus per-policy `.json`, `.rrd`,
-`.log`, and embedded Rerun viewer assets for the real CPU `gear_sonic`,
-`decoupled_wbc`, `wbc_agile`, and `bfm_zero` cards, plus an honest blocked
-`hover` card and an experimental blocked `wholebody_vla` card whenever those
-local assets are unavailable.
-
-## Python SDK
-
-The repository ships a standalone Python package in `crates/robowbc-py` and a
-runtime Python-backed policy backend in `crates/robowbc-pyo3`.
-
-Build the SDK locally with `maturin`:
+<details>
+<summary><strong>Python SDK</strong></summary>
 
 ```bash
 pip install "maturin>=1.4,<2.0"
@@ -306,37 +135,41 @@ maturin develop
 python -c "from robowbc import Registry; print(Registry.list_policies())"
 ```
 
-That exposes the same registry-driven runtime from Python:
+The standalone Python package lives in `crates/robowbc-py`, while
+`robowbc-pyo3` provides the runtime backend for user-supplied Python or
+PyTorch policies.
+</details>
 
-```python
-from robowbc import Observation, Registry
+<details>
+<summary><strong>Workspace layout</strong></summary>
 
-policy = Registry.build("decoupled_wbc", "configs/decoupled_smoke.toml")
-obs = Observation(
-    joint_positions=[0.0] * 4,
-    joint_velocities=[0.0] * 4,
-    gravity_vector=[0.0, 0.0, -1.0],
-    angular_velocity=[0.0, 0.0, 0.0],
-    command_type="velocity",
-    command_data=[0.2, 0.0, 0.0],
-)
-targets = policy.predict(obs)
-print(targets.positions)
-```
+| Path | Purpose |
+|------|---------|
+| `crates/robowbc-core` | `WbcPolicy`, `Observation`, `WbcCommand`, `JointPositionTargets`, `RobotConfig` |
+| `crates/robowbc-registry` | `inventory`-based policy registration and factory |
+| `crates/robowbc-ort` | ONNX Runtime backends and policy wrappers |
+| `crates/robowbc-pyo3` | Python-backed runtime policy loading |
+| `crates/robowbc-comm` | Control-loop plumbing and robot transports |
+| `crates/robowbc-sim` | MuJoCo transport for hardware-free execution |
+| `crates/robowbc-vis` | Rerun visualization and `.rrd` recording |
+| `crates/robowbc-cli` | `robowbc` CLI binary |
+| `crates/robowbc-py` | Standalone `maturin` package for the Python SDK |
+</details>
 
 ## Documentation
 
 - [Getting Started](docs/getting-started.md)
-- [Python SDK](docs/python-sdk.md)
+- [Configuration Reference](docs/configuration.md)
+- [Adding a New Policy](docs/adding-a-model.md)
+- [Adding a New Robot](docs/adding-a-robot.md)
 - [Architecture](docs/architecture.md)
 - [Founding document](docs/founding-document.md)
+- [Q2 2026 roadmap](docs/roadmap-2026-q2.md)
 
 ## Related projects
 
-- [roboharness](https://github.com/MiaoDX/roboharness): companion visual
-  testing and browser-report project
-- [LeRobot](https://github.com/huggingface/lerobot): upstream robotics stack
-  that can consume a WBC backend
+- [roboharness](https://github.com/MiaoDX/roboharness), companion visual testing and browser-report project
+- [LeRobot](https://github.com/huggingface/lerobot), upstream robotics stack that can consume a WBC backend
 
 ## License
 
