@@ -137,6 +137,14 @@ NOT_YET_SHOWCASED = [
 
 COLORS = ["#0f766e", "#dc2626", "#2563eb", "#d97706", "#7c3aed", "#0891b2"]
 RERUN_WEB_VIEWER_DIR = "_rerun_web_viewer"
+DISPLAY_ORDER = {
+    "gear_sonic": 0,
+    "decoupled_wbc": 1,
+    "wbc_agile": 2,
+    "bfm_zero": 3,
+    "hover": 4,
+    "wholebody_vla": 5,
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -411,6 +419,18 @@ def pill(label: str, css_class: str) -> str:
     return f'<span class="pill {css_class}">{html.escape(label)}</span>'
 
 
+def display_sort_key(index: int, entry: dict[str, object]) -> tuple[int, int, int]:
+    meta = entry["_meta"]
+    status = entry.get("status", "ok")
+    execution_kind = str(meta["execution_kind"])
+    policy_name = str(entry.get("policy_name", ""))
+    return (
+        0 if status == "ok" else 1,
+        0 if execution_kind == "real" else 1,
+        DISPLAY_ORDER.get(policy_name, index),
+    )
+
+
 
 def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: Path) -> None:
     generated_at = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
@@ -425,7 +445,15 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
     overview_rows: list[str] = []
     cards: list[str] = []
 
-    for entry in entries:
+    sorted_entries = [
+        entry
+        for index, entry in sorted(
+            enumerate(entries),
+            key=lambda item: display_sort_key(item[0], item[1]),
+        )
+    ]
+
+    for entry in sorted_entries:
         meta = entry["_meta"]
         status = entry.get("status", "ok")
         execution_kind = str(meta["execution_kind"])
@@ -834,7 +862,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
 </html>'''
 
     (output_dir / "index.html").write_text(html_doc, encoding="utf-8")
-    (output_dir / "manifest.json").write_text(json.dumps(entries, indent=2), encoding="utf-8")
+    (output_dir / "manifest.json").write_text(json.dumps(sorted_entries, indent=2), encoding="utf-8")
 
 
 def main() -> int:
