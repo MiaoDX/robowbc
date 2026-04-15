@@ -3,7 +3,7 @@
 Unified inference runtime for humanoid whole-body control policies.
 
 <p>
-  <a href="https://miaodx.com/robowbc/"><strong>Open Live Policy Reports</strong></a>
+  <a href="https://miaodx.com/robowbc/"><strong>Open Hosted Policy Showcase</strong></a>
   ·
   <a href="docs/getting-started.md"><strong>Getting Started</strong></a>
   ·
@@ -19,6 +19,10 @@ running them through the same Rust CLI, and exporting the same JSON + Rerun
 report pipeline across smoke tests, MuJoCo runs, and hardware-oriented
 transports.
 
+If the hosted showcase URL is still stale right after a merge, wait for the
+`CI` workflow on `main` to finish the Pages deploy, or use the local HTTP
+preview flow in [Open or generate the visual report](#open-or-generate-the-visual-report).
+
 ![RoboWBC architecture](docs/assets/architecture.svg)
 
 ## What ships today
@@ -32,18 +36,30 @@ transports.
 
 ## Policy status
 
-| Policy | Status | Public assets | Example config | Notes |
-|--------|--------|---------------|----------------|-------|
-| `gear_sonic` | Live | Yes | [configs/sonic_g1.toml](configs/sonic_g1.toml) | Uses the published `planner_sonic.onnx` path today; the encoder and decoder tracking contract is still pending |
-| `decoupled_wbc` | Live | Yes | [configs/decoupled_g1.toml](configs/decoupled_g1.toml) | Public G1 balance and walk checkpoints; [configs/decoupled_smoke.toml](configs/decoupled_smoke.toml) stays as the no-download smoke path |
-| `wbc_agile` | Live | Yes | [configs/wbc_agile_g1.toml](configs/wbc_agile_g1.toml) | Published G1 recurrent checkpoint is wired; the T1 path still expects a user export |
-| `bfm_zero` | Live | Yes | [configs/bfm_zero_g1.toml](configs/bfm_zero_g1.toml) | Public ONNX plus tracking context bundle is normalized by `scripts/download_bfm_zero_models.sh` |
-| `hover` | Blocked | No | [configs/hover_h1.toml](configs/hover_h1.toml) | Wrapper exists, but the public upstream repo does not ship a pretrained checkpoint |
-| `wholebody_vla` | Experimental | No | [configs/wholebody_vla_x2.toml](configs/wholebody_vla_x2.toml) | Contract wrapper only; the public upstream repo does not yet expose a runnable inference release |
-| `py_model` | User supplied | N/A | user TOML | Loads Python modules or PyTorch checkpoints through `robowbc-pyo3` |
+Quick policy links:
+[GEAR-SONIC](#policy-gear-sonic) ·
+[Decoupled WBC](#policy-decoupled-wbc) ·
+[WBC-AGILE](#policy-wbc-agile) ·
+[BFM-Zero](#policy-bfm-zero) ·
+[HOVER](#policy-hover) ·
+[WholeBodyVLA](#policy-wholebody-vla) ·
+[Python model](#policy-py-model)
+
+| Policy | Status | Public assets | Example config | Links | Notes |
+|--------|--------|---------------|----------------|-------|-------|
+| <a id="policy-gear-sonic"></a>`gear_sonic` | Live | Yes | [configs/sonic_g1.toml](configs/sonic_g1.toml) | [Showcase](https://miaodx.com/robowbc/#policy-gear_sonic) · [Status issue #95](https://github.com/MiaoDX/robowbc/issues/95) | Uses the published `planner_sonic.onnx` path today; the encoder and decoder tracking contract is still pending |
+| <a id="policy-decoupled-wbc"></a>`decoupled_wbc` | Live | Yes | [configs/decoupled_g1.toml](configs/decoupled_g1.toml) | [Showcase](https://miaodx.com/robowbc/#policy-decoupled_wbc) · [Smoke config](configs/decoupled_smoke.toml) · [Parity issue #92](https://github.com/MiaoDX/robowbc/issues/92) | Public G1 balance and walk checkpoints; [configs/decoupled_smoke.toml](configs/decoupled_smoke.toml) stays as the no-download smoke path |
+| <a id="policy-wbc-agile"></a>`wbc_agile` | Live | Yes | [configs/wbc_agile_g1.toml](configs/wbc_agile_g1.toml) | [Showcase](https://miaodx.com/robowbc/#policy-wbc_agile) · [Parity issue #93](https://github.com/MiaoDX/robowbc/issues/93) · [Sim issue #97](https://github.com/MiaoDX/robowbc/issues/97) | Published G1 recurrent checkpoint is wired; the T1 path still expects a user export |
+| <a id="policy-bfm-zero"></a>`bfm_zero` | Live | Yes | [configs/bfm_zero_g1.toml](configs/bfm_zero_g1.toml) | [Showcase](https://miaodx.com/robowbc/#policy-bfm_zero) · [Parity issue #94](https://github.com/MiaoDX/robowbc/issues/94) | Public ONNX plus tracking context bundle is normalized by `scripts/download_bfm_zero_models.sh` |
+| <a id="policy-hover"></a>`hover` | Blocked | No | [configs/hover_h1.toml](configs/hover_h1.toml) | [Tracking issue #85](https://github.com/MiaoDX/robowbc/issues/85) | Wrapper exists, but the public upstream repo does not ship a pretrained checkpoint |
+| <a id="policy-wholebody-vla"></a>`wholebody_vla` | Experimental | No | [configs/wholebody_vla_x2.toml](configs/wholebody_vla_x2.toml) | [Config](configs/wholebody_vla_x2.toml) | Contract wrapper only; the public upstream repo does not yet expose a runnable inference release |
+| <a id="policy-py-model"></a>`py_model` | User supplied | N/A | user TOML | [Backend](crates/robowbc-pyo3) · [Python SDK](docs/python-sdk.md) | Loads Python modules or PyTorch checkpoints through `robowbc-pyo3` |
 
 The generated HTML report includes every currently working public-asset policy:
-`gear_sonic`, `decoupled_wbc`, `wbc_agile`, and `bfm_zero`.
+`gear_sonic`, `decoupled_wbc`, `wbc_agile`, and `bfm_zero`. Each hosted card
+also has its own stable anchor on the showcase page, so README links can jump
+straight to `#policy-gear_sonic`, `#policy-decoupled_wbc`,
+`#policy-wbc_agile`, and `#policy-bfm_zero`.
 
 ## Quick start
 

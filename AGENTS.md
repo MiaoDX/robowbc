@@ -121,8 +121,15 @@ cargo clippy -- -D warnings && cargo fmt --check
 
 ## 6) Commit hygiene
 
-- Keep commits scoped and descriptive (`feat: ...`, `fix: ...`, `ci: ...`, `docs: ...`, `refactor: ...`).
+- Keep commits scoped and descriptive (`docs: ...`, `fix: ...`, etc.).
 - When changing workflow/docs, ensure instructions match actual repo configuration.
-- Do not claim test success unless `cargo test` has been run in the current environment.
+- Do not claim UT success unless the relevant test command (for example
+  `cargo test` or `pytest -q`) has been run in the current environment.
+- If a commit is created by Codex, include the Git trailer
+  `Co-authored-by: Codex <codex@users.noreply.github.com>` in the commit message.
+- If a commit is created by another AI coding agent, include a corresponding
+  co-author trailer so agent usage can be tracked later.
+- If you maintain a dedicated bot/user account, prefer that account's verified
+  noreply email for the relevant agent trailer.
 
 ---

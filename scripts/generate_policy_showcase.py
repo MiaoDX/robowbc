@@ -543,7 +543,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
         ]
 
         cards.append(
-            f'''<section class="card">
+            f'''<section class="card" id="policy-{html.escape(str(meta["id"]))}">
   <div class="card-header">
     <div>
       <h2>{html.escape(str(meta['title']))}</h2>
