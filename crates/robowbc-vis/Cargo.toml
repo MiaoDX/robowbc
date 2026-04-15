@@ -19,6 +19,7 @@ robowbc-comm = { path = "../robowbc-comm" }
 serde = { workspace = true }
 thiserror = "2"
 rerun = { version = "0.31", optional = true }
+roxmltree = "0.20"
 
 [dev-dependencies]
 toml = { workspace = true }

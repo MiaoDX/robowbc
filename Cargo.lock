@@ -9650,6 +9650,7 @@ dependencies = [
  "rerun",
  "robowbc-comm",
  "robowbc-core",
+ "roxmltree",
  "serde",
  "thiserror 2.0.18",
  "toml",

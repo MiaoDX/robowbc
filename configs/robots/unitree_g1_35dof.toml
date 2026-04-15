@@ -16,6 +16,9 @@
 
 name = "unitree_g1_35dof"
 joint_count = 35
+# Reuse the base G1 MJCF for showcase visualization. The extra finger joints
+# are not present in this model and are simply skipped in the Rerun skeleton.
+model_path = "assets/robots/unitree_g1/g1_29dof.xml"
 
 joint_names = [
     # Legs (0–11): same ordering as 29-DOF G1
