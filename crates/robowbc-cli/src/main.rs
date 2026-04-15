@@ -105,7 +105,7 @@ struct AppConfig {
     /// Optional JSON report written after a run completes.
     #[serde(default)]
     report: Option<ReportConfig>,
-    /// MuJoCo simulation config. When present and the `sim` feature is
+    /// `MuJoCo` simulation config. When present and the `sim` feature is
     /// enabled, the control loop uses [`MujocoTransport`] instead of the
     /// synthetic transport.
     #[cfg(feature = "sim")]
@@ -468,6 +468,7 @@ fn build_policy(app: &AppConfig) -> Result<(Box<dyn WbcPolicy>, RobotConfig), St
     Ok((policy, robot))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_control_loop_inner<T: RobotTransport>(
     transport: &mut T,
     policy: &dyn WbcPolicy,
@@ -537,7 +538,6 @@ fn run_control_loop_inner<T: RobotTransport>(
                     WbcCommand::MotionTokens(tokens) => {
                         let _ = vis.log_motion_tokens(tokens);
                     }
-                    WbcCommand::KinematicPose(_) => {}
                     _ => {}
                 }
             }
@@ -572,7 +572,7 @@ fn run_control_loop(
     running: &AtomicBool,
     hardware: Option<UnitreeG1Config>,
     #[cfg(feature = "sim")] sim_config: Option<MujocoConfig>,
-    #[cfg(feature = "vis")] vis_config: Option<RerunConfig>,
+    #[cfg(feature = "vis")] vis_config: Option<&RerunConfig>,
 ) -> Result<Metrics, String> {
     if comm.frequency_hz == 0 {
         return Err("comm.frequency_hz must be > 0".to_owned());
@@ -588,7 +588,7 @@ fn run_control_loop(
     // Optionally initialise Rerun visualizer.
     #[cfg(feature = "vis")]
     let mut visualizer: Option<RerunVisualizer> = match vis_config {
-        Some(ref cfg) => {
+        Some(cfg) => {
             let vis = RerunVisualizer::new(cfg, robot)
                 .map_err(|e| format!("failed to start Rerun visualizer: {e}"))?;
             println!("rerun visualizer started (app_id={})", cfg.app_id);
@@ -624,7 +624,14 @@ fn run_control_loop(
         } else if let Some(sim_cfg) = sim_config {
             let mut transport = MujocoTransport::new(sim_cfg, robot.clone())
                 .map_err(|e| format!("mujoco init failed: {e}"))?;
-            println!("mujoco simulation transport active");
+            println!(
+                "mujoco simulation transport active (mapped_joints={}/{}, model={}, model_variant={}, meshless_public_fallback={})",
+                transport.mapped_joint_count(),
+                robot.joint_count,
+                transport.sim_config().model_path.display(),
+                transport.model_variant(),
+                transport.uses_meshless_public_fallback()
+            );
             let (ticks, dropped, inf) = run_control_loop_inner(
                 &mut transport,
                 policy,
@@ -806,7 +813,7 @@ fn main() {
         #[cfg(feature = "sim")]
         app.sim,
         #[cfg(feature = "vis")]
-        app.vis,
+        app.vis.as_ref(),
     ) {
         Ok(metrics) => {
             println!(

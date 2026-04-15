@@ -9,6 +9,9 @@
 //!
 //! - **`mujoco`** — enables the `MuJoCo` backend via the `mujoco-rs` crate.
 //!   Requires the `MuJoCo` C library (v3.0+) to be installed on the host.
+//! - **`mujoco-auto-download`** — Linux/Windows convenience feature that
+//!   enables `mujoco-rs`' automatic runtime download path. Requires
+//!   `MUJOCO_DOWNLOAD_DIR` to point at an absolute extraction directory.
 //!
 //! # Example
 //!

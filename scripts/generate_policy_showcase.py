@@ -15,6 +15,8 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import sys
+import tomllib
 from typing import Iterable
 
 POLICIES = [
@@ -23,7 +25,7 @@ POLICIES = [
         "title": "GEAR-SONIC",
         "config": "configs/showcase/gear_sonic_real.toml",
         "source": "NVIDIA GR00T",
-        "summary": "Real CPU planner_sonic.onnx run using the published multi-input velocity contract and the full Unitree G1 robot config.",
+        "summary": "Real CPU planner_sonic.onnx run inside the MuJoCo-backed G1 showcase using the published multi-input velocity contract and the full Unitree G1 robot config.",
         "coverage": "Planner-only locomotion showcase",
         "execution_kind": "real",
         "checkpoint_source": "Published GEAR-SONIC ONNX checkpoints",
@@ -41,7 +43,7 @@ POLICIES = [
         "title": "Decoupled WBC",
         "config": "configs/showcase/decoupled_wbc_real.toml",
         "source": "NVIDIA GR00T",
-        "summary": "Real public GR00T WholeBodyControl run using the official 516D history contract plus separate balance and walk checkpoints.",
+        "summary": "Real public GR00T WholeBodyControl run inside the MuJoCo-backed G1 showcase using the official 516D history contract plus separate balance and walk checkpoints.",
         "coverage": "Lower body RL + upper body default-pose baseline",
         "execution_kind": "real",
         "checkpoint_source": "Published GR00T WholeBodyControl ONNX checkpoints",
@@ -58,7 +60,7 @@ POLICIES = [
         "title": "BFM-Zero",
         "config": "configs/bfm_zero_g1.toml",
         "source": "CMU",
-        "summary": "Real public G1 tracking contract using a 721D prompt-conditioned observation, IMU gyro/history features, and a 256D latent context.",
+        "summary": "Real public G1 tracking contract running inside the MuJoCo-backed showcase with a 721D prompt-conditioned observation, IMU gyro/history features, and a 256D latent context.",
         "coverage": "Full-body prompt-conditioned G1 controller",
         "execution_kind": "real",
         "checkpoint_source": "Prepared BFM-Zero ONNX checkpoint plus tracking context assets",
@@ -91,8 +93,8 @@ POLICIES = [
         "title": "WBC-AGILE",
         "config": "configs/showcase/wbc_agile_real.toml",
         "source": "NVIDIA Isaac",
-        "summary": "Real public G1 checkpoint using the published recurrent history tensors and lower-body target mapping.",
-        "coverage": "Published G1 locomotion checkpoint",
+        "summary": "Real public G1 checkpoint using the published recurrent history tensors and lower-body target mapping. The showcase reuses the public 29-DOF G1 MuJoCo embodiment, so the extra finger joints remain at their default pose in the recorded scene.",
+        "coverage": "Published G1 locomotion checkpoint on the public 29-DOF embodiment",
         "execution_kind": "real",
         "checkpoint_source": "Published NVIDIA Isaac G1 ONNX checkpoint",
         "command_source": "runtime.velocity",
@@ -174,6 +176,49 @@ def resolve_ort_dylib(repo_root: Path) -> str | None:
     return str(candidates[0]) if candidates else None
 
 
+def resolve_mujoco_runtime_libdir(env: dict[str, str]) -> Path | None:
+    explicit = env.get("MUJOCO_DYNAMIC_LINK_DIR")
+    if explicit:
+        return Path(explicit)
+
+    download_dir = env.get("MUJOCO_DOWNLOAD_DIR")
+    if not download_dir:
+        return None
+
+    if os.name == "nt":
+        library_name = "mujoco.dll"
+    elif sys.platform == "darwin":
+        library_name = "libmujoco.dylib"
+    else:
+        library_name = "libmujoco.so"
+
+    candidates = sorted(
+        Path(download_dir).glob(f"mujoco-*/lib/{library_name}"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    return candidates[0].parent if candidates else None
+
+
+def prepend_env_path(env: dict[str, str], key: str, value: Path) -> None:
+    current = env.get(key)
+    env[key] = f"{value}{os.pathsep}{current}" if current else str(value)
+
+
+def configure_binary_runtime_env(env: dict[str, str]) -> dict[str, str]:
+    libdir = resolve_mujoco_runtime_libdir(env)
+    if libdir is None:
+        return env
+
+    if os.name == "nt":
+        prepend_env_path(env, "PATH", libdir)
+    elif sys.platform == "darwin":
+        prepend_env_path(env, "DYLD_LIBRARY_PATH", libdir)
+    else:
+        prepend_env_path(env, "LD_LIBRARY_PATH", libdir)
+    return env
+
+
 def resolve_rerun_web_viewer_version(repo_root: Path) -> str:
     lock_text = (repo_root / "Cargo.lock").read_text(encoding="utf-8")
     match = re.search(r'name = "rerun"\nversion = "([^"]+)"', lock_text)
@@ -247,11 +292,92 @@ def vendor_rerun_web_viewer(repo_root: Path, output_dir: Path) -> dict[str, str]
     }
 
 
-def append_report_and_vis(base_toml: str, policy_id: str, json_path: Path, rrd_path: Path) -> str:
-    return (
-        base_toml.rstrip()
-        + f"\n\n[vis]\napp_id = \"robowbc-showcase-{policy_id}\"\nspawn_viewer = false\nsave_path = \"{rrd_path.as_posix()}\"\n\n[report]\noutput_path = \"{json_path.as_posix()}\"\nmax_frames = 120\n"
+def resolve_showcase_context(repo_root: Path, policy: dict[str, object]) -> dict[str, object]:
+    config_path = repo_root / str(policy["config"])
+    app_config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    comm_cfg = app_config.get("comm") or app_config.get("communication") or {}
+    frequency_hz = int(comm_cfg.get("frequency_hz", 50) or 50)
+    existing_sim = app_config.get("sim")
+
+    robot_cfg_path = app_config.get("robot", {}).get("config_path")
+    robot_model_path = None
+    if robot_cfg_path:
+        robot_cfg = tomllib.loads((repo_root / str(robot_cfg_path)).read_text(encoding="utf-8"))
+        robot_model_path = robot_cfg.get("model_path")
+
+    if isinstance(existing_sim, dict):
+        model_path = str(existing_sim.get("model_path") or robot_model_path or "")
+        timestep = float(existing_sim.get("timestep", 0.002))
+        substeps = int(existing_sim.get("substeps", 10))
+        return {
+            "transport": "mujoco" if model_path else "synthetic",
+            "model_path": model_path or None,
+            "timestep": timestep,
+            "substeps": substeps,
+            "robot_config_path": str(robot_cfg_path) if robot_cfg_path else None,
+            "config_has_sim_section": True,
+        }
+
+    if robot_model_path is None:
+        return {
+            "transport": "synthetic",
+            "model_path": None,
+            "timestep": None,
+            "substeps": None,
+            "robot_config_path": str(robot_cfg_path) if robot_cfg_path else None,
+            "config_has_sim_section": False,
+        }
+
+    timestep = float(policy.get("showcase_timestep", 0.002))
+    derived_substeps = round(1.0 / (max(frequency_hz, 1) * timestep))
+    substeps = int(policy.get("showcase_substeps", max(derived_substeps, 1)))
+    return {
+        "transport": "mujoco",
+        "model_path": str(robot_model_path),
+        "timestep": timestep,
+        "substeps": substeps,
+        "robot_config_path": str(robot_cfg_path) if robot_cfg_path else None,
+        "config_has_sim_section": False,
+    }
+
+
+def compose_showcase_config(
+    base_toml: str,
+    policy_id: str,
+    json_path: Path,
+    rrd_path: Path,
+    showcase_context: dict[str, object],
+) -> str:
+    sections = [base_toml.rstrip()]
+    if (
+        showcase_context["transport"] == "mujoco"
+        and not showcase_context["config_has_sim_section"]
+    ):
+        sections.append(
+            "\n".join(
+                [
+                    "[sim]",
+                    f'model_path = "{showcase_context["model_path"]}"',
+                    f'timestep = {showcase_context["timestep"]:g}',
+                    f'substeps = {showcase_context["substeps"]}',
+                ]
+            )
+        )
+    sections.append(
+        "\n".join(
+            [
+                "[vis]",
+                f'app_id = "robowbc-showcase-{policy_id}"',
+                "spawn_viewer = false",
+                f'save_path = "{rrd_path.as_posix()}"',
+                "",
+                "[report]",
+                f'output_path = "{json_path.as_posix()}"',
+                "max_frames = 120",
+            ]
+        )
     )
+    return "\n\n".join(sections) + "\n"
 
 
 def missing_required_paths(repo_root: Path, policy: dict[str, object]) -> list[str]:
@@ -265,7 +391,28 @@ def missing_required_paths(repo_root: Path, policy: dict[str, object]) -> list[s
     return missing
 
 
-def policy_meta(policy: dict[str, object], json_path: Path | None = None, rrd_path: Path | None = None, log_path: Path | None = None) -> dict[str, object]:
+def detect_transport(log_text: str) -> str:
+    if "mujoco simulation transport active" in log_text:
+        return "mujoco"
+    if "unitree g1 hardware transport active" in log_text:
+        return "hardware"
+    return "synthetic"
+
+
+def detect_mujoco_model_variant(log_text: str) -> str | None:
+    match = re.search(r"model_variant=([^,\s)]+)", log_text)
+    return match.group(1) if match else None
+
+
+def policy_meta(
+    policy: dict[str, object],
+    showcase_context: dict[str, object],
+    actual_transport: str | None = None,
+    actual_model_variant: str | None = None,
+    json_path: Path | None = None,
+    rrd_path: Path | None = None,
+    log_path: Path | None = None,
+) -> dict[str, object]:
     meta = {
         "title": policy["title"],
         "source": policy["source"],
@@ -278,6 +425,10 @@ def policy_meta(policy: dict[str, object], json_path: Path | None = None, rrd_pa
         "config_path": policy["config"],
         "required_paths": list(policy.get("required_paths", [])),
         "blocked_reason": policy.get("blocked_reason"),
+        "showcase_transport": actual_transport or str(showcase_context["transport"]),
+        "showcase_model_path": showcase_context.get("model_path"),
+        "showcase_model_variant": actual_model_variant,
+        "robot_config_path": showcase_context.get("robot_config_path"),
     }
     if json_path is not None:
         meta["json_file"] = json_path.name
@@ -288,8 +439,10 @@ def policy_meta(policy: dict[str, object], json_path: Path | None = None, rrd_pa
     return meta
 
 
+
 def blocked_entry(repo_root: Path, policy: dict[str, object]) -> dict[str, object]:
     missing = missing_required_paths(repo_root, policy)
+    showcase_context = resolve_showcase_context(repo_root, policy)
     return {
         "policy_name": policy["id"],
         "status": "blocked",
@@ -299,25 +452,39 @@ def blocked_entry(repo_root: Path, policy: dict[str, object]) -> dict[str, objec
         "command_kind": str(policy["command_source"]).removeprefix("runtime."),
         "command_data": [],
         "_meta": {
-            **policy_meta(policy),
+            **policy_meta(policy, showcase_context),
             "missing_paths": missing,
         },
     }
 
 
-def run_policy(repo_root: Path, binary: Path, output_dir: Path, policy: dict[str, object], env: dict[str, str]) -> dict[str, object]:
+
+def run_policy(
+    repo_root: Path,
+    binary: Path,
+    output_dir: Path,
+    policy: dict[str, object],
+    env: dict[str, str],
+) -> dict[str, object]:
     missing = missing_required_paths(repo_root, policy)
     if missing:
         return blocked_entry(repo_root, policy)
 
     policy_id = str(policy["id"])
+    showcase_context = resolve_showcase_context(repo_root, policy)
     base_config = (repo_root / str(policy["config"])).read_text(encoding="utf-8")
     temp_config = output_dir / f"{policy_id}.toml"
     json_path = output_dir / f"{policy_id}.json"
     rrd_path = output_dir / f"{policy_id}.rrd"
     log_path = output_dir / f"{policy_id}.log"
     temp_config.write_text(
-        append_report_and_vis(base_config, policy_id, json_path, rrd_path),
+        compose_showcase_config(
+            base_config,
+            policy_id,
+            json_path,
+            rrd_path,
+            showcase_context,
+        ),
         encoding="utf-8",
     )
 
@@ -329,7 +496,8 @@ def run_policy(repo_root: Path, binary: Path, output_dir: Path, policy: dict[str
         text=True,
         check=False,
     )
-    log_path.write_text(proc.stdout + "\n--- STDERR ---\n" + proc.stderr, encoding="utf-8")
+    log_text = proc.stdout + "\n--- STDERR ---\n" + proc.stderr
+    log_path.write_text(log_text, encoding="utf-8")
     if proc.returncode != 0:
         raise SystemExit(
             f"policy showcase run failed for {policy_id} with exit code {proc.returncode}; see {log_path}"
@@ -341,12 +509,28 @@ def run_policy(repo_root: Path, binary: Path, output_dir: Path, policy: dict[str
     if not rrd_path.exists():
         raise SystemExit(
             f"policy showcase run for {policy_id} did not write the expected Rerun recording at {rrd_path}; "
-            "build robowbc with --features robowbc-cli/vis before running the showcase generator"
+            "build robowbc with --features robowbc-cli/sim,robowbc-cli/vis before running the showcase generator"
+        )
+
+    actual_transport = detect_transport(log_text)
+    actual_model_variant = detect_mujoco_model_variant(log_text)
+    if showcase_context["transport"] == "mujoco" and actual_transport != "mujoco":
+        raise SystemExit(
+            f"policy showcase run for {policy_id} did not activate MuJoCo transport; "
+            f"see {log_path} and build robowbc with sim + vis support before regenerating the showcase"
         )
 
     report = json.loads(json_path.read_text(encoding="utf-8"))
     report["status"] = "ok"
-    report["_meta"] = policy_meta(policy, json_path=json_path, rrd_path=rrd_path, log_path=log_path)
+    report["_meta"] = policy_meta(
+        policy,
+        showcase_context,
+        actual_transport=actual_transport,
+        actual_model_variant=actual_model_variant,
+        json_path=json_path,
+        rrd_path=rrd_path,
+        log_path=log_path,
+    )
     return report
 
 
@@ -419,6 +603,30 @@ def pill(label: str, css_class: str) -> str:
     return f'<span class="pill {css_class}">{html.escape(label)}</span>'
 
 
+def showcase_transport_badge_label(transport: str) -> str:
+    if transport == "mujoco":
+        return "MUJOCO SIM"
+    if transport == "hardware":
+        return "HARDWARE"
+    return transport.upper()
+
+
+def showcase_transport_text(transport: str) -> str:
+    if transport == "mujoco":
+        return "MuJoCo sim"
+    if transport == "hardware":
+        return "Hardware"
+    return "Synthetic fallback"
+
+
+def showcase_model_variant_text(variant: str | None) -> str:
+    if variant == "meshless-public-mjcf":
+        return "Meshless public MJCF"
+    if variant == "upstream-mjcf":
+        return "Upstream MJCF"
+    return variant or "-"
+
+
 def display_sort_key(index: int, entry: dict[str, object]) -> tuple[int, int, int]:
     meta = entry["_meta"]
     status = entry.get("status", "ok")
@@ -457,8 +665,11 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
         meta = entry["_meta"]
         status = entry.get("status", "ok")
         execution_kind = str(meta["execution_kind"])
+        transport = str(meta.get("showcase_transport", "synthetic"))
+        model_variant = showcase_model_variant_text(meta.get("showcase_model_variant"))
+        transport_html = pill(showcase_transport_badge_label(transport), "transport")
         status_html = pill("OK" if status == "ok" else "BLOCKED", "ok" if status == "ok" else "blocked")
-        provenance_html = pill(execution_kind.upper(), execution_kind)
+        provenance_html = " ".join([pill(execution_kind.upper(), execution_kind), transport_html])
 
         metrics = entry.get("metrics") or {}
         ticks = metrics.get("ticks", "-")
@@ -484,6 +695,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
         badge_row = " ".join(
             [
                 pill(execution_kind.upper(), execution_kind),
+                transport_html,
                 pill(str(entry.get("command_kind", "")).upper(), "command"),
                 pill(str(meta["command_source"]), "meta"),
             ]
@@ -506,6 +718,18 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
     <div>
       <span>Status</span>
       <strong>Blocked</strong>
+    </div>
+    <div>
+      <span>Showcase transport</span>
+      <strong>{html.escape(showcase_transport_text(transport))}</strong>
+    </div>
+    <div>
+      <span>Embodiment</span>
+      <code>{html.escape(str(meta['showcase_model_path'] or '-'))}</code>
+    </div>
+    <div>
+      <span>MuJoCo model variant</span>
+      <strong>{html.escape(model_variant)}</strong>
     </div>
     <div>
       <span>Checkpoint source</span>
@@ -614,6 +838,18 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
   </div>
   <div class="details-grid">
     <div>
+      <span>Showcase transport</span>
+      <strong>{html.escape(showcase_transport_text(transport))}</strong>
+    </div>
+    <div>
+      <span>Embodiment</span>
+      <code>{html.escape(str(meta['showcase_model_path'] or '-'))}</code>
+    </div>
+    <div>
+      <span>MuJoCo model variant</span>
+      <strong>{html.escape(model_variant)}</strong>
+    </div>
+    <div>
       <span>Command data</span>
       <code>{html.escape(format_vector(entry.get('command_data', [])))}</code>
     </div>
@@ -676,6 +912,8 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
       --command-fg: #8a5b00;
       --meta-bg: #edf2f7;
       --meta-fg: #334155;
+      --transport-bg: #e8f1ff;
+      --transport-fg: #1d4ed8;
     }}
     * {{ box-sizing: border-box; }}
     body {{ margin: 0; font-family: "IBM Plex Sans", "Segoe UI", sans-serif; background: radial-gradient(circle at top, #eef7ff, var(--bg) 45%); color: var(--text); }}
@@ -702,6 +940,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
     .pill.ok {{ background: var(--real-bg); color: var(--real-fg); }}
     .pill.command {{ background: var(--command-bg); color: var(--command-fg); }}
     .pill.meta {{ background: var(--meta-bg); color: var(--meta-fg); text-transform: none; }}
+    .pill.transport {{ background: var(--transport-bg); color: var(--transport-fg); }}
     .muted {{ color: var(--muted); }}
     .stats {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin: 16px 0 20px; }}
     .stats div, .details-grid div {{ background: #f7f9fc; border: 1px solid var(--border); border-radius: 16px; padding: 12px 14px; }}
@@ -737,7 +976,8 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
   <main>
     <section class="hero">
       <h1>RoboWBC Policy Showcase</h1>
-      <p>This artifact is generated automatically in CI from the set of real policy integrations that are wired today. When a public checkpoint bundle is cached, the card runs live; when assets are unavailable, the page degrades to a visible blocked card instead of pretending the integration exists.</p>
+      <p>This artifact is generated automatically in CI from the set of real policy integrations that are wired today. Successful cards run real checkpoints through the MuJoCo transport and save the resulting 3D Rerun scene; when assets are unavailable, the page degrades to a visible blocked card instead of pretending the integration exists.</p>
+      <p class="muted">The public G1 cards currently load a meshless MuJoCo MJCF variant because this repository does not redistribute Unitree's upstream STL mesh bundle. The dynamics stay MuJoCo-backed, while the Rerun robot scene is reconstructed from the same open MJCF kinematic tree.</p>
       <p class="muted">Each successful card lazy-loads its saved Rerun recording when visible. The raw <code>.rrd</code> files are still available for download, and serving the folder over HTTP remains the most reliable way to open the interactive viewer locally.</p>
       <div class="meta-row">
         <span>Generated: {html.escape(generated_at)}</span>
@@ -748,10 +988,10 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
 
     <section class="overview">
       <h2>Compared policies</h2>
-      <p class="muted">Successful cards use real checkpoints or public asset bundles cached by CI. Blocked cards surface the exact missing files or unavailable upstream artifacts instead of falling back to mock output.</p>
+      <p class="muted">Successful cards use real checkpoints or public asset bundles cached by CI and must activate the requested showcase transport. Blocked cards surface the exact missing files or unavailable upstream artifacts instead of falling back to mock output.</p>
       <table>
         <thead>
-          <tr><th>Policy</th><th>Status</th><th>Provenance</th><th>Coverage</th><th>Ticks</th><th>Avg inference</th><th>Achieved rate</th><th>Dropped frames</th></tr>
+          <tr><th>Policy</th><th>Status</th><th>Run path</th><th>Coverage</th><th>Ticks</th><th>Avg inference</th><th>Achieved rate</th><th>Dropped frames</th></tr>
         </thead>
         <tbody>
           {''.join(overview_rows)}
@@ -882,6 +1122,7 @@ def main() -> int:
     dylib = resolve_ort_dylib(repo_root)
     if dylib:
         env.setdefault("ROBOWBC_ORT_DYLIB_PATH", dylib)
+    env = configure_binary_runtime_env(env)
 
     entries = [run_policy(repo_root, binary, output_dir, policy, env) for policy in POLICIES]
     render_html(entries, output_dir, repo_root)
