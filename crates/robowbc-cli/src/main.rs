@@ -148,15 +148,15 @@ impl Default for InferenceSection {
 
 #[derive(Debug)]
 struct SyntheticTransport {
-    joint_count: usize,
+    baseline_pose: Vec<f32>,
     step: usize,
     sent_commands: usize,
 }
 
 impl SyntheticTransport {
-    fn new(joint_count: usize) -> Self {
+    fn new(baseline_pose: Vec<f32>) -> Self {
         Self {
-            joint_count,
+            baseline_pose,
             step: 0,
             sent_commands: 0,
         }
@@ -171,10 +171,13 @@ impl RobotTransport for SyntheticTransport {
     #[allow(clippy::cast_precision_loss)]
     fn recv_joint_state(&mut self) -> Result<JointState, CommError> {
         let t = self.step as f32 * 0.01;
-        let positions = (0..self.joint_count)
-            .map(|i| (t + i as f32 * 0.1).sin() * 0.1)
+        let positions = self
+            .baseline_pose
+            .iter()
+            .enumerate()
+            .map(|(i, &baseline)| baseline + (t + i as f32 * 0.1).sin() * 0.1)
             .collect();
-        let velocities = (0..self.joint_count)
+        let velocities = (0..self.baseline_pose.len())
             .map(|i| (t + i as f32 * 0.1).cos() * 0.05)
             .collect();
         Ok(JointState {
@@ -522,6 +525,7 @@ fn run_control_loop_inner<T: RobotTransport>(
                 vis.advance_frame();
                 let _ = vis.log_joint_state(&frame.actual_positions, &frame.actual_velocities);
                 let _ = vis.log_joint_targets(&frame.target_positions);
+                let _ = vis.log_robot_scene(&frame.actual_positions, &frame.target_positions);
                 let _ = vis.log_inference_latency(frame.inference_latency_ms);
                 #[allow(clippy::cast_precision_loss)]
                 let freq = 1.0_f64 / cycle_elapsed.as_secs_f64().max(f64::EPSILON);
@@ -585,7 +589,7 @@ fn run_control_loop(
     #[cfg(feature = "vis")]
     let mut visualizer: Option<RerunVisualizer> = match vis_config {
         Some(ref cfg) => {
-            let vis = RerunVisualizer::new(cfg, &robot.joint_names)
+            let vis = RerunVisualizer::new(cfg, robot)
                 .map_err(|e| format!("failed to start Rerun visualizer: {e}"))?;
             println!("rerun visualizer started (app_id={})", cfg.app_id);
             Some(vis)
@@ -634,7 +638,7 @@ fn run_control_loop(
             )?;
             (ticks, dropped, inf, ticks)
         } else {
-            let mut transport = SyntheticTransport::new(robot.joint_count);
+            let mut transport = SyntheticTransport::new(robot.default_pose.clone());
             let (ticks, dropped, inf) = run_control_loop_inner(
                 &mut transport,
                 policy,
@@ -670,7 +674,7 @@ fn run_control_loop(
             )?;
             (ticks, dropped, inf, ticks)
         } else {
-            let mut transport = SyntheticTransport::new(robot.joint_count);
+            let mut transport = SyntheticTransport::new(robot.default_pose.clone());
             let (ticks, dropped, inf) = run_control_loop_inner(
                 &mut transport,
                 policy,
