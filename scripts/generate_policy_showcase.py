@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import datetime as dt
 import html
 import json
@@ -412,26 +411,6 @@ def pill(label: str, css_class: str) -> str:
     return f'<span class="pill {css_class}">{html.escape(label)}</span>'
 
 
-def inline_recording_payload(entries: list[dict[str, object]], output_dir: Path) -> list[dict[str, str]]:
-    payload: list[dict[str, str]] = []
-    for entry in entries:
-        if entry.get("status") != "ok":
-            continue
-        meta = entry["_meta"]
-        rrd_file = meta.get("rrd_file")
-        if not isinstance(rrd_file, str) or not rrd_file:
-            continue
-        rrd_path = output_dir / rrd_file
-        payload.append(
-            {
-                "policy_id": str(entry["policy_name"]),
-                "title": str(meta["title"]),
-                "rrd_file": rrd_file,
-                "base64": base64.b64encode(rrd_path.read_bytes()).decode("ascii"),
-            }
-        )
-    return payload
-
 
 def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: Path) -> None:
     generated_at = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
@@ -442,7 +421,6 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
     commit_link = f"{server}/{repo}/commit/{sha}" if sha and repo else ""
     run_link = f"{server}/{repo}/actions/runs/{run_id}" if run_id and repo else ""
     viewer_assets = vendor_rerun_web_viewer(repo_root, output_dir)
-    recordings_json = json.dumps(inline_recording_payload(entries, output_dir), separators=(",", ":"))
 
     overview_rows: list[str] = []
     cards: list[str] = []
@@ -597,12 +575,12 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
   <div class="rerun-block">
     <div class="rerun-block-header">
       <strong>Embedded Rerun viewer</strong>
-      <span class="muted">Loaded from the saved <code>{html.escape(str(meta['rrd_file']))}</code> recording.</span>
+      <span class="muted">Fetches <code>{html.escape(str(meta['rrd_file']))}</code> lazily when the card enters the viewport.</span>
     </div>
-    <div class="rerun-stage" data-rerun-policy="{html.escape(str(entry['policy_name']))}">
+    <div class="rerun-stage" data-rerun-policy="{html.escape(str(entry['policy_name']))}" data-rrd-file="{html.escape(str(meta['rrd_file']))}">
       <div class="rerun-stage-placeholder">
         <strong>Preparing interactive view</strong>
-        <span>Mounts automatically when this card enters the viewport.</span>
+        <span>Loads the viewer runtime and recording on demand when visible.</span>
       </div>
     </div>
   </div>
@@ -732,7 +710,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
     <section class="hero">
       <h1>RoboWBC Policy Showcase</h1>
       <p>This artifact is generated automatically in CI from the set of real policy integrations that are wired today. When a public checkpoint bundle is cached, the card runs live; when assets are unavailable, the page degrades to a visible blocked card instead of pretending the integration exists.</p>
-      <p class="muted">Each successful card now embeds its saved Rerun recording directly in-page. The raw <code>.rrd</code> files are still available for download, and serving the folder over HTTP remains the most reliable way to open the interactive viewer locally.</p>
+      <p class="muted">Each successful card lazy-loads its saved Rerun recording when visible. The raw <code>.rrd</code> files are still available for download, and serving the folder over HTTP remains the most reliable way to open the interactive viewer locally.</p>
       <div class="meta-row">
         <span>Generated: {html.escape(generated_at)}</span>
         <span>Commit: {commit_html or 'local'}</span>
@@ -762,37 +740,28 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
       <ul>{excluded}</ul>
     </section>
   </main>
-  <script id="rerun-recordings" type="application/json">{recordings_json}</script>
   <script type="module">
-    import {{ WebViewer }} from "{viewer_assets['module_path']}";
-
-    const recordingData = JSON.parse(document.getElementById("rerun-recordings").textContent);
-    const recordings = new Map(recordingData.map((item) => [item.policy_id, item]));
+    let webViewerCtor = null;
     const viewers = new Map();
 
-    function base64ToUint8Array(base64String) {{
-      const binary = atob(base64String);
-      const bytes = new Uint8Array(binary.length);
-      for (let idx = 0; idx < binary.length; idx += 1) {{
-        bytes[idx] = binary.charCodeAt(idx);
+    async function getWebViewerCtor() {{
+      if (webViewerCtor === null) {{
+        const module = await import("{viewer_assets['module_path']}");
+        webViewerCtor = module.WebViewer;
       }}
-      return bytes;
+      return webViewerCtor;
     }}
 
-    function recordingBlobUrl(policyId) {{
-      const recording = recordings.get(policyId);
-      if (!recording) {{
-        throw new Error(`missing embedded recording for ${{policyId}}`);
+    function recordingUrl(stage) {{
+      const rrdFile = stage.dataset.rrdFile;
+      if (!rrdFile) {{
+        throw new Error("missing data-rrd-file attribute");
       }}
-      if (!recording.blobUrl) {{
-        const bytes = base64ToUint8Array(recording.base64);
-        recording.blobUrl = URL.createObjectURL(new Blob([bytes], {{ type: "application/octet-stream" }}));
-        delete recording.base64;
-      }}
-      return recording.blobUrl;
+      return new URL(rrdFile, window.location.href).toString();
     }}
 
     function showStageError(stage, message) {{
+      stage.dataset.loading = "false";
       stage.replaceChildren();
       const errorNode = document.createElement("div");
       errorNode.className = "rerun-stage-error";
@@ -804,6 +773,13 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
       stage.append(errorNode);
     }}
 
+    function showFileProtocolMessage(stage) {{
+      showStageError(
+        stage,
+        "This report was opened via file://. Serve the folder over HTTP, for example with `python scripts/serve_showcase.py --dir ./artifacts/policy-showcase`."
+      );
+    }}
+
     async function mountStage(stage) {{
       const policyId = stage.dataset.rerunPolicy;
       if (!policyId || viewers.has(policyId)) {{
@@ -813,8 +789,9 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
       stage.dataset.loading = "true";
       stage.replaceChildren();
       try {{
+        const WebViewer = await getWebViewerCtor();
         const viewer = new WebViewer();
-        await viewer.start(recordingBlobUrl(policyId), stage, {{
+        await viewer.start(recordingUrl(stage), stage, {{
           width: "100%",
           height: "420px",
           hide_welcome_screen: true,
@@ -840,15 +817,17 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
     }}, {{ rootMargin: "180px 0px" }});
 
     const stages = [...document.querySelectorAll(".rerun-stage[data-rerun-policy]")];
-    if (stages.length > 0) {{
-      void mountStage(stages[0]);
-    }}
-    for (const stage of stages.slice(1)) {{
-      observer.observe(stage);
-    }}
-
     if (window.location.protocol === "file:") {{
-      console.warn("Embedded Rerun viewers are most reliable when the showcase folder is served over HTTP.");
+      for (const stage of stages) {{
+        showFileProtocolMessage(stage);
+      }}
+    }} else {{
+      if (stages.length > 0) {{
+        void mountStage(stages[0]);
+      }}
+      for (const stage of stages.slice(1)) {{
+        observer.observe(stage);
+      }}
     }}
   </script>
 </body>

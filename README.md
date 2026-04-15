@@ -92,14 +92,25 @@ python scripts/generate_policy_showcase.py \
   --robowbc-binary ./target/debug/robowbc \
   --output-dir ./artifacts/policy-showcase
 
-cd ./artifacts/policy-showcase
-python -m http.server 8000
+python scripts/serve_showcase.py \
+  --dir ./artifacts/policy-showcase \
+  --port 8000 \
+  --open
 ```
 
 The output folder contains `index.html`, `manifest.json`, per-policy `*.json`
-run summaries, raw `*.rrd` recordings, logs, and the embedded Rerun web viewer
-runtime. Pull requests keep the downloadable `policy-showcase` artifact, and
-`main` publishes the generated site to the live report link above.
+run summaries, raw `*.rrd` recordings, logs, and the vendored Rerun web viewer
+runtime. The HTML now lazy-loads each `.rrd` file when its card becomes
+visible, so the bundle stays static-site-friendly for both local debug and
+GitHub Pages. Do not open `index.html` directly via `file://`; serve the
+folder over HTTP with `python scripts/serve_showcase.py --dir ...` instead.
+The local helper accepts `--dir`, `--bind`, `--port`, and `--open` so the same
+bundle can be previewed from any generated folder.
+Pull requests keep the downloadable `policy-showcase` artifact, and `main`
+publishes the generated site to the live report link above. If we later need
+preview deploys, custom headers, or to offload larger recordings into object
+storage, Vercel or Cloudflare Pages would be the next step, but GitHub Pages
+remains the default project-site path.
 </details>
 
 <details>
