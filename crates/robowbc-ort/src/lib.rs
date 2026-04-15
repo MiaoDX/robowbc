@@ -22,7 +22,7 @@ pub mod bfm_zero;
 pub mod decoupled;
 pub mod wholebody_vla;
 pub use bfm_zero::{BfmZeroConfig, BfmZeroPolicy};
-pub use decoupled::{DecoupledWbcConfig, DecoupledWbcPolicy};
+pub use decoupled::{DecoupledObservationContract, DecoupledWbcConfig, DecoupledWbcPolicy};
 pub use wholebody_vla::{WholeBodyVlaConfig, WholeBodyVlaPolicy};
 
 pub mod wbc_agile;
