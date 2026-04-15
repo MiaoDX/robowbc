@@ -12,6 +12,7 @@ path = "src/lib.rs"
 [features]
 default = []
 mujoco = ["dep:mujoco-rs"]
+mujoco-auto-download = ["mujoco", "mujoco-rs/auto-download-mujoco"]
 
 [dependencies]
 robowbc-core = { path = "../robowbc-core" }

@@ -49,13 +49,18 @@ The repository includes a mixed-source showcase generator that compares the
 currently runnable policy integrations and emits one static HTML report.
 
 ```bash
-cargo build --bin robowbc --features robowbc-cli/vis
+export MUJOCO_DOWNLOAD_DIR="$(pwd)/.cache/mujoco"
+cargo build --bin robowbc --features robowbc-cli/sim-auto-download,robowbc-cli/vis
 # npm is used once to vendor the Rerun web viewer beside the report.
 python scripts/generate_policy_showcase.py \
   --repo-root . \
   --robowbc-binary ./target/debug/robowbc \
   --output-dir ./artifacts/policy-showcase
 ```
+
+On Linux and Windows, the first `sim-auto-download` build unpacks MuJoCo into
+`MUJOCO_DOWNLOAD_DIR`. If you already manage a system MuJoCo install, the base
+`robowbc-cli/sim` feature path still works too.
 
 The output folder contains:
 
@@ -75,13 +80,15 @@ python scripts/serve_showcase.py \
 Then open `http://127.0.0.1:8000`. Do not open the generated `index.html`
 directly via `file://`; the interactive viewer expects an HTTP-served folder.
 The helper script also accepts `--bind` if you want to expose the local preview
-to another machine on the same network. If the public checkpoints are present,
-the report includes real CPU
+to another machine on the same network. If the public checkpoints are present, the report includes MuJoCo-backed
 `gear_sonic`, `decoupled_wbc`, `wbc_agile`, and `bfm_zero` cards; otherwise
 missing integrations are rendered as blocked with explicit missing-path
-reasons. The page lazy-loads each `.rrd` recording when a card becomes visible,
-which keeps the same static bundle usable in CI artifacts and on the
-`main`-branch GitHub Pages site.
+reasons. On the public G1 path the loader uses a meshless MJCF fallback because
+this repo does not ship Unitree's STL mesh bundle. `wbc_agile` currently
+reuses the public 29-DOF G1 embodiment for its scene, so the extra finger
+joints stay at their default pose. The page lazy-loads each `.rrd` recording
+when a card becomes visible, which keeps the same static bundle usable in CI
+artifacts and on the `main`-branch GitHub Pages site.
 
 ## Run GEAR-SONIC with real checkpoints
 

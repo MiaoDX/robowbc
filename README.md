@@ -47,7 +47,7 @@ preview flow in [Open or generate the visual report](#open-or-generate-the-visua
 | Runtime | Rust workspace with registry-driven policy loading, ONNX Runtime and PyO3 backends, MuJoCo and communication transports, plus JSON and Rerun reporting |
 | Live public-policy paths | `gear_sonic`, `decoupled_wbc`, `wbc_agile`, `bfm_zero` |
 | Honest blocked wrappers | `hover` needs a user-exported checkpoint, `wholebody_vla` still lacks a runnable public upstream release |
-| Published visual report | The `main` workflow is wired to build the same HTML report in CI and publish it to the live report link above |
+| Published visual report | The `main` workflow builds the same HTML report in CI, runs the public G1 cards through MuJoCo, and publishes the result to the live report link above |
 
 ## Policy status
 
@@ -75,7 +75,11 @@ Blocked or local-only:
 The hosted showcase keeps the working public-asset policies first and pushes
 blocked or local-only integrations lower on the page. The live public cards are
 `gear_sonic`, `decoupled_wbc`, `wbc_agile`, and `bfm_zero`, each with a stable
-anchor you can link to directly.
+anchor you can link to directly. Their showcase recordings are MuJoCo-backed
+via a meshless public G1 MJCF fallback because this repo does not redistribute
+Unitree's STL mesh bundle; `wbc_agile` currently reuses the public 29-DOF G1
+embodiment, so its extra finger joints stay at their default pose in the
+recorded scene.
 
 ## Quick start
 
@@ -118,7 +122,8 @@ The same report generator powers both the local HTML bundle and the published
 GitHub Pages site.
 
 ```bash
-cargo build --bin robowbc --features robowbc-cli/vis
+export MUJOCO_DOWNLOAD_DIR="$(pwd)/.cache/mujoco"
+cargo build --bin robowbc --features robowbc-cli/sim-auto-download,robowbc-cli/vis
 python scripts/generate_policy_showcase.py \
   --repo-root . \
   --robowbc-binary ./target/debug/robowbc \
@@ -130,12 +135,20 @@ python scripts/serve_showcase.py \
   --open
 ```
 
+On Linux and Windows, the first `sim-auto-download` build unpacks MuJoCo into
+`MUJOCO_DOWNLOAD_DIR`. If you already manage a system MuJoCo install, building
+with `robowbc-cli/sim,robowbc-cli/vis` still works too.
+
 The output folder contains `index.html`, `manifest.json`, per-policy `*.json`
 run summaries, raw `*.rrd` recordings, logs, and the vendored Rerun web viewer
 runtime. The HTML now lazy-loads each `.rrd` file when its card becomes
 visible, so the bundle stays static-site-friendly for both local debug and
-GitHub Pages. Do not open `index.html` directly via `file://`; serve the
-folder over HTTP with `python scripts/serve_showcase.py --dir ...` instead.
+GitHub Pages. Successful public cards are executed through MuJoCo; on the
+public G1 path the loader transparently uses a meshless MJCF fallback unless
+you provide the upstream STL bundle locally, and the generator refuses to
+silently fall back to the synthetic transport. Do not open `index.html`
+directly via `file://`; serve the folder over HTTP with
+`python scripts/serve_showcase.py --dir ...` instead.
 The local helper accepts `--dir`, `--bind`, `--port`, and `--open` so the same
 bundle can be previewed from any generated folder.
 Pull requests keep the downloadable `policy-showcase` artifact, and `main`

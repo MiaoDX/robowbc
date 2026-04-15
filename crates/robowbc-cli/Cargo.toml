@@ -12,6 +12,7 @@ path = "src/main.rs"
 [features]
 default = []
 sim = ["dep:robowbc-sim", "robowbc-sim/mujoco"]
+sim-auto-download = ["sim", "robowbc-sim/mujoco-auto-download"]
 vis = ["dep:robowbc-vis", "robowbc-vis/rerun"]
 
 [dependencies]
