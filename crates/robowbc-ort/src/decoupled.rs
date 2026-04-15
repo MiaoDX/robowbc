@@ -799,7 +799,7 @@ mod tests {
             timestamp: Instant::now(),
         };
         let WbcCommand::Velocity(twist) = &obs.command else {
-            unreachable!("constructed as velocity")
+            unreachable!("constructed as velocity");
         };
 
         let single_obs = build_groot_g1_single_observation(

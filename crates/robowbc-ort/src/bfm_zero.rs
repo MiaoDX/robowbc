@@ -975,17 +975,21 @@ mod tests {
             &latent,
         );
 
+        let assert_close = |actual: f32, expected: f32| {
+            assert!((actual - expected).abs() < f32::EPSILON);
+        };
+
         assert_eq!(input.len(), BFM_G1_INPUT_DIM);
         assert_eq!(&input[..BFM_G1_ACTION_DIM], &vec![1.0; BFM_G1_ACTION_DIM]);
-        assert_eq!(input[58], 3.0);
-        assert_eq!(input[61], 6.0);
-        assert_eq!(input[64], 9.0);
-        assert_eq!(input[93], 10.0);
-        assert_eq!(input[209], 11.0);
-        assert_eq!(input[221], 14.0);
-        assert_eq!(input[337], 15.0);
-        assert_eq!(input[453], 16.0);
-        assert_eq!(*input.last().expect("latent tail should exist"), 19.0);
+        assert_close(input[58], 3.0);
+        assert_close(input[61], 6.0);
+        assert_close(input[64], 9.0);
+        assert_close(input[93], 10.0);
+        assert_close(input[209], 11.0);
+        assert_close(input[221], 14.0);
+        assert_close(input[337], 15.0);
+        assert_close(input[453], 16.0);
+        assert_close(*input.last().expect("latent tail should exist"), 19.0);
     }
 
     #[test]
