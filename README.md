@@ -1,232 +1,242 @@
-# RoboWBC
+---
+license: other
+license_name: nvidia-open-model-license
+license_link: LICENSE
+tags:
+- robotics
+- humanoid
+- whole-body-control
+- reinforcement-learning
+- motion-tracking
+- teleoperation
+- pytorch
+- isaac-lab
+pipeline_tag: reinforcement-learning
+---
 
-<p>
-  <a href="https://github.com/MiaoDX/robowbc/actions/workflows/ci.yml">
-    <img alt="CI status" src="https://github.com/MiaoDX/robowbc/actions/workflows/ci.yml/badge.svg?branch=main" />
-  </a>
-  <a href="https://miaodx.com/robowbc/">
-    <img alt="Policy showcase live" src="https://img.shields.io/website?down_message=offline&amp;label=policy%20showcase&amp;up_message=live&amp;url=https%3A%2F%2Fmiaodx.com%2Frobowbc%2F" />
-  </a>
-  <img alt="Rust 1.75+" src="https://img.shields.io/badge/rust-1.75%2B-orange?logo=rust" />
-  <img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&amp;logoColor=white" />
-  <img alt="rustfmt and clippy" src="https://img.shields.io/badge/style-rustfmt%20%2B%20clippy-1f2937" />
-  <a href="LICENSE">
-    <img alt="License MIT" src="https://img.shields.io/github/license/MiaoDX/robowbc" />
-  </a>
-</p>
+# GEAR-SONIC: Supersizing Motion Tracking for Natural Humanoid Whole-Body Control
 
-Rust-first runtime for humanoid whole-body control policies.
+<div align="center">
+  <img src="sonic-preview-gif-480P.gif" width="800">
+</div>
 
-<p>
-  <a href="https://miaodx.com/robowbc/"><strong>Open Hosted Policy Showcase</strong></a>
-  ·
-  <a href="docs/getting-started.md"><strong>Getting Started</strong></a>
-  ·
-  <a href="docs/architecture.md"><strong>Architecture</strong></a>
-  ·
-  <a href="docs/python-sdk.md"><strong>Python SDK</strong></a>
-  ·
-  <a href="docs/founding-document.md"><strong>Founding Document</strong></a>
-</p>
+## Model Description
 
-RoboWBC gives you one config-driven runtime for loading multiple WBC policies,
-running them through the same Rust CLI, and exporting the same JSON + Rerun
-report pipeline across smoke tests, MuJoCo runs, and hardware-oriented
-transports.
+**SONIC** (Supersizing Motion Tracking) is a humanoid behavior foundation model developed by NVIDIA that gives robots a core set of motor skills learned from large-scale human motion data. Rather than building separate controllers for predefined motions, SONIC uses motion tracking as a scalable training task, enabling a single unified policy to produce natural, whole-body movement and support a wide range of behaviors.
 
-If the hosted showcase URL is still stale right after a merge, wait for the
-`CI` workflow on `main` to finish the Pages deploy, or use the local HTTP
-preview flow in [Open or generate the visual report](#open-or-generate-the-visual-report).
+### Key Features
 
-![RoboWBC architecture](docs/assets/architecture.svg)
+- 🤖 **Unified Whole-Body Control**: Single policy handles walking, running, crawling, jumping, manipulation, and more
+- 🎯 **Motion Tracking**: Trained on large-scale human motion data for natural movements
+- 🎮 **Real-Time Teleoperation**: VR-based whole-body teleoperation via PICO headset
+- 🚀 **Hardware Deployment**: C++ inference stack for real-time control on humanoid robots
+- 🎨 **Kinematic Planner**: Real-time locomotion generation with multiple movement styles
+- 🔄 **Multi-Modal Control**: Supports keyboard, gamepad, VR, and high-level planning
 
-## What ships today
+## VR Whole-Body Teleoperation
 
-| Area | Status |
-|------|--------|
-| Runtime | Rust workspace with registry-driven policy loading, ONNX Runtime and PyO3 backends, MuJoCo and communication transports, plus JSON and Rerun reporting |
-| Live public-policy paths | `gear_sonic`, `decoupled_wbc`, `wbc_agile`, `bfm_zero` |
-| Honest blocked wrappers | `hover` needs a user-exported checkpoint, `wholebody_vla` still lacks a runnable public upstream release |
-| Published visual report | The `main` workflow builds the same HTML report in CI, runs the public G1 cards through MuJoCo, and publishes the result to the live report link above |
+SONIC supports real-time whole-body teleoperation via PICO VR headset, enabling natural human-to-robot motion transfer for data collection and interactive control.
 
-## Policy status
+<div align="center">
+<table>
+<tr>
+<td align="center"><b>Walking</b></td>
+<td align="center"><b>Running</b></td>
+</tr>
+<tr>
+<td align="center"><img src="media/teleop_walking.gif" width="400"></td>
+<td align="center"><img src="media/teleop_running.gif" width="400"></td>
+</tr>
+<tr>
+<td align="center"><b>Sideways Movement</b></td>
+<td align="center"><b>Kneeling</b></td>
+</tr>
+<tr>
+<td align="center"><img src="media/teleop_sideways.gif" width="400"></td>
+<td align="center"><img src="media/teleop_kneeling.gif" width="400"></td>
+</tr>
+<tr>
+<td align="center"><b>Getting Up</b></td>
+<td align="center"><b>Jumping</b></td>
+</tr>
+<tr>
+<td align="center"><img src="media/teleop_getup.gif" width="400"></td>
+<td align="center"><img src="media/teleop_jumping.gif" width="400"></td>
+</tr>
+<tr>
+<td align="center"><b>Bimanual Manipulation</b></td>
+<td align="center"><b>Object Hand-off</b></td>
+</tr>
+<tr>
+<td align="center"><img src="media/teleop_bimanual.gif" width="400"></td>
+<td align="center"><img src="media/teleop_switch_hands.gif" width="400"></td>
+</tr>
+</table>
+</div>
 
-Live showcase:
-[GEAR-SONIC](https://miaodx.com/robowbc/#policy-gear_sonic) ·
-[Decoupled WBC](https://miaodx.com/robowbc/#policy-decoupled_wbc) ·
-[WBC-AGILE](https://miaodx.com/robowbc/#policy-wbc_agile) ·
-[BFM-Zero](https://miaodx.com/robowbc/#policy-bfm_zero)
+## Kinematic Planner
 
-Blocked or local-only:
-[HOVER](#policy-hover) ·
-[WholeBodyVLA](#policy-wholebody-vla) ·
-[Python model](#policy-py-model)
+SONIC includes a kinematic planner for real-time locomotion generation — choose a movement style, steer with keyboard/gamepad, and adjust speed and height on the fly.
 
-| Policy | Status | Assets | Config | Links | Notes |
-|--------|--------|--------|--------|-------|-------|
-| <a id="policy-gear-sonic"></a>`gear_sonic` | 🟢 Live | ✅ Public | [configs/sonic_g1.toml](configs/sonic_g1.toml) | [Showcase](https://miaodx.com/robowbc/#policy-gear_sonic) | Published `planner_sonic.onnx` path works today; encoder and decoder tracking is still pending |
-| <a id="policy-decoupled-wbc"></a>`decoupled_wbc` | 🟢 Live | ✅ Public | [configs/decoupled_g1.toml](configs/decoupled_g1.toml) | [Showcase](https://miaodx.com/robowbc/#policy-decoupled_wbc) · [Smoke config](configs/decoupled_smoke.toml) | Public G1 walk and balance checkpoints work; the smoke config stays as the no-download path |
-| <a id="policy-wbc-agile"></a>`wbc_agile` | 🟢 Live | ✅ Public | [configs/wbc_agile_g1.toml](configs/wbc_agile_g1.toml) | [Showcase](https://miaodx.com/robowbc/#policy-wbc_agile) | Published G1 recurrent checkpoint is wired; the Booster T1 path still expects a user export |
-| <a id="policy-bfm-zero"></a>`bfm_zero` | 🟢 Live | ✅ Public | [configs/bfm_zero_g1.toml](configs/bfm_zero_g1.toml) | [Showcase](https://miaodx.com/robowbc/#policy-bfm_zero) | Public ONNX plus tracking context is normalized by `scripts/download_bfm_zero_models.sh` |
-| <a id="policy-hover"></a>`hover` | ⛔ Blocked | ❌ None | [configs/hover_h1.toml](configs/hover_h1.toml) | [Tracking issue #85](https://github.com/MiaoDX/robowbc/issues/85) | Wrapper exists, but the public upstream repo does not ship a pretrained checkpoint |
-| <a id="policy-wholebody-vla"></a>`wholebody_vla` | 🧪 Experimental | ❌ None | [configs/wholebody_vla_x2.toml](configs/wholebody_vla_x2.toml) | [Config](configs/wholebody_vla_x2.toml) | Contract wrapper only; the public upstream repo does not yet expose a runnable inference release |
-| <a id="policy-py-model"></a>`py_model` | 👤 User model | ➖ User-supplied | user TOML | [Backend](crates/robowbc-pyo3) · [Python SDK](docs/python-sdk.md) | Loads Python modules or PyTorch checkpoints through `robowbc-pyo3` |
+<div align="center">
+<table>
+<tr>
+<td align="center" colspan="2"><b>In-the-Wild Navigation</b></td>
+</tr>
+<tr>
+<td align="center" colspan="2"><img src="media/planner/planner_in_the_wild_navigation.gif" width="800"></td>
+</tr>
+<tr>
+<td align="center"><b>Run</b></td>
+<td align="center"><b>Happy</b></td>
+</tr>
+<tr>
+<td align="center"><img src="media/planner/planner_run.gif" width="400"></td>
+<td align="center"><img src="media/planner/planner_happy.gif" width="400"></td>
+</tr>
+<tr>
+<td align="center"><b>Stealth</b></td>
+<td align="center"><b>Injured</b></td>
+</tr>
+<tr>
+<td align="center"><img src="media/planner/planner_stealth.gif" width="400"></td>
+<td align="center"><img src="media/planner/planner_injured.gif" width="400"></td>
+</tr>
+<tr>
+<td align="center"><b>Kneeling</b></td>
+<td align="center"><b>Hand Crawling</b></td>
+</tr>
+<tr>
+<td align="center"><img src="media/planner/planner_kneeling.gif" width="400"></td>
+<td align="center"><img src="media/planner/planner_hand_crawling.gif" width="400"></td>
+</tr>
+<tr>
+<td align="center"><b>Elbow Crawling</b></td>
+<td align="center"><b>Boxing</b></td>
+</tr>
+<tr>
+<td align="center"><img src="media/planner/planner_elbow_crawling.gif" width="400"></td>
+<td align="center"><img src="media/planner/planner_boxing.gif" width="400"></td>
+</tr>
+</table>
+</div>
 
-The hosted showcase keeps the working public-asset policies first and pushes
-blocked or local-only integrations lower on the page. The live public cards are
-`gear_sonic`, `decoupled_wbc`, `wbc_agile`, and `bfm_zero`, each with a stable
-anchor you can link to directly. Their showcase recordings are MuJoCo-backed
-via a meshless public G1 MJCF fallback because this repo does not redistribute
-Unitree's STL mesh bundle; `wbc_agile` currently reuses the public 29-DOF G1
-embodiment, so its extra finger joints stay at their default pose in the
-recorded scene.
+## Quick Start
 
-## Quick start
+📚 **See the [Quick Start Guide](https://nvlabs.github.io/GR00T-WholeBodyControl/getting_started/quickstart.html)** for step-by-step instructions on:
+- Installation and setup
+- Running SONIC with different control modes (keyboard, gamepad, VR)
+- Deploying on real hardware
+- Using the kinematic planner
 
-```bash
-rustc --version
-cargo --version
-cargo build
-cargo run --bin robowbc -- run --config configs/decoupled_smoke.toml
+**Key Resources:**
+- [Installation Guide](https://nvlabs.github.io/GR00T-WholeBodyControl/getting_started/installation_deploy.html) - Complete setup instructions
+- [Keyboard Control Tutorial](https://nvlabs.github.io/GR00T-WholeBodyControl/tutorials/keyboard.html) - Get started with keyboard control
+- [Gamepad Control Tutorial](https://nvlabs.github.io/GR00T-WholeBodyControl/tutorials/gamepad.html) - Set up gamepad control
+- [VR Teleoperation Setup](https://nvlabs.github.io/GR00T-WholeBodyControl/getting_started/vr_teleop_setup.html) - Full-body VR control
+
+## Model Checkpoints
+
+All checkpoints (ONNX format) are available directly in this repository. Inference is powered by TensorRT and runs on both desktop and Jetson hardware.
+
+| Checkpoint | File | Description |
+|---|---|---|
+| Policy encoder | `model_encoder.onnx` | Encodes motion reference into latent |
+| Policy decoder | `model_decoder.onnx` | Decodes latent into joint actions |
+| Kinematic planner | `planner_sonic.onnx` | Real-time locomotion style planner |
+
+**Quick download** (requires `pip install huggingface_hub`):
+
+```python
+from huggingface_hub import snapshot_download
+snapshot_download(repo_id="nvidia/GEAR-SONIC", local_dir="gear_sonic_deploy")
 ```
 
-`configs/decoupled_smoke.toml` uses the checked-in dynamic identity ONNX
-fixture, so it is the intended no-download local smoke path.
-
-<details>
-<summary><strong>Run the live public policies</strong></summary>
+Or use the download script from the GitHub repo:
 
 ```bash
-bash scripts/download_gear_sonic_models.sh
-cargo run --release --bin robowbc -- run --config configs/sonic_g1.toml
-
-bash scripts/download_decoupled_wbc_models.sh
-cargo run --release --bin robowbc -- run --config configs/decoupled_g1.toml
-
-bash scripts/download_wbc_agile_models.sh
-cargo run --release --bin robowbc -- run --config configs/wbc_agile_g1.toml
-
-bash scripts/download_bfm_zero_models.sh
-cargo run --release --bin robowbc -- run --config configs/bfm_zero_g1.toml
+python download_from_hf.py             # policy + planner (default)
+python download_from_hf.py --no-planner # policy only
 ```
 
-`gear_sonic` currently exercises the published `planner_sonic.onnx` velocity
-path. `bfm_zero` fetches the public ONNX plus tracking bundle and converts the
-context into the runtime layout used by both the CLI and CI.
-</details>
-
-<details>
-<summary><strong>Open or generate the visual report</strong></summary>
-
-The same report generator powers both the local HTML bundle and the published
-GitHub Pages site.
-
-```bash
-export MUJOCO_DOWNLOAD_DIR="$(pwd)/.cache/mujoco"
-cargo build --bin robowbc --features robowbc-cli/sim-auto-download,robowbc-cli/vis
-python scripts/generate_policy_showcase.py \
-  --repo-root . \
-  --robowbc-binary ./target/debug/robowbc \
-  --output-dir ./artifacts/policy-showcase
-
-python scripts/serve_showcase.py \
-  --dir ./artifacts/policy-showcase \
-  --port 8000 \
-  --open
-```
-
-On Linux and Windows, the first `sim-auto-download` build unpacks MuJoCo into
-`MUJOCO_DOWNLOAD_DIR`. If you already manage a system MuJoCo install, building
-with `robowbc-cli/sim,robowbc-cli/vis` still works too.
-
-The output folder contains `index.html`, `manifest.json`, per-policy `*.json`
-run summaries, raw `*.rrd` recordings, logs, and the vendored Rerun web viewer
-runtime. The HTML now lazy-loads each `.rrd` file when its card becomes
-visible, so the bundle stays static-site-friendly for both local debug and
-GitHub Pages. Successful public cards are executed through MuJoCo; on the
-public G1 path the loader transparently uses a meshless MJCF fallback unless
-you provide the upstream STL bundle locally, and the generator refuses to
-silently fall back to the synthetic transport. Do not open `index.html`
-directly via `file://`; serve the folder over HTTP with
-`python scripts/serve_showcase.py --dir ...` instead.
-The local helper accepts `--dir`, `--bind`, `--port`, and `--open` so the same
-bundle can be previewed from any generated folder.
-Pull requests keep the downloadable `policy-showcase` artifact, and `main`
-publishes the generated site to the live report link above. If we later need
-preview deploys, custom headers, or to offload larger recordings into object
-storage, Vercel or Cloudflare Pages would be the next step, but GitHub Pages
-remains the default project-site path.
-</details>
-
-<details>
-<summary><strong>Manual real-model verification</strong></summary>
-
-```bash
-bash scripts/download_gear_sonic_models.sh
-cargo test -p robowbc-ort -- --ignored gear_sonic_real_model_inference
-
-bash scripts/download_decoupled_wbc_models.sh
-cargo test -p robowbc-ort -- --ignored decoupled_wbc_real_model_inference
-
-bash scripts/download_wbc_agile_models.sh
-cargo test -p robowbc-ort -- --ignored wbc_agile_real_model_inference
-
-bash scripts/download_bfm_zero_models.sh
-BFM_ZERO_MODEL_PATH=models/bfm_zero/bfm_zero_g1.onnx \
-BFM_ZERO_CONTEXT_PATH=models/bfm_zero/zs_walking.npy \
-cargo test -p robowbc-ort bfm_zero_real_model_inference -- --ignored --nocapture
-```
-
-`hover` still requires a user-trained exported checkpoint, and `wholebody_vla`
-still requires a compatible private or local model because no runnable public
-release exists upstream today.
-</details>
-
-<details>
-<summary><strong>Python SDK</strong></summary>
-
-```bash
-pip install "maturin>=1.4,<2.0"
-maturin develop
-python -c "from robowbc import Registry; print(Registry.list_policies())"
-```
-
-The standalone Python package lives in `crates/robowbc-py`, while
-`robowbc-pyo3` provides the runtime backend for user-supplied Python or
-PyTorch policies.
-</details>
-
-<details>
-<summary><strong>Workspace layout</strong></summary>
-
-| Path | Purpose |
-|------|---------|
-| `crates/robowbc-core` | `WbcPolicy`, `Observation`, `WbcCommand`, `JointPositionTargets`, `RobotConfig` |
-| `crates/robowbc-registry` | `inventory`-based policy registration and factory |
-| `crates/robowbc-ort` | ONNX Runtime backends and policy wrappers |
-| `crates/robowbc-pyo3` | Python-backed runtime policy loading |
-| `crates/robowbc-comm` | Control-loop plumbing and robot transports |
-| `crates/robowbc-sim` | MuJoCo transport for hardware-free execution |
-| `crates/robowbc-vis` | Rerun visualization and `.rrd` recording |
-| `crates/robowbc-cli` | `robowbc` CLI binary |
-| `crates/robowbc-py` | Standalone `maturin` package for the Python SDK |
-</details>
+See the [Download Models guide](https://nvlabs.github.io/GR00T-WholeBodyControl/getting_started/download_models.html) for full instructions.
 
 ## Documentation
 
-- [Getting Started](docs/getting-started.md)
-- [Configuration Reference](docs/configuration.md)
-- [Adding a New Policy](docs/adding-a-model.md)
-- [Adding a New Robot](docs/adding-a-robot.md)
-- [Architecture](docs/architecture.md)
-- [Founding document](docs/founding-document.md)
-- [Q2 2026 roadmap](docs/roadmap-2026-q2.md)
+📚 **[Full Documentation](https://nvlabs.github.io/GR00T-WholeBodyControl/)**
 
-## Related projects
+### Guides
+- [Installation (Deployment)](https://nvlabs.github.io/GR00T-WholeBodyControl/getting_started/installation_deploy.html)
+- [Installation (Training)](https://nvlabs.github.io/GR00T-WholeBodyControl/getting_started/installation_training.html)
+- [Quick Start](https://nvlabs.github.io/GR00T-WholeBodyControl/getting_started/quickstart.html)
+- [VR Teleoperation Setup](https://nvlabs.github.io/GR00T-WholeBodyControl/getting_started/vr_teleop_setup.html)
 
-- [roboharness](https://github.com/MiaoDX/roboharness), companion visual testing and browser-report project
-- [LeRobot](https://github.com/huggingface/lerobot), upstream robotics stack that can consume a WBC backend
+### Tutorials
+- [Keyboard Control](https://nvlabs.github.io/GR00T-WholeBodyControl/tutorials/keyboard.html)
+- [Gamepad Control](https://nvlabs.github.io/GR00T-WholeBodyControl/tutorials/gamepad.html)
+- [VR Whole-Body Teleoperation](https://nvlabs.github.io/GR00T-WholeBodyControl/tutorials/vr_wholebody_teleop.html)
+
+## Repository Structure
+
+```
+GR00T-WholeBodyControl/
+├── gear_sonic_deploy/     # C++ inference stack for deployment
+├── gear_sonic/            # Teleoperation and data collection tools
+├── decoupled_wbc/         # Decoupled WBC (GR00T N1.5/N1.6)
+├── docs/                  # Documentation source
+└── media/                 # Videos and images
+```
+
+## Related Projects
+
+This repository is part of NVIDIA's GR00T (Generalist Robot 00 Technology) initiative:
+- **[GR00T N1.5](https://research.nvidia.com/labs/gear/gr00t-n1_5/)**: Previous generation decoupled controller
+- **[GR00T N1.6](https://research.nvidia.com/labs/gear/gr00t-n1_6/)**: Improved decoupled WBC approach
+- **[GEAR-SONIC Website](https://nvlabs.github.io/GEAR-SONIC/)**: Project page with videos and details
+
+## Citation
+
+If you use GEAR-SONIC in your research, please cite:
+
+```bibtex
+@article{luo2025sonic,
+    title={SONIC: Supersizing Motion Tracking for Natural Humanoid Whole-Body Control},
+    author={Luo, Zhengyi and Yuan, Ye and Wang, Tingwu and Li, Chenran and Chen, Sirui and Casta\~neda, Fernando and Cao, Zi-Ang and Li, Jiefeng and Minor, David and Ben, Qingwei and Da, Xingye and Ding, Runyu and Hogg, Cyrus and Song, Lina and Lim, Edy and Jeong, Eugene and He, Tairan and Xue, Haoru and Xiao, Wenli and Wang, Zi and Yuen, Simon and Kautz, Jan and Chang, Yan and Iqbal, Umar and Fan, Linxi and Zhu, Yuke},
+    journal={arXiv preprint arXiv:2511.07820},
+    year={2025}
+}
+```
 
 ## License
 
-MIT
+This project uses **dual licensing**:
+
+- **Source Code**: Apache License 2.0 - applies to all code, scripts, and software components
+- **Model Weights**: NVIDIA Open Model License - applies to all trained model checkpoints
+
+**Key points of the NVIDIA Open Model License:**
+- ✅ Commercial use permitted with attribution
+- ✅ Modification and distribution allowed
+- ⚠️ Must comply with NVIDIA's Trustworthy AI terms
+- ⚠️ Model outputs subject to responsible use guidelines
+
+See [LICENSE](https://github.com/NVlabs/GR00T-WholeBodyControl/blob/main/LICENSE) for complete terms.
+
+## Support & Contact
+
+- 📧 **Email**: [gear-wbc@nvidia.com](mailto:gear-wbc@nvidia.com)
+- 🐛 **Issues**: [GitHub Issues](https://github.com/NVlabs/GR00T-WholeBodyControl/issues)
+- 📖 **Documentation**: [https://nvlabs.github.io/GR00T-WholeBodyControl/](https://nvlabs.github.io/GR00T-WholeBodyControl/)
+- 🌐 **Website**: [https://nvlabs.github.io/GEAR-SONIC/](https://nvlabs.github.io/GEAR-SONIC/)
+
+## Acknowledgments
+
+This work builds upon and acknowledges:
+- [Beyond Mimic](https://github.com/HybridRobotics/whole_body_tracking) - Whole-body tracking foundation
+- [Isaac Lab](https://github.com/isaac-sim/IsaacLab) - Robot learning framework
+- NVIDIA Research GEAR Lab team
+- All contributors and collaborators
+
+## Model Card Contact
+
+For questions about this model card or responsible AI considerations, contact: [gear-wbc@nvidia.com](mailto:gear-wbc@nvidia.com)

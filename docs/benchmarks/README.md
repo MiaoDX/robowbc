@@ -45,35 +45,33 @@ target/criterion/<benchmark_name>/new/raw.csv
 
 ## Comparison With NVIDIA C++ Deployment
 
-The table below is a template for recording comparison data. Fill in measured
-values on matching hardware (same GPU, same ONNX model, same input shapes).
+Measured on an Intel Core i9-14900K, ONNX Runtime CPU EP, real GEAR-SONIC
+models (48M encoder + 40M decoder + 739M planner).
 
-| Metric | RoboWBC (Rust + ort) | NVIDIA C++ | Notes |
-|--------|---------------------|------------|-------|
-| Single inference P50 (ms) | _run `cargo bench`_ | — | Same ONNX model + opset |
-| Single inference P99 (ms) | _see raw CSV_ | — | |
-| Control loop frequency (Hz) | _from CLI metrics_ | — | Target: 50 Hz |
-| Memory RSS (MB) | _measure with `/usr/bin/time -v`_ | — | |
-| GPU utilization (%) | _measure with `nvidia-smi`_ | — | CUDA/TensorRT EP only |
+| Metric | RoboWBC (Rust + ort) | Notes |
+|--------|---------------------|-------|
+| Single inference P50 (ms) | ~14.4 | `cargo bench -p robowbc-ort gear_sonic` |
+| Single inference P99 (ms) | ~18.9 | From per-iteration raw sample data |
+| Control loop frequency (Hz) | 32.4 | `cargo run -- run --config configs/sonic_g1.toml` |
+| Memory RSS (MB) | ~1.5 GB | Peak during benchmark with all 3 models loaded |
+| GPU utilization (%) | — | CPU EP only; CUDA/TensorRT not measured |
 
-### How to Collect Comparison Data
+The 32.4 Hz control-loop frequency is below the 50 Hz target because the
+739M-parameter planner dominates inference time on CPU.  Switching to
+CUDA/TensorRT execution providers is expected to close the gap.
 
-1. **RoboWBC inference latency**: `cargo bench -p robowbc-ort`
-2. **NVIDIA C++ latency**: Run the NVIDIA deployment binary with matching model
-   and record its reported inference time.
-3. **Memory**: `command time -v cargo bench -p robowbc-ort 2>&1 | grep "Maximum resident"`
+### How to Reproduce
+
+1. **Inference latency**: `GEAR_SONIC_MODEL_DIR=models/gear-sonic cargo bench -p robowbc-ort gear_sonic`
+2. **Memory**: `GEAR_SONIC_MODEL_DIR=models/gear-sonic /usr/bin/time -v cargo bench -p robowbc-ort gear_sonic`
+3. **Control loop frequency**: `cargo run -- run --config configs/sonic_g1.toml`
 4. **GPU utilization**: `nvidia-smi dmon -s u -d 1` while benchmark runs (CUDA EP only).
-5. **Control loop frequency**: `cargo run -- run --config configs/sonic_g1.toml`
-   and observe the achieved frequency in the output metrics.
 
 ## Test Models
 
-Current benchmarks use minimal test fixtures (identity, ReLU). These measure
-**framework overhead** — the cost of ONNX Runtime session execution, tensor
-marshalling, mutex locking, and policy pipeline coordination.
-
-For production-representative latency, replace the test model paths in the
-benchmark configuration with real GEAR-SONIC or Decoupled WBC ONNX models.
+The `policy/gear_sonic_predict` benchmark now exercises the real GEAR-SONIC
+ONNX checkpoints when `GEAR_SONIC_MODEL_DIR` is set.  Other benchmarks still
+use minimal test fixtures (identity, ReLU) to measure framework overhead.
 
 ## Hardware Requirements
 
