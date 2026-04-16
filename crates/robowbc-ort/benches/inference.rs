@@ -16,7 +16,8 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use robowbc_core::{JointLimit, Observation, PdGains, RobotConfig, WbcCommand, WbcPolicy};
 use robowbc_ort::{
-    DecoupledWbcConfig, DecoupledWbcPolicy, GearSonicConfig, GearSonicPolicy, OrtBackend, OrtConfig,
+    DecoupledObservationContract, DecoupledWbcConfig, DecoupledWbcPolicy, GearSonicConfig,
+    GearSonicPolicy, OrtBackend, OrtConfig,
 };
 use std::path::PathBuf;
 use std::time::Instant;
@@ -222,9 +223,11 @@ fn bench_decoupled_wbc_predict(c: &mut Criterion) {
 
     let config = DecoupledWbcConfig {
         rl_model: test_ort_config(model_path),
+        stand_model: None,
         robot: test_robot_config(4),
         lower_body_joints: vec![0, 1],
         upper_body_joints: vec![2, 3],
+        contract: DecoupledObservationContract::Flat,
         control_frequency_hz: 50,
     };
     let policy = DecoupledWbcPolicy::new(config).expect("policy should build");

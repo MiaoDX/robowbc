@@ -798,9 +798,8 @@ mod tests {
             }),
             timestamp: Instant::now(),
         };
-        let twist = match &obs.command {
-            WbcCommand::Velocity(twist) => twist,
-            _ => unreachable!("constructed as velocity"),
+        let WbcCommand::Velocity(twist) = &obs.command else {
+            unreachable!("constructed as velocity")
         };
 
         let single_obs = build_groot_g1_single_observation(
@@ -821,7 +820,7 @@ mod tests {
         assert!((single_obs[12] + 1.0).abs() < 1e-6);
     }
 
-    /// Integration test requiring the published GR00T WholeBodyControl ONNX checkpoints.
+    /// Integration test requiring the published GR00T `WholeBodyControl` ONNX checkpoints.
     ///
     /// To run once weights are available:
     /// ```bash

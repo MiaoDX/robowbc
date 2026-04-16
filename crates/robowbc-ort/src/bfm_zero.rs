@@ -949,6 +949,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn g1_tracking_builds_expected_input_layout() {
         let dof_pos_minus_default = vec![1.0; BFM_G1_ACTION_DIM];
         let dof_vel = vec![2.0; BFM_G1_ACTION_DIM];
