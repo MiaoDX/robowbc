@@ -1246,7 +1246,7 @@ impl GearSonicPolicy {
         let vel_offset = 294;
         let orn_offset = 584;
 
-        for frame in 0..10 {
+        for frame in 0..GEAR_SONIC_DECODER_HISTORY_LEN {
             let p = pos_offset + frame * obs.joint_positions.len();
             let v = vel_offset + frame * obs.joint_velocities.len();
             buf[p..p + obs.joint_positions.len()].copy_from_slice(&obs.joint_positions);
@@ -1254,7 +1254,7 @@ impl GearSonicPolicy {
         }
 
         // Upright 6D rotation representation: [1,0,0,0,1,0]
-        for frame in 0..10 {
+        for frame in 0..GEAR_SONIC_DECODER_HISTORY_LEN {
             let o = orn_offset + frame * 6;
             buf[o] = 1.0;
             buf[o + 1] = 0.0;
@@ -1307,7 +1307,8 @@ impl GearSonicPolicy {
                 ));
             }
         }
-        if self.robot.joint_count != 29 {
+        let expected_joint_count = GEAR_SONIC_PLANNER_QPOS_DIM - GEAR_SONIC_PLANNER_JOINT_OFFSET;
+        if self.robot.joint_count != expected_joint_count {
             return Err(robowbc_core::WbcError::InvalidObservation(
                 "GearSonicPolicy tracking mode currently expects robot.joint_count = 29",
             ));
