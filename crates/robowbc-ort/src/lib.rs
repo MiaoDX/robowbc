@@ -1230,7 +1230,13 @@ impl GearSonicPolicy {
     ///   - `motion_joint_positions_10frame_step5`   (290)
     ///   - `motion_joint_velocities_10frame_step5`  (290)
     ///   - `motion_anchor_orientation_10frame_step5` (60)
-    fn build_encoder_obs_dict(obs: &Observation) -> Vec<f32> {
+    ///
+    /// When no explicit motion reference is provided (empty `MotionTokens`),
+    /// the encoder is fed a zero-motion placeholder: default pose, zero
+    /// velocity, and upright orientation. This is an honest contract — it
+    /// asks the policy to track the standing pose rather than fabricating
+    /// the current robot state as a motion reference.
+    fn build_encoder_obs_dict(robot: &RobotConfig) -> Vec<f32> {
         let mut buf = vec![0.0_f32; GEAR_SONIC_ENCODER_OBS_DICT_DIM];
 
         // encoder_mode_4: mode 0 (g1) + 3 zeros
@@ -1239,18 +1245,15 @@ impl GearSonicPolicy {
         // motion_joint_positions_10frame_step5 (offset 4, 290D)
         // motion_joint_velocities_10frame_step5 (offset 294, 290D)
         // motion_anchor_orientation_10frame_step5 (offset 584, 60D)
-        //
-        // In the absence of a motion sequence we use the current robot state
-        // as the reference motion (repeat for 10 frames).
         let pos_offset = 4;
         let vel_offset = 294;
         let orn_offset = 584;
 
         for frame in 0..GEAR_SONIC_DECODER_HISTORY_LEN {
-            let p = pos_offset + frame * obs.joint_positions.len();
-            let v = vel_offset + frame * obs.joint_velocities.len();
-            buf[p..p + obs.joint_positions.len()].copy_from_slice(&obs.joint_positions);
-            buf[v..v + obs.joint_velocities.len()].copy_from_slice(&obs.joint_velocities);
+            let p = pos_offset + frame * robot.joint_count;
+            let v = vel_offset + frame * robot.joint_count;
+            buf[p..p + robot.joint_count].copy_from_slice(&robot.default_pose);
+            buf[v..v + robot.joint_count].fill(0.0);
         }
 
         // Upright 6D rotation representation: [1,0,0,0,1,0]
@@ -1272,25 +1275,48 @@ impl GearSonicPolicy {
     /// Layout (994D): `token_state` (64) + `gravity_dir` (30) + `base_ang_vel` (30)
     /// + `body_joint_positions` (290) + `body_joint_velocities` (290)
     /// + `last_actions` (290).
-    fn build_decoder_obs_dict(tokens: &[f32], history: &GearSonicTrackingState) -> Vec<f32> {
+    ///
+    /// The `current_obs` and `current_actions` are appended as the most recent
+    /// frame, while the 9 newest historical frames are used from `history`.
+    /// This avoids mutating persistent state before successful inference.
+    fn build_decoder_obs_dict(
+        tokens: &[f32],
+        history: &GearSonicTrackingState,
+        current_obs: &Observation,
+        current_actions: &[f32],
+    ) -> Vec<f32> {
         let mut buf = Vec::with_capacity(GEAR_SONIC_DECODER_OBS_DICT_DIM);
         buf.extend_from_slice(tokens);
 
-        for g in &history.gravity {
+        let skip = history
+            .gravity
+            .len()
+            .saturating_sub(GEAR_SONIC_DECODER_HISTORY_LEN - 1);
+
+        for g in history.gravity.iter().skip(skip) {
             buf.extend_from_slice(g);
         }
-        for av in &history.angular_velocity {
+        buf.extend_from_slice(&current_obs.gravity_vector);
+
+        for av in history.angular_velocity.iter().skip(skip) {
             buf.extend_from_slice(av);
         }
-        for p in &history.joint_positions {
+        buf.extend_from_slice(&current_obs.angular_velocity);
+
+        for p in history.joint_positions.iter().skip(skip) {
             buf.extend_from_slice(p);
         }
-        for v in &history.joint_velocities {
+        buf.extend_from_slice(&current_obs.joint_positions);
+
+        for v in history.joint_velocities.iter().skip(skip) {
             buf.extend_from_slice(v);
         }
-        for a in &history.last_actions {
+        buf.extend_from_slice(&current_obs.joint_velocities);
+
+        for a in history.last_actions.iter().skip(skip) {
             buf.extend_from_slice(a);
         }
+        buf.extend_from_slice(current_actions);
 
         buf
     }
@@ -1314,7 +1340,7 @@ impl GearSonicPolicy {
             ));
         }
 
-        let encoder_obs = Self::build_encoder_obs_dict(obs);
+        let encoder_obs = Self::build_encoder_obs_dict(&self.robot);
         let mut encoder = self.encoder.lock().map_err(|_| {
             robowbc_core::WbcError::InferenceFailed("encoder mutex poisoned".to_owned())
         })?;
@@ -1333,7 +1359,11 @@ impl GearSonicPolicy {
             robowbc_core::WbcError::InferenceFailed("tracking state mutex poisoned".to_owned())
         })?;
 
-        let decoder_obs = Self::build_decoder_obs_dict(&tokens, &tracking_state);
+        // Feed the current observation to the decoder without mutating
+        // persistent state, so a failure mid-inference cannot corrupt history.
+        let current_actions = vec![0.0_f32; self.robot.joint_count];
+        let decoder_obs =
+            Self::build_decoder_obs_dict(&tokens, &tracking_state, obs, &current_actions);
         let mut decoder = self.decoder.lock().map_err(|_| {
             robowbc_core::WbcError::InferenceFailed("decoder mutex poisoned".to_owned())
         })?;
@@ -1356,12 +1386,33 @@ impl GearSonicPolicy {
             positions[mujoco_idx] = self.robot.default_pose[mujoco_idx] + scaled;
             isaaclab_actions[isaaclab_idx] = action;
         }
+
+        // Only update history after successful inference.
         tracking_state.push(obs, &isaaclab_actions);
 
         Ok(JointPositionTargets {
             positions,
             timestamp: obs.timestamp,
         })
+    }
+
+    /// Resets internal planner and tracking state to cold-start values.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WbcError::InferenceFailed`] if a state mutex is poisoned.
+    pub fn reset(&self) -> CoreResult<()> {
+        let mut planner_state = self.planner_state.lock().map_err(|_| {
+            robowbc_core::WbcError::InferenceFailed("planner state mutex poisoned".to_owned())
+        })?;
+        *planner_state = GearSonicPlannerState::new(&self.robot);
+
+        let mut tracking_state = self.tracking_state.lock().map_err(|_| {
+            robowbc_core::WbcError::InferenceFailed("tracking state mutex poisoned".to_owned())
+        })?;
+        *tracking_state = GearSonicTrackingState::new(&self.robot);
+
+        Ok(())
     }
 }
 
@@ -1388,6 +1439,10 @@ impl robowbc_core::WbcPolicy for GearSonicPolicy {
                 "GearSonicPolicy requires WbcCommand::Velocity or WbcCommand::MotionTokens",
             )),
         }
+    }
+
+    fn reset(&self) {
+        let _ = Self::reset(self);
     }
 
     fn control_frequency_hz(&self) -> u32 {
@@ -1787,6 +1842,32 @@ mod tests {
     }
 
     #[test]
+    fn gear_sonic_reset_clears_tracking_state() {
+        if !has_test_model() {
+            eprintln!(
+                "skipping: test model not found at {:?}",
+                identity_model_path()
+            );
+            return;
+        }
+
+        let config = GearSonicConfig {
+            encoder: test_ort_config(identity_model_path()),
+            decoder: test_ort_config(identity_model_path()),
+            planner: test_ort_config(identity_model_path()),
+            robot: test_robot_config(4),
+        };
+        let policy = GearSonicPolicy::new(config).expect("policy should build");
+
+        // Reset should succeed and be idempotent.
+        policy.reset().expect("first reset should succeed");
+        policy.reset().expect("second reset should succeed");
+
+        // Verify the WbcPolicy trait method also compiles and runs.
+        robowbc_core::WbcPolicy::reset(&policy);
+    }
+
+    #[test]
     #[ignore = "requires real GEAR-SONIC ONNX models; run scripts/download_gear_sonic_models.sh first"]
     fn gear_sonic_dump_model_meta() {
         let model_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../models/gear-sonic");
@@ -1923,10 +2004,35 @@ mod tests {
             robot.joint_count,
             "tracking output must match robot DOF"
         );
-        for (i, &pos) in tracking_targets.positions.iter().enumerate() {
+        for (i, (&pos, limit)) in tracking_targets
+            .positions
+            .iter()
+            .zip(&robot.joint_limits)
+            .enumerate()
+        {
             assert!(
                 pos.is_finite(),
                 "tracking joint target {i} is not finite: {pos}"
+            );
+            assert!(
+                pos >= limit.min - 1e-3 && pos <= limit.max + 1e-3,
+                "tracking joint target {i} out of bounds: {pos} not in [{}, {}]",
+                limit.min,
+                limit.max
+            );
+        }
+
+        // For a zero-motion command the robot should stay near default pose.
+        for (i, (&pos, &default)) in tracking_targets
+            .positions
+            .iter()
+            .zip(&robot.default_pose)
+            .enumerate()
+        {
+            let deviation = (pos - default).abs();
+            assert!(
+                deviation < 0.15,
+                "tracking joint target {i} deviates too far from default pose: {pos} vs {default} (diff {deviation})"
             );
         }
     }
