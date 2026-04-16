@@ -46,6 +46,12 @@ pub trait WbcPolicy: Send + Sync {
     /// Returns a [`WbcError`] if the observation is invalid or inference fails.
     fn predict(&self, obs: &Observation) -> Result<JointPositionTargets>;
 
+    /// Resets any internal state (planner context, tracking history, etc.).
+    ///
+    /// Called at episode boundaries or when switching robots. The default
+    /// implementation is a no-op for stateless policies.
+    fn reset(&self) {}
+
     /// Returns the control frequency required by the policy runtime.
     fn control_frequency_hz(&self) -> u32;
 
