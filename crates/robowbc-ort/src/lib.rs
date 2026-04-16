@@ -379,9 +379,10 @@ impl OrtBackend {
             .inputs()
             .iter()
             .map(|i| match i.dtype() {
-                ort::value::ValueType::Tensor { shape, .. } => {
-                    shape.iter().map(|&d| if d < 0 { None } else { Some(d) }).collect()
-                }
+                ort::value::ValueType::Tensor { shape, .. } => shape
+                    .iter()
+                    .map(|&d| if d < 0 { None } else { Some(d) })
+                    .collect(),
                 _ => Vec::new(),
             })
             .collect()
@@ -394,9 +395,10 @@ impl OrtBackend {
             .outputs()
             .iter()
             .map(|o| match o.dtype() {
-                ort::value::ValueType::Tensor { shape, .. } => {
-                    shape.iter().map(|&d| if d < 0 { None } else { Some(d) }).collect()
-                }
+                ort::value::ValueType::Tensor { shape, .. } => shape
+                    .iter()
+                    .map(|&d| if d < 0 { None } else { Some(d) })
+                    .collect(),
                 _ => Vec::new(),
             })
             .collect()
@@ -784,7 +786,8 @@ impl GearSonicTrackingState {
         self.gravity.push_back(obs.gravity_vector);
         self.angular_velocity.push_back(obs.angular_velocity);
         self.joint_positions.push_back(obs.joint_positions.clone());
-        self.joint_velocities.push_back(obs.joint_velocities.clone());
+        self.joint_velocities
+            .push_back(obs.joint_velocities.clone());
         self.last_actions.push_back(actions.to_vec());
     }
 }
@@ -1269,10 +1272,7 @@ impl GearSonicPolicy {
     /// Layout (994D): `token_state` (64) + `gravity_dir` (30) + `base_ang_vel` (30)
     /// + `body_joint_positions` (290) + `body_joint_velocities` (290)
     /// + `last_actions` (290).
-    fn build_decoder_obs_dict(
-        tokens: &[f32],
-        history: &GearSonicTrackingState,
-    ) -> Vec<f32> {
+    fn build_decoder_obs_dict(tokens: &[f32], history: &GearSonicTrackingState) -> Vec<f32> {
         let mut buf = Vec::with_capacity(GEAR_SONIC_DECODER_OBS_DICT_DIM);
         buf.extend_from_slice(tokens);
 
@@ -1792,12 +1792,36 @@ mod tests {
         let encoder = OrtBackend::from_file(model_dir.join("model_encoder.onnx")).unwrap();
         let decoder = OrtBackend::from_file(model_dir.join("model_decoder.onnx")).unwrap();
         let planner = OrtBackend::from_file(model_dir.join("planner_sonic.onnx")).unwrap();
-        eprintln!("encoder inputs: {:?} shapes: {:?}", encoder.input_names(), encoder.input_shapes());
-        eprintln!("encoder outputs: {:?} shapes: {:?}", encoder.output_names(), encoder.output_shapes());
-        eprintln!("decoder inputs: {:?} shapes: {:?}", decoder.input_names(), decoder.input_shapes());
-        eprintln!("decoder outputs: {:?} shapes: {:?}", decoder.output_names(), decoder.output_shapes());
-        eprintln!("planner inputs: {:?} shapes: {:?}", planner.input_names(), planner.input_shapes());
-        eprintln!("planner outputs: {:?} shapes: {:?}", planner.output_names(), planner.output_shapes());
+        eprintln!(
+            "encoder inputs: {:?} shapes: {:?}",
+            encoder.input_names(),
+            encoder.input_shapes()
+        );
+        eprintln!(
+            "encoder outputs: {:?} shapes: {:?}",
+            encoder.output_names(),
+            encoder.output_shapes()
+        );
+        eprintln!(
+            "decoder inputs: {:?} shapes: {:?}",
+            decoder.input_names(),
+            decoder.input_shapes()
+        );
+        eprintln!(
+            "decoder outputs: {:?} shapes: {:?}",
+            decoder.output_names(),
+            decoder.output_shapes()
+        );
+        eprintln!(
+            "planner inputs: {:?} shapes: {:?}",
+            planner.input_names(),
+            planner.input_shapes()
+        );
+        eprintln!(
+            "planner outputs: {:?} shapes: {:?}",
+            planner.output_names(),
+            planner.output_shapes()
+        );
     }
 
     /// Integration test against the published GEAR-SONIC planner checkpoint.
@@ -1899,7 +1923,10 @@ mod tests {
             "tracking output must match robot DOF"
         );
         for (i, &pos) in tracking_targets.positions.iter().enumerate() {
-            assert!(pos.is_finite(), "tracking joint target {i} is not finite: {pos}");
+            assert!(
+                pos.is_finite(),
+                "tracking joint target {i} is not finite: {pos}"
+            );
         }
     }
 }
