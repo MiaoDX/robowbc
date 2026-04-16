@@ -108,7 +108,8 @@ cargo run --release --bin robowbc -- run --config configs/sonic_g1.toml
 
 The default CLI config exercises the published `planner_sonic.onnx` velocity
 path at 50 Hz until you press Ctrl-C or `max_ticks` is reached. The real
-encoder/decoder tracking contract is not integrated into the Rust runtime yet.
+encoder/decoder tracking contract is also integrated — pass empty motion tokens
+to trigger the full 3-model pipeline.
 
 ## Run BFM-Zero with the public G1 bundle
 
