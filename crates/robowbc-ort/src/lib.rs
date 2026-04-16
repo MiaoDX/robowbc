@@ -370,6 +370,38 @@ impl OrtBackend {
         &self.output_names
     }
 
+    /// Returns the shapes of the model's input tensors.
+    ///
+    /// `None` dimensions indicate dynamic axes.
+    #[must_use]
+    pub fn input_shapes(&self) -> Vec<Vec<Option<i64>>> {
+        self.session
+            .inputs()
+            .iter()
+            .map(|i| match i.dtype() {
+                ort::value::ValueType::Tensor { shape, .. } => {
+                    shape.iter().map(|&d| if d < 0 { None } else { Some(d) }).collect()
+                }
+                _ => Vec::new(),
+            })
+            .collect()
+    }
+
+    /// Returns the shapes of the model's output tensors.
+    #[must_use]
+    pub fn output_shapes(&self) -> Vec<Vec<Option<i64>>> {
+        self.session
+            .outputs()
+            .iter()
+            .map(|o| match o.dtype() {
+                ort::value::ValueType::Tensor { shape, .. } => {
+                    shape.iter().map(|&d| if d < 0 { None } else { Some(d) }).collect()
+                }
+                _ => Vec::new(),
+            })
+            .collect()
+    }
+
     /// Runs inference with the given named `f32` tensor inputs.
     ///
     /// Each input is specified as `(name, flat_data, shape)` where `flat_data`
@@ -630,6 +662,55 @@ const GEAR_SONIC_ALLOWED_PRED_NUM_TOKENS_I64: i64 = 11;
 const GEAR_SONIC_DEFAULT_HEIGHT_METERS: f32 = 0.74;
 const GEAR_SONIC_DEFAULT_MODE_WALK: i64 = 2;
 const GEAR_SONIC_PLANNER_INTERP_STEP: f32 = 30.0 / 50.0;
+const GEAR_SONIC_ENCODER_DIM: usize = 64;
+const GEAR_SONIC_ENCODER_OBS_DICT_DIM: usize = 1762;
+const GEAR_SONIC_DECODER_OBS_DICT_DIM: usize = 994;
+const GEAR_SONIC_DECODER_HISTORY_LEN: usize = 10;
+
+/// `IsaacLab` to `MuJoCo` joint index remapping for G1 29-DOF.
+///
+/// Decoder outputs are in `IsaacLab` order; this table maps each `MuJoCo` index
+/// to the corresponding `IsaacLab` index so we can read the correct value.
+const GEAR_SONIC_ISAACLAB_TO_MUJOCO: [usize; 29] = [
+    0, 3, 6, 9, 13, 17, 1, 4, 7, 10, 14, 18, 2, 5, 8, 11, 15, 19, 21, 23, 25, 27, 12, 16, 20, 22,
+    24, 26, 28,
+];
+
+/// Per-joint action scale for G1 in `MuJoCo` order.
+///
+/// Computed from the GEAR-SONIC C++ deployment code as
+/// `0.25 * effort_limit / stiffness`.
+const GEAR_SONIC_G1_ACTION_SCALE: [f32; 29] = [
+    0.350_661_f32, // left_hip_pitch (7520_22)
+    0.350_661_f32, // left_hip_roll (7520_22)
+    0.547_545_f32, // left_hip_yaw (7520_14)
+    0.350_661_f32, // left_knee (7520_22)
+    0.438_579_f32, // left_ankle_pitch (5020)
+    0.438_579_f32, // left_ankle_roll (5020)
+    0.350_661_f32, // right_hip_pitch (7520_22)
+    0.350_661_f32, // right_hip_roll (7520_22)
+    0.547_545_f32, // right_hip_yaw (7520_14)
+    0.350_661_f32, // right_knee (7520_22)
+    0.438_579_f32, // right_ankle_pitch (5020)
+    0.438_579_f32, // right_ankle_roll (5020)
+    0.547_545_f32, // waist_yaw (7520_14)
+    0.438_579_f32, // waist_roll (5020)
+    0.438_579_f32, // waist_pitch (5020)
+    0.438_579_f32, // left_shoulder_pitch (5020)
+    0.438_579_f32, // left_shoulder_roll (5020)
+    0.438_579_f32, // left_shoulder_yaw (5020)
+    0.438_579_f32, // left_elbow (5020)
+    0.438_579_f32, // left_wrist_roll (5020)
+    0.074_501_f32, // left_wrist_pitch (4010)
+    0.074_501_f32, // left_wrist_yaw (4010)
+    0.438_579_f32, // right_shoulder_pitch (5020)
+    0.438_579_f32, // right_shoulder_roll (5020)
+    0.438_579_f32, // right_shoulder_yaw (5020)
+    0.438_579_f32, // right_elbow (5020)
+    0.438_579_f32, // right_wrist_roll (5020)
+    0.074_501_f32, // right_wrist_pitch (4010)
+    0.074_501_f32, // right_wrist_yaw (4010)
+];
 
 #[derive(Debug)]
 struct GearSonicPlannerState {
@@ -659,21 +740,69 @@ impl GearSonicPlannerState {
     }
 }
 
-/// `GEAR-SONIC` policy wrapper with two execution paths.
+/// Rolling history buffer used by the real encoder/decoder tracking contract.
+#[derive(Debug)]
+struct GearSonicTrackingState {
+    gravity: VecDeque<[f32; 3]>,
+    angular_velocity: VecDeque<[f32; 3]>,
+    joint_positions: VecDeque<Vec<f32>>,
+    joint_velocities: VecDeque<Vec<f32>>,
+    last_actions: VecDeque<Vec<f32>>,
+}
+
+impl GearSonicTrackingState {
+    fn new(robot: &RobotConfig) -> Self {
+        let mut gravity = VecDeque::with_capacity(GEAR_SONIC_DECODER_HISTORY_LEN);
+        let mut angular_velocity = VecDeque::with_capacity(GEAR_SONIC_DECODER_HISTORY_LEN);
+        let mut joint_positions = VecDeque::with_capacity(GEAR_SONIC_DECODER_HISTORY_LEN);
+        let mut joint_velocities = VecDeque::with_capacity(GEAR_SONIC_DECODER_HISTORY_LEN);
+        let mut last_actions = VecDeque::with_capacity(GEAR_SONIC_DECODER_HISTORY_LEN);
+        for _ in 0..GEAR_SONIC_DECODER_HISTORY_LEN {
+            gravity.push_back([0.0, 0.0, -1.0]);
+            angular_velocity.push_back([0.0; 3]);
+            joint_positions.push_back(robot.default_pose.clone());
+            joint_velocities.push_back(vec![0.0; robot.joint_count]);
+            last_actions.push_back(vec![0.0; robot.joint_count]);
+        }
+        Self {
+            gravity,
+            angular_velocity,
+            joint_positions,
+            joint_velocities,
+            last_actions,
+        }
+    }
+
+    fn push(&mut self, obs: &Observation, actions: &[f32]) {
+        if self.gravity.len() >= GEAR_SONIC_DECODER_HISTORY_LEN {
+            let _ = self.gravity.pop_front();
+            let _ = self.angular_velocity.pop_front();
+            let _ = self.joint_positions.pop_front();
+            let _ = self.joint_velocities.pop_front();
+            let _ = self.last_actions.pop_front();
+        }
+        self.gravity.push_back(obs.gravity_vector);
+        self.angular_velocity.push_back(obs.angular_velocity);
+        self.joint_positions.push_back(obs.joint_positions.clone());
+        self.joint_velocities.push_back(obs.joint_velocities.clone());
+        self.last_actions.push_back(actions.to_vec());
+    }
+}
+
+/// `GEAR-SONIC` policy wrapper with three execution paths.
 ///
 /// - `WbcCommand::Velocity` uses the published `planner_sonic.onnx` contract,
 ///   matching the real CPU-only showcase path used in CI.
-/// - `WbcCommand::MotionTokens` preserves the earlier single-input
-///   encoder→planner→decoder mock pipeline for fixture-backed tests.
-///
-/// The published encoder/decoder tracking contract (`obs_dict` 1762D/994D) is
-/// not integrated yet, so real encoder/decoder checkpoints currently require
-/// the velocity/planner path.
+/// - `WbcCommand::MotionTokens` with non-empty tokens preserves the earlier
+///   single-input encoder→planner→decoder mock pipeline for fixture-backed tests.
+/// - Empty `WbcCommand::MotionTokens` triggers the real encoder/decoder
+///   tracking contract (`obs_dict` 1762D/994D) for the full 3-model pipeline.
 pub struct GearSonicPolicy {
     encoder: Mutex<OrtBackend>,
     decoder: Mutex<OrtBackend>,
     planner: Mutex<OrtBackend>,
     planner_state: Mutex<GearSonicPlannerState>,
+    tracking_state: Mutex<GearSonicTrackingState>,
     robot: RobotConfig,
 }
 
@@ -692,12 +821,14 @@ impl GearSonicPolicy {
         let planner = OrtBackend::new(&config.planner)
             .map_err(|e| robowbc_core::WbcError::InferenceFailed(e.to_string()))?;
         let planner_state = GearSonicPlannerState::new(&config.robot);
+        let tracking_state = GearSonicTrackingState::new(&config.robot);
 
         Ok(Self {
             encoder: Mutex::new(encoder),
             decoder: Mutex::new(decoder),
             planner: Mutex::new(planner),
             planner_state: Mutex::new(planner_state),
+            tracking_state: Mutex::new(tracking_state),
             robot: config.robot,
         })
     }
@@ -1086,6 +1217,151 @@ impl GearSonicPolicy {
             timestamp: obs.timestamp,
         })
     }
+
+    /// Builds the encoder `obs_dict` for the g1 tracking contract.
+    ///
+    /// The real encoder expects 1762D.  For `mode_id=0` (g1) only the following
+    /// observations are required; everything else is zero-filled:
+    ///
+    ///   - `encoder_mode_4`                     (4)
+    ///   - `motion_joint_positions_10frame_step5`   (290)
+    ///   - `motion_joint_velocities_10frame_step5`  (290)
+    ///   - `motion_anchor_orientation_10frame_step5` (60)
+    fn build_encoder_obs_dict(obs: &Observation) -> Vec<f32> {
+        let mut buf = vec![0.0_f32; GEAR_SONIC_ENCODER_OBS_DICT_DIM];
+
+        // encoder_mode_4: mode 0 (g1) + 3 zeros
+        buf[0] = 0.0;
+
+        // motion_joint_positions_10frame_step5 (offset 4, 290D)
+        // motion_joint_velocities_10frame_step5 (offset 294, 290D)
+        // motion_anchor_orientation_10frame_step5 (offset 584, 60D)
+        //
+        // In the absence of a motion sequence we use the current robot state
+        // as the reference motion (repeat for 10 frames).
+        let pos_offset = 4;
+        let vel_offset = 294;
+        let orn_offset = 584;
+
+        for frame in 0..10 {
+            let p = pos_offset + frame * obs.joint_positions.len();
+            let v = vel_offset + frame * obs.joint_velocities.len();
+            buf[p..p + obs.joint_positions.len()].copy_from_slice(&obs.joint_positions);
+            buf[v..v + obs.joint_velocities.len()].copy_from_slice(&obs.joint_velocities);
+        }
+
+        // Upright 6D rotation representation: [1,0,0,0,1,0]
+        for frame in 0..10 {
+            let o = orn_offset + frame * 6;
+            buf[o] = 1.0;
+            buf[o + 1] = 0.0;
+            buf[o + 2] = 0.0;
+            buf[o + 3] = 0.0;
+            buf[o + 4] = 1.0;
+            buf[o + 5] = 0.0;
+        }
+
+        buf
+    }
+
+    /// Builds the decoder `obs_dict` from encoder tokens + 10-frame history.
+    ///
+    /// Layout (994D): `token_state` (64) + `gravity_dir` (30) + `base_ang_vel` (30)
+    /// + `body_joint_positions` (290) + `body_joint_velocities` (290)
+    /// + `last_actions` (290).
+    fn build_decoder_obs_dict(
+        tokens: &[f32],
+        history: &GearSonicTrackingState,
+    ) -> Vec<f32> {
+        let mut buf = Vec::with_capacity(GEAR_SONIC_DECODER_OBS_DICT_DIM);
+        buf.extend_from_slice(tokens);
+
+        for g in &history.gravity {
+            buf.extend_from_slice(g);
+        }
+        for av in &history.angular_velocity {
+            buf.extend_from_slice(av);
+        }
+        for p in &history.joint_positions {
+            buf.extend_from_slice(p);
+        }
+        for v in &history.joint_velocities {
+            buf.extend_from_slice(v);
+        }
+        for a in &history.last_actions {
+            buf.extend_from_slice(a);
+        }
+
+        buf
+    }
+
+    /// Real encoder → decoder tracking contract for the full 3-model pipeline.
+    fn run_tracking_contract(&self, obs: &Observation) -> CoreResult<JointPositionTargets> {
+        {
+            let encoder = self.encoder.lock().map_err(|_| {
+                robowbc_core::WbcError::InferenceFailed("encoder mutex poisoned".to_owned())
+            })?;
+            if !Self::supports_real_tracking_contract(&encoder) {
+                return Err(robowbc_core::WbcError::UnsupportedCommand(
+                    "GearSonicPolicy tracking mode requires encoder/decoder checkpoints with the obs_dict contract",
+                ));
+            }
+        }
+        if self.robot.joint_count != 29 {
+            return Err(robowbc_core::WbcError::InvalidObservation(
+                "GearSonicPolicy tracking mode currently expects robot.joint_count = 29",
+            ));
+        }
+
+        let encoder_obs = Self::build_encoder_obs_dict(obs);
+        let mut encoder = self.encoder.lock().map_err(|_| {
+            robowbc_core::WbcError::InferenceFailed("encoder mutex poisoned".to_owned())
+        })?;
+        let tokens = Self::run_single_input_model(&mut encoder, &encoder_obs)?;
+        drop(encoder);
+
+        if tokens.len() != GEAR_SONIC_ENCODER_DIM {
+            return Err(robowbc_core::WbcError::InferenceFailed(format!(
+                "encoder output dimension mismatch: expected {}, got {}",
+                GEAR_SONIC_ENCODER_DIM,
+                tokens.len()
+            )));
+        }
+
+        let mut tracking_state = self.tracking_state.lock().map_err(|_| {
+            robowbc_core::WbcError::InferenceFailed("tracking state mutex poisoned".to_owned())
+        })?;
+
+        let decoder_obs = Self::build_decoder_obs_dict(&tokens, &tracking_state);
+        let mut decoder = self.decoder.lock().map_err(|_| {
+            robowbc_core::WbcError::InferenceFailed("decoder mutex poisoned".to_owned())
+        })?;
+        let raw_actions = Self::run_single_input_model(&mut decoder, &decoder_obs)?;
+        drop(decoder);
+
+        if raw_actions.len() != self.robot.joint_count {
+            return Err(robowbc_core::WbcError::InvalidTargets(
+                "decoder output length does not match robot.joint_count",
+            ));
+        }
+
+        // Decoder outputs are in IsaacLab order.  Remap to MuJoCo order,
+        // scale by action_scale, and add default_pose.
+        let mut positions = vec![0.0_f32; self.robot.joint_count];
+        let mut isaaclab_actions = vec![0.0_f32; self.robot.joint_count];
+        for (mujoco_idx, &isaaclab_idx) in GEAR_SONIC_ISAACLAB_TO_MUJOCO.iter().enumerate() {
+            let action = raw_actions[isaaclab_idx];
+            let scaled = action * GEAR_SONIC_G1_ACTION_SCALE[mujoco_idx];
+            positions[mujoco_idx] = self.robot.default_pose[mujoco_idx] + scaled;
+            isaaclab_actions[isaaclab_idx] = action;
+        }
+        tracking_state.push(obs, &isaaclab_actions);
+
+        Ok(JointPositionTargets {
+            positions,
+            timestamp: obs.timestamp,
+        })
+    }
 }
 
 impl robowbc_core::WbcPolicy for GearSonicPolicy {
@@ -1105,9 +1381,7 @@ impl robowbc_core::WbcPolicy for GearSonicPolicy {
             WbcCommand::MotionTokens(tokens) if !tokens.is_empty() => {
                 self.run_fixture_motion_tokens(obs, tokens)
             }
-            WbcCommand::MotionTokens(_) => Err(robowbc_core::WbcError::InvalidObservation(
-                "motion token command must not be empty",
-            )),
+            WbcCommand::MotionTokens(_) => self.run_tracking_contract(obs),
             WbcCommand::Velocity(twist) => self.run_velocity_planner(obs, twist),
             _ => Err(robowbc_core::WbcError::UnsupportedCommand(
                 "GearSonicPolicy requires WbcCommand::Velocity or WbcCommand::MotionTokens",
@@ -1511,6 +1785,21 @@ mod tests {
         assert!(matches!(err, robowbc_core::WbcError::UnsupportedCommand(_)));
     }
 
+    #[test]
+    #[ignore = "requires real GEAR-SONIC ONNX models; run scripts/download_gear_sonic_models.sh first"]
+    fn gear_sonic_dump_model_meta() {
+        let model_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../models/gear-sonic");
+        let encoder = OrtBackend::from_file(model_dir.join("model_encoder.onnx")).unwrap();
+        let decoder = OrtBackend::from_file(model_dir.join("model_decoder.onnx")).unwrap();
+        let planner = OrtBackend::from_file(model_dir.join("planner_sonic.onnx")).unwrap();
+        eprintln!("encoder inputs: {:?} shapes: {:?}", encoder.input_names(), encoder.input_shapes());
+        eprintln!("encoder outputs: {:?} shapes: {:?}", encoder.output_names(), encoder.output_shapes());
+        eprintln!("decoder inputs: {:?} shapes: {:?}", decoder.input_names(), decoder.input_shapes());
+        eprintln!("decoder outputs: {:?} shapes: {:?}", decoder.output_names(), decoder.output_shapes());
+        eprintln!("planner inputs: {:?} shapes: {:?}", planner.input_names(), planner.input_shapes());
+        eprintln!("planner outputs: {:?} shapes: {:?}", planner.output_names(), planner.output_shapes());
+    }
+
     /// Integration test against the published GEAR-SONIC planner checkpoint.
     ///
     /// Run with:
@@ -1588,6 +1877,29 @@ mod tests {
         );
         for (i, &pos) in targets.positions.iter().enumerate() {
             assert!(pos.is_finite(), "joint target {i} is not finite: {pos}");
+        }
+
+        // --- Tracking contract path (empty MotionTokens) ---
+        let tracking_obs = Observation {
+            joint_positions: robot.default_pose.clone(),
+            joint_velocities: vec![0.0; robot.joint_count],
+            gravity_vector: [0.0, 0.0, -1.0],
+            angular_velocity: [0.0, 0.0, 0.0],
+            command: WbcCommand::MotionTokens(vec![]),
+            timestamp: Instant::now(),
+        };
+
+        let tracking_targets = policy
+            .predict(&tracking_obs)
+            .expect("real tracking contract inference should succeed");
+
+        assert_eq!(
+            tracking_targets.positions.len(),
+            robot.joint_count,
+            "tracking output must match robot DOF"
+        );
+        for (i, &pos) in tracking_targets.positions.iter().enumerate() {
+            assert!(pos.is_finite(), "tracking joint target {i} is not finite: {pos}");
         }
     }
 }

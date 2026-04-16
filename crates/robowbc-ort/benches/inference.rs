@@ -196,7 +196,10 @@ fn bench_gear_sonic_predict(c: &mut Criterion) {
         joint_velocities: vec![0.0; n],
         gravity_vector: [0.0, 0.0, -1.0],
         angular_velocity: [0.0, 0.0, 0.0],
-        command: WbcCommand::MotionTokens(vec![0.0; 4]),
+        command: WbcCommand::Velocity(robowbc_core::Twist {
+            linear: [0.3, 0.0, 0.0],
+            angular: [0.0, 0.0, 0.0],
+        }),
         timestamp: Instant::now(),
     };
 
