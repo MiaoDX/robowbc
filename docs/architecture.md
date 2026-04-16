@@ -54,6 +54,7 @@ report.
 ```rust
 pub trait WbcPolicy: Send + Sync {
     fn predict(&self, obs: &Observation) -> Result<JointPositionTargets>;
+    fn reset(&self) {}
     fn control_frequency_hz(&self) -> u32;
     fn supported_robots(&self) -> &[RobotConfig];
 }
