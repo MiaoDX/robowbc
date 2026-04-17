@@ -122,6 +122,7 @@ cargo clippy -- -D warnings && cargo fmt --check
 ## 6) Commit hygiene
 
 - Keep commits scoped and descriptive (`docs: ...`, `fix: ...`, etc.).
+- This repository only allows **rebase merge** — squash and merge commits are disabled.
 - When changing workflow/docs, ensure instructions match actual repo configuration.
 - Do not claim UT success unless the relevant test command (for example
   `cargo test` or `pytest -q`) has been run in the current environment.
