@@ -799,7 +799,9 @@ impl GearSonicTrackingState {
 /// - `WbcCommand::MotionTokens` with non-empty tokens preserves the earlier
 ///   single-input encoder→planner→decoder mock pipeline for fixture-backed tests.
 /// - Empty `WbcCommand::MotionTokens` triggers the real encoder/decoder
-///   tracking contract (`obs_dict` 1762D/994D) for the full 3-model pipeline.
+///   tracking contract (`obs_dict` 1762D/994D). That path runs encoder and
+///   decoder only; `planner_sonic.onnx` stays loaded but is not executed on
+///   those ticks.
 pub struct GearSonicPolicy {
     encoder: Mutex<OrtBackend>,
     decoder: Mutex<OrtBackend>,
@@ -1321,7 +1323,7 @@ impl GearSonicPolicy {
         buf
     }
 
-    /// Real encoder → decoder tracking contract for the full 3-model pipeline.
+    /// Real encoder → decoder standing-placeholder tracking contract.
     fn run_tracking_contract(&self, obs: &Observation) -> CoreResult<JointPositionTargets> {
         {
             let encoder = self.encoder.lock().map_err(|_| {
@@ -1400,7 +1402,8 @@ impl GearSonicPolicy {
     ///
     /// # Errors
     ///
-    /// Returns [`WbcError::InferenceFailed`] if a state mutex is poisoned.
+    /// Returns [`robowbc_core::WbcError::InferenceFailed`] if a state mutex is
+    /// poisoned.
     pub fn reset(&self) -> CoreResult<()> {
         let mut planner_state = self.planner_state.lock().map_err(|_| {
             robowbc_core::WbcError::InferenceFailed("planner state mutex poisoned".to_owned())

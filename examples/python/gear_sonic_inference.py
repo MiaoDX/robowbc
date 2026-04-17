@@ -59,16 +59,17 @@ print(f"Loaded: {policy!r}")
 print(f"Control frequency: {policy.control_frequency_hz()} Hz")
 
 # ---------------------------------------------------------------------------
-# 3. Construct a synthetic observation for Unitree G1 (23 DOF).
+# 3. Construct a synthetic observation for Unitree G1 (29 DOF).
 # ---------------------------------------------------------------------------
-JOINT_COUNT = 23
+JOINT_COUNT = 29
 
 obs = Observation(
     joint_positions=[0.0] * JOINT_COUNT,
     joint_velocities=[0.0] * JOINT_COUNT,
     gravity_vector=[0.0, 0.0, -1.0],
-    command_type="motion_tokens",
-    command_data=[0.05, -0.1, 0.2, 0.0],
+    angular_velocity=[0.0, 0.0, 0.0],
+    command_type="velocity",
+    command_data=[0.3, 0.0, 0.0, 0.0, 0.0, 0.0],
 )
 
 # ---------------------------------------------------------------------------

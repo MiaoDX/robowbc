@@ -125,7 +125,7 @@ POLICIES = [
 NOT_YET_SHOWCASED = [
     {
         "name": "gear_sonic_tracking",
-        "reason": "The published 1762D/994D encoder+decoder tracking contract is not integrated into the Rust runtime yet.",
+        "reason": "The Rust runtime now exposes only a narrow `standing_placeholder_tracking` alias for the encoder+decoder standing-pose path. It is not a separate generic motion-reference showcase card.",
     },
     {
         "name": "wbc_agile_t1",

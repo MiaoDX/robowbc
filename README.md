@@ -34,7 +34,7 @@ transports.
 
 | Policy | Status | Public assets | Example config | Notes |
 |--------|--------|---------------|----------------|-------|
-| `gear_sonic` | Live | Yes | [configs/sonic_g1.toml](configs/sonic_g1.toml) | Uses the published `planner_sonic.onnx` path today; the encoder and decoder tracking contract is still pending |
+| `gear_sonic` | Live | Yes | [configs/sonic_g1.toml](configs/sonic_g1.toml) | Uses the published `planner_sonic.onnx` velocity path by default; `standing_placeholder_tracking = true` exposes the narrower encoder+decoder standing-placeholder path |
 | `decoupled_wbc` | Live | Yes | [configs/decoupled_g1.toml](configs/decoupled_g1.toml) | Public G1 balance and walk checkpoints; [configs/decoupled_smoke.toml](configs/decoupled_smoke.toml) stays as the no-download smoke path |
 | `wbc_agile` | Live | Yes | [configs/wbc_agile_g1.toml](configs/wbc_agile_g1.toml) | Published G1 recurrent checkpoint is wired; the T1 path still expects a user export |
 | `bfm_zero` | Live | Yes | [configs/bfm_zero_g1.toml](configs/bfm_zero_g1.toml) | Public ONNX plus tracking context bundle is normalized by `scripts/download_bfm_zero_models.sh` |
@@ -74,9 +74,13 @@ bash scripts/download_bfm_zero_models.sh
 cargo run --release --bin robowbc -- run --config configs/bfm_zero_g1.toml
 ```
 
-`gear_sonic` currently exercises the published `planner_sonic.onnx` velocity
-path. `bfm_zero` fetches the public ONNX plus tracking bundle and converts the
-context into the runtime layout used by both the CLI and CI.
+`gear_sonic` defaults to the published `planner_sonic.onnx` velocity path. To
+exercise the narrower encoder+decoder standing-placeholder path instead, set
+`standing_placeholder_tracking = true` in `configs/sonic_g1.toml`. That path
+does not execute `planner_sonic.onnx` on the tick and is not a generic
+motion-reference streaming interface. `bfm_zero` fetches the public ONNX plus
+tracking bundle and converts the context into the runtime layout used by both
+the CLI and CI.
 </details>
 
 <details>

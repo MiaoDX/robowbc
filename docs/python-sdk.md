@@ -40,13 +40,13 @@ policy = Registry.build("gear_sonic", "configs/sonic_g1.toml")
 print(policy)                          # Policy(control_frequency_hz=50)
 print(policy.control_frequency_hz())  # 50
 
-# Build an observation for a Unitree G1 (23 DOF)
+# Build an observation for a Unitree G1 (29 DOF in `configs/sonic_g1.toml`)
 obs = Observation(
-    joint_positions=[0.0] * 23,
-    joint_velocities=[0.0] * 23,
+    joint_positions=[0.0] * 29,
+    joint_velocities=[0.0] * 29,
     gravity_vector=[0.0, 0.0, -1.0],
-    command_type="motion_tokens",
-    command_data=[0.05, -0.1, 0.2, 0.0],
+    command_type="velocity",
+    command_data=[0.3, 0.0, 0.0, 0.0, 0.0, 0.0],
 )
 
 # Run one inference step
@@ -79,6 +79,10 @@ Observation(
 | `"joint_targets"` | per-joint target positions                         |
 
 All fields are readable and writable attributes.
+
+For the public `gear_sonic` config, the default path is `command_type="velocity"`.
+Empty `motion_tokens` select the standing-placeholder tracking contract, while
+non-empty motion tokens are only for the older fixture-style mock pipeline.
 
 ### `JointPositionTargets`
 

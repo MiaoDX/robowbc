@@ -13,7 +13,7 @@
 //! `--output-format bencher` for machine-readable output. For P99/P999
 //! analysis, use the raw JSON data in `target/criterion/`.
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use robowbc_core::{JointLimit, Observation, PdGains, RobotConfig, WbcCommand, WbcPolicy};
 use robowbc_ort::{
     DecoupledObservationContract, DecoupledWbcConfig, DecoupledWbcPolicy, GearSonicConfig,
@@ -142,10 +142,13 @@ fn bench_dynamic_identity_scaling(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
-// GearSonicPolicy: full encoder → planner → decoder pipeline
+// GearSonicPolicy: split the real execution modes instead of benchmarking one
+// ambiguous "predict" bucket.
 // ---------------------------------------------------------------------------
 
-fn bench_gear_sonic_predict(c: &mut Criterion) {
+const GEAR_SONIC_REPLAN_INTERVAL_TICKS: usize = 5;
+
+fn load_gear_sonic_policy() -> Option<GearSonicPolicy> {
     // GearSonicPolicy requires real ONNX checkpoints because the encoder
     // receives proprioceptive state (n+n+3 floats) and the decoder must output
     // exactly n floats. Test-fixture identity models cannot satisfy both
@@ -156,8 +159,8 @@ fn bench_gear_sonic_predict(c: &mut Criterion) {
     let model_dir = if let Ok(d) = std::env::var("GEAR_SONIC_MODEL_DIR") {
         PathBuf::from(d)
     } else {
-        eprintln!("skipping gear_sonic benchmark: GEAR_SONIC_MODEL_DIR not set");
-        return;
+        eprintln!("skipping gear_sonic benchmarks: GEAR_SONIC_MODEL_DIR not set");
+        return None;
     };
     let encoder_path = model_dir.join("model_encoder.onnx");
     let decoder_path = model_dir.join("model_decoder.onnx");
@@ -165,14 +168,13 @@ fn bench_gear_sonic_predict(c: &mut Criterion) {
     for p in [&encoder_path, &decoder_path, &planner_path] {
         if !p.exists() {
             eprintln!(
-                "skipping gear_sonic benchmark: model not found at {}",
+                "skipping gear_sonic benchmarks: model not found at {}",
                 p.display()
             );
-            return;
+            return None;
         }
     }
 
-    // Load robot config to determine joint_count for the observation.
     let robot_config_path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs/robots/unitree_g1.toml");
     let robot = if robot_config_path.exists() {
@@ -181,7 +183,6 @@ fn bench_gear_sonic_predict(c: &mut Criterion) {
     } else {
         test_robot_config(29)
     };
-    let n = robot.joint_count;
 
     let config = GearSonicConfig {
         encoder: test_ort_config(encoder_path),
@@ -189,11 +190,13 @@ fn bench_gear_sonic_predict(c: &mut Criterion) {
         planner: test_ort_config(planner_path),
         robot,
     };
-    let policy = GearSonicPolicy::new(config).expect("policy should build");
+    Some(GearSonicPolicy::new(config).expect("policy should build"))
+}
 
-    let obs = Observation {
-        joint_positions: vec![0.0; n],
-        joint_velocities: vec![0.0; n],
+fn gear_sonic_velocity_obs(joint_count: usize) -> Observation {
+    Observation {
+        joint_positions: vec![0.0; joint_count],
+        joint_velocities: vec![0.0; joint_count],
         gravity_vector: [0.0, 0.0, -1.0],
         angular_velocity: [0.0, 0.0, 0.0],
         command: WbcCommand::Velocity(robowbc_core::Twist {
@@ -201,13 +204,94 @@ fn bench_gear_sonic_predict(c: &mut Criterion) {
             angular: [0.0, 0.0, 0.0],
         }),
         timestamp: Instant::now(),
-    };
+    }
+}
 
-    c.bench_function("policy/gear_sonic_predict", |b| {
-        b.iter(|| {
-            policy.predict(&obs).expect("prediction should succeed");
-        });
+fn gear_sonic_tracking_obs(joint_count: usize) -> Observation {
+    Observation {
+        joint_positions: vec![0.0; joint_count],
+        joint_velocities: vec![0.0; joint_count],
+        gravity_vector: [0.0, 0.0, -1.0],
+        angular_velocity: [0.0, 0.0, 0.0],
+        command: WbcCommand::MotionTokens(Vec::new()),
+        timestamp: Instant::now(),
+    }
+}
+
+fn bench_gear_sonic_modes(c: &mut Criterion) {
+    let Some(policy) = load_gear_sonic_policy() else {
+        return;
+    };
+    let joint_count = policy.supported_robots()[0].joint_count;
+    let velocity_obs = gear_sonic_velocity_obs(joint_count);
+    let tracking_obs = gear_sonic_tracking_obs(joint_count);
+
+    let mut velocity_group = c.benchmark_group("policy/gear_sonic_velocity");
+    velocity_group.bench_function("cold_start_tick", |b| {
+        b.iter_batched(
+            || {
+                policy.reset().expect("reset should succeed");
+            },
+            |_| {
+                policy
+                    .predict(&velocity_obs)
+                    .expect("cold-start planner tick should succeed");
+            },
+            BatchSize::SmallInput,
+        );
     });
+    velocity_group.bench_function("warm_steady_state_tick", |b| {
+        b.iter_batched(
+            || {
+                policy.reset().expect("reset should succeed");
+                policy
+                    .predict(&velocity_obs)
+                    .expect("warmup planner tick should succeed");
+            },
+            |_| {
+                policy
+                    .predict(&velocity_obs)
+                    .expect("warm steady-state tick should succeed");
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    velocity_group.bench_function("replan_tick", |b| {
+        b.iter_batched(
+            || {
+                policy.reset().expect("reset should succeed");
+                for _ in 0..GEAR_SONIC_REPLAN_INTERVAL_TICKS {
+                    policy
+                        .predict(&velocity_obs)
+                        .expect("preparing replan tick should succeed");
+                }
+            },
+            |_| {
+                policy
+                    .predict(&velocity_obs)
+                    .expect("replan tick should succeed");
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    velocity_group.finish();
+
+    c.bench_function(
+        "policy/gear_sonic_tracking/standing_placeholder_tick",
+        |b| {
+            b.iter_batched(
+                || {
+                    policy.reset().expect("reset should succeed");
+                },
+                |_| {
+                    policy
+                        .predict(&tracking_obs)
+                        .expect("standing-placeholder tracking tick should succeed");
+                },
+                BatchSize::SmallInput,
+            );
+        },
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -259,7 +343,7 @@ criterion_group!(
     bench_identity_inference,
     bench_relu_inference,
     bench_dynamic_identity_scaling,
-    bench_gear_sonic_predict,
+    bench_gear_sonic_modes,
     bench_decoupled_wbc_predict,
 );
 criterion_main!(benches);

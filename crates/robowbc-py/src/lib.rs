@@ -25,12 +25,12 @@
 //!
 //! # Construct an observation
 //! obs = Observation(
-//!     joint_positions=[0.0] * 23,
-//!     joint_velocities=[0.0] * 23,
+//!     joint_positions=[0.0] * 29,
+//!     joint_velocities=[0.0] * 29,
 //!     gravity_vector=[0.0, 0.0, -1.0],
 //!     angular_velocity=[0.0, 0.0, 0.0],
 //!     command_type="velocity",
-//!     command_data=[0.5, 0.0, 0.0, 0.0, 0.0, 0.3],
+//!     command_data=[0.3, 0.0, 0.0, 0.0, 0.0, 0.0],
 //! )
 //!
 //! # Run inference
@@ -45,6 +45,10 @@
 //! | `"velocity"`      | `[vx, vy, vz, wx, wy, wz]` — 6 floats             |
 //! | `"motion_tokens"` | arbitrary-length token vector                      |
 //! | `"joint_targets"` | per-joint target positions                         |
+//!
+//! For the public `gear_sonic` config, the default command is `"velocity"`.
+//! Empty `"motion_tokens"` selects the standing-placeholder tracking contract,
+//! while non-empty motion tokens remain the older fixture-style mock path.
 
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 #[allow(clippy::wildcard_imports)]

@@ -31,8 +31,14 @@ velocity = [0.30, 0.0, 0.0]
 max_ticks = 200
 
 # The default CLI path uses the published planner_sonic.onnx velocity contract.
-# The real encoder+decoder tracking contract is not wired into robowbc yet, so
-# motion_tokens remains a fixture-only / experimental path for now.
+# To exercise the narrower encoder+decoder standing-placeholder tracking path,
+# comment out `velocity` and set `standing_placeholder_tracking = true`.
+# This alias is Gear-Sonic-specific and does not expose generic
+# motion-reference streaming.
+# standing_placeholder_tracking = true
+#
+# Non-empty motion_tokens remain the older fixture-style mock pipeline, not the
+# public Gear-Sonic path.
 # motion_tokens = [0.05, -0.1, 0.2, 0.0]
 
 # Hardware transport for real Unitree G1.
