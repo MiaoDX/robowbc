@@ -37,22 +37,22 @@ struct RobotSection {
     config_path: PathBuf,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 struct KinematicPoseLinkConfig {
     name: String,
     translation: [f32; 3],
     rotation_xyzw: [f32; 4],
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 struct KinematicPoseConfig {
     links: Vec<KinematicPoseLinkConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 struct RuntimeConfig {
-    #[serde(default = "default_motion_tokens")]
-    motion_tokens: Vec<f32>,
+    #[serde(default)]
+    motion_tokens: Option<Vec<f32>>,
     /// Velocity command `[vx, vy, yaw_rate]`. When set, uses
     /// `WbcCommand::Velocity` instead of `WbcCommand::MotionTokens`.
     #[serde(default)]
@@ -62,6 +62,11 @@ struct RuntimeConfig {
     /// command paths.
     #[serde(default)]
     kinematic_pose: Option<KinematicPoseConfig>,
+    /// Gear-Sonic-only alias for the standing-placeholder tracking path. This
+    /// routes to the encoder+decoder tracking contract without relying on an
+    /// empty `motion_tokens` payload at the user-facing config layer.
+    #[serde(default)]
+    standing_placeholder_tracking: bool,
     #[serde(default)]
     max_ticks: Option<usize>,
 }
@@ -73,10 +78,133 @@ fn default_motion_tokens() -> Vec<f32> {
 impl Default for RuntimeConfig {
     fn default() -> Self {
         Self {
-            motion_tokens: default_motion_tokens(),
+            motion_tokens: None,
             velocity: None,
             kinematic_pose: None,
+            standing_placeholder_tracking: false,
             max_ticks: Some(200),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum ParsedRuntimeCommand {
+    MotionTokens(Vec<f32>),
+    Velocity([f32; 3]),
+    KinematicPose(KinematicPoseConfig),
+    StandingPlaceholderTracking,
+}
+
+impl ParsedRuntimeCommand {
+    fn from_app_config(config: &AppConfig) -> Result<Self, String> {
+        let runtime = &config.runtime;
+        let mut configured_fields = Vec::new();
+        if runtime.motion_tokens.is_some() {
+            configured_fields.push("runtime.motion_tokens");
+        }
+        if runtime.velocity.is_some() {
+            configured_fields.push("runtime.velocity");
+        }
+        if runtime.kinematic_pose.is_some() {
+            configured_fields.push("runtime.kinematic_pose");
+        }
+        if runtime.standing_placeholder_tracking {
+            configured_fields.push("runtime.standing_placeholder_tracking");
+        }
+
+        if configured_fields.len() > 1 {
+            return Err(format!(
+                "runtime command fields are mutually exclusive; found {}. Choose exactly one of runtime.motion_tokens, runtime.velocity, runtime.kinematic_pose, or runtime.standing_placeholder_tracking",
+                configured_fields.join(", ")
+            ));
+        }
+
+        if let Some(kinematic_pose) = &runtime.kinematic_pose {
+            if kinematic_pose.links.is_empty() {
+                return Err("runtime.kinematic_pose.links must not be empty".to_owned());
+            }
+            for link in &kinematic_pose.links {
+                if link.name.trim().is_empty() {
+                    return Err("runtime.kinematic_pose.links[].name must not be empty".to_owned());
+                }
+            }
+            return Ok(Self::KinematicPose(kinematic_pose.clone()));
+        }
+
+        if let Some([vx, vy, yaw]) = runtime.velocity {
+            return Ok(Self::Velocity([vx, vy, yaw]));
+        }
+
+        if let Some(tokens) = &runtime.motion_tokens {
+            if tokens.is_empty() {
+                return Err(
+                    "runtime.motion_tokens must not be empty; use runtime.standing_placeholder_tracking = true for the Gear-Sonic standing-placeholder path"
+                        .to_owned(),
+                );
+            }
+            return Ok(Self::MotionTokens(tokens.clone()));
+        }
+
+        if runtime.standing_placeholder_tracking {
+            if config.policy.name != "gear_sonic" {
+                return Err(format!(
+                    "runtime.standing_placeholder_tracking is only supported when policy.name = \"gear_sonic\"; got {:?}",
+                    config.policy.name
+                ));
+            }
+            return Ok(Self::StandingPlaceholderTracking);
+        }
+
+        Ok(Self::MotionTokens(default_motion_tokens()))
+    }
+
+    fn report_command_kind(&self) -> &'static str {
+        match self {
+            Self::KinematicPose(_) => "kinematic_pose",
+            Self::Velocity(_) => "velocity",
+            Self::MotionTokens(_) => "motion_tokens",
+            Self::StandingPlaceholderTracking => "standing_placeholder_tracking",
+        }
+    }
+
+    fn report_command_data(&self) -> Vec<f32> {
+        match self {
+            Self::KinematicPose(kinematic_pose) => {
+                let mut flattened = Vec::with_capacity(kinematic_pose.links.len() * 7);
+                for link in &kinematic_pose.links {
+                    flattened.extend_from_slice(&link.translation);
+                    flattened.extend_from_slice(&link.rotation_xyzw);
+                }
+                flattened
+            }
+            Self::Velocity([vx, vy, yaw]) => vec![*vx, *vy, *yaw],
+            Self::MotionTokens(tokens) => tokens.clone(),
+            Self::StandingPlaceholderTracking => Vec::new(),
+        }
+    }
+
+    fn to_wbc_command(&self) -> WbcCommand {
+        match self {
+            Self::KinematicPose(kinematic_pose) => {
+                let links = kinematic_pose
+                    .links
+                    .iter()
+                    .map(|link| LinkPose {
+                        link_name: link.name.clone(),
+                        pose: SE3 {
+                            translation: link.translation,
+                            rotation_xyzw: link.rotation_xyzw,
+                        },
+                    })
+                    .collect();
+                WbcCommand::KinematicPose(BodyPose { links })
+            }
+            Self::Velocity([vx, vy, yaw]) => WbcCommand::Velocity(Twist {
+                linear: [*vx, *vy, 0.0],
+                angular: [0.0, 0.0, *yaw],
+            }),
+            Self::MotionTokens(tokens) => WbcCommand::MotionTokens(tokens.clone()),
+            Self::StandingPlaceholderTracking => WbcCommand::MotionTokens(Vec::new()),
         }
     }
 }
@@ -270,7 +398,7 @@ fn load_app_config(path: &Path) -> Result<AppConfig, String> {
         .map_err(|e| format!("failed to parse config {} as TOML: {e}", path.display()))
 }
 
-fn validate_config(config: &AppConfig) -> Result<(), String> {
+fn validate_config(config: &AppConfig) -> Result<ParsedRuntimeCommand, String> {
     if config.policy.name.trim().is_empty() {
         return Err("policy.name must not be empty".to_owned());
     }
@@ -286,72 +414,7 @@ fn validate_config(config: &AppConfig) -> Result<(), String> {
     if config.inference.device.trim().is_empty() {
         return Err("inference.device must not be empty".to_owned());
     }
-    if let Some(kinematic_pose) = &config.runtime.kinematic_pose {
-        if kinematic_pose.links.is_empty() {
-            return Err("runtime.kinematic_pose.links must not be empty".to_owned());
-        }
-        for link in &kinematic_pose.links {
-            if link.name.trim().is_empty() {
-                return Err("runtime.kinematic_pose.links[].name must not be empty".to_owned());
-            }
-        }
-    }
-    Ok(())
-}
-
-fn report_command_kind(runtime: &RuntimeConfig) -> &'static str {
-    if runtime.kinematic_pose.is_some() {
-        "kinematic_pose"
-    } else if runtime.velocity.is_some() {
-        "velocity"
-    } else {
-        "motion_tokens"
-    }
-}
-
-fn report_command_data(runtime: &RuntimeConfig) -> Vec<f32> {
-    if let Some(kinematic_pose) = &runtime.kinematic_pose {
-        let mut flattened = Vec::with_capacity(kinematic_pose.links.len() * 7);
-        for link in &kinematic_pose.links {
-            flattened.extend_from_slice(&link.translation);
-            flattened.extend_from_slice(&link.rotation_xyzw);
-        }
-        flattened
-    } else if let Some([vx, vy, yaw]) = runtime.velocity {
-        vec![vx, vy, yaw]
-    } else {
-        runtime.motion_tokens.clone()
-    }
-}
-
-fn build_runtime_command(runtime: &RuntimeConfig) -> Result<WbcCommand, String> {
-    if let Some(kinematic_pose) = &runtime.kinematic_pose {
-        let links = kinematic_pose
-            .links
-            .iter()
-            .map(|link| LinkPose {
-                link_name: link.name.clone(),
-                pose: SE3 {
-                    translation: link.translation,
-                    rotation_xyzw: link.rotation_xyzw,
-                },
-            })
-            .collect();
-        return Ok(WbcCommand::KinematicPose(BodyPose { links }));
-    }
-
-    if let Some([vx, vy, yaw]) = runtime.velocity {
-        return Ok(WbcCommand::Velocity(Twist {
-            linear: [vx, vy, 0.0],
-            angular: [0.0, 0.0, yaw],
-        }));
-    }
-
-    if runtime.motion_tokens.is_empty() {
-        return Err("runtime.motion_tokens must not be empty".to_owned());
-    }
-
-    Ok(WbcCommand::MotionTokens(runtime.motion_tokens.clone()))
+    ParsedRuntimeCommand::from_app_config(config)
 }
 
 fn write_run_report(path: &Path, report: &RunReport) -> Result<(), String> {
@@ -415,8 +478,13 @@ device = "cpu"
 [runtime]
 # Template defaults to the fixture motion-token path because it works with the
 # bundled identity ONNX models. For published planner_sonic.onnx runs, switch
-# to `velocity = [vx, vy, yaw_rate]` instead.
+# to `velocity = [vx, vy, yaw_rate]` instead. For the narrow Gear-Sonic
+# standing-placeholder tracking path, comment out `motion_tokens` and set
+# `standing_placeholder_tracking = true` instead. That alias is Gear-Sonic-only
+# and routes to encoder+decoder tracking without exposing generic
+# motion-reference streaming.
 motion_tokens = [0.05, -0.1, 0.2, 0.0]
+# standing_placeholder_tracking = true
 max_ticks = 1
 
 # Optional machine-readable run summary.
@@ -473,13 +541,14 @@ fn run_control_loop_inner<T: RobotTransport>(
     transport: &mut T,
     policy: &dyn WbcPolicy,
     comm: &CommConfig,
-    runtime: &RuntimeConfig,
+    runtime_command: &ParsedRuntimeCommand,
+    max_ticks: Option<usize>,
     running: &AtomicBool,
     report_frames: &mut Vec<ReportFrame>,
     report_max_frames: Option<usize>,
     #[cfg(feature = "vis")] visualizer: &mut Option<RerunVisualizer>,
 ) -> Result<(usize, usize, Duration), String> {
-    let command = build_runtime_command(runtime)?;
+    let command = runtime_command.to_wbc_command();
     let period = Duration::from_secs_f64(1.0 / f64::from(comm.frequency_hz));
 
     let mut ticks: usize = 0;
@@ -487,7 +556,7 @@ fn run_control_loop_inner<T: RobotTransport>(
     let mut inference_total = Duration::ZERO;
 
     while running.load(Ordering::SeqCst) {
-        if let Some(max_ticks) = runtime.max_ticks {
+        if let Some(max_ticks) = max_ticks {
             if ticks >= max_ticks {
                 break;
             }
@@ -531,12 +600,15 @@ fn run_control_loop_inner<T: RobotTransport>(
                 #[allow(clippy::cast_precision_loss)]
                 let freq = 1.0_f64 / cycle_elapsed.as_secs_f64().max(f64::EPSILON);
                 let _ = vis.log_control_frequency(freq);
-                match &command {
-                    WbcCommand::Velocity(t) => {
-                        let _ = vis.log_velocity_command(t.linear[0], t.linear[1], t.angular[2]);
+                match runtime_command {
+                    ParsedRuntimeCommand::Velocity([vx, vy, yaw]) => {
+                        let _ = vis.log_velocity_command(*vx, *vy, *yaw);
                     }
-                    WbcCommand::MotionTokens(tokens) => {
+                    ParsedRuntimeCommand::MotionTokens(tokens) => {
                         let _ = vis.log_motion_tokens(tokens);
+                    }
+                    ParsedRuntimeCommand::StandingPlaceholderTracking => {
+                        let _ = vis.log_motion_tokens(&[]);
                     }
                     _ => {}
                 }
@@ -567,7 +639,8 @@ fn run_control_loop(
     policy_name: &str,
     robot: &RobotConfig,
     comm: &CommConfig,
-    runtime: &RuntimeConfig,
+    runtime_command: &ParsedRuntimeCommand,
+    requested_max_ticks: Option<usize>,
     report_config: Option<&ReportConfig>,
     running: &AtomicBool,
     hardware: Option<UnitreeG1Config>,
@@ -613,7 +686,8 @@ fn run_control_loop(
                 &mut transport,
                 policy,
                 comm,
-                runtime,
+                runtime_command,
+                requested_max_ticks,
                 running,
                 &mut report_frames,
                 report_max_frames,
@@ -636,7 +710,8 @@ fn run_control_loop(
                 &mut transport,
                 policy,
                 comm,
-                runtime,
+                runtime_command,
+                requested_max_ticks,
                 running,
                 &mut report_frames,
                 report_max_frames,
@@ -650,7 +725,8 @@ fn run_control_loop(
                 &mut transport,
                 policy,
                 comm,
-                runtime,
+                runtime_command,
+                requested_max_ticks,
                 running,
                 &mut report_frames,
                 report_max_frames,
@@ -672,7 +748,8 @@ fn run_control_loop(
                 &mut transport,
                 policy,
                 comm,
-                runtime,
+                runtime_command,
+                requested_max_ticks,
                 running,
                 &mut report_frames,
                 report_max_frames,
@@ -686,7 +763,8 @@ fn run_control_loop(
                 &mut transport,
                 policy,
                 comm,
-                runtime,
+                runtime_command,
+                requested_max_ticks,
                 running,
                 &mut report_frames,
                 report_max_frames,
@@ -728,10 +806,10 @@ fn run_control_loop(
             policy_name: policy_name.to_owned(),
             robot_name: robot.name.clone(),
             joint_names: robot.joint_names.clone(),
-            command_kind: report_command_kind(runtime).to_owned(),
-            command_data: report_command_data(runtime),
+            command_kind: runtime_command.report_command_kind().to_owned(),
+            command_data: runtime_command.report_command_data(),
             control_frequency_hz: policy.control_frequency_hz(),
-            requested_max_ticks: runtime.max_ticks,
+            requested_max_ticks,
             metrics: metrics.clone(),
             frames: report_frames,
         };
@@ -775,10 +853,13 @@ fn main() {
         }
     };
 
-    if let Err(err) = validate_config(&app) {
-        eprintln!("invalid config: {err}");
-        std::process::exit(1);
-    }
+    let runtime_command = match validate_config(&app) {
+        Ok(command) => command,
+        Err(err) => {
+            eprintln!("invalid config: {err}");
+            std::process::exit(1);
+        }
+    };
 
     let (policy, robot) = match build_policy(&app) {
         Ok(value) => value,
@@ -806,7 +887,8 @@ fn main() {
         &app.policy.name,
         &robot,
         &app.comm,
-        &app.runtime,
+        &runtime_command,
+        app.runtime.max_ticks,
         report_config.as_ref(),
         &running,
         app.hardware,
@@ -958,11 +1040,154 @@ rotation_xyzw = [0.0, 0.0, 0.0, 1.0]
             .expect("kinematic pose should deserialize");
         assert_eq!(kinematic_pose.links.len(), 1);
         assert_eq!(kinematic_pose.links[0].name, "left_wrist");
-        assert_eq!(report_command_kind(&parsed.runtime), "kinematic_pose");
+        let runtime_command = validate_config(&parsed).expect("kinematic pose should validate");
+        assert_eq!(runtime_command.report_command_kind(), "kinematic_pose");
         assert_eq!(
-            report_command_data(&parsed.runtime),
+            runtime_command.report_command_data(),
             vec![0.1, 0.2, 0.3, 0.0, 0.0, 0.0, 1.0]
         );
+    }
+
+    #[test]
+    fn runtime_defaults_to_motion_tokens_when_no_mode_is_configured() {
+        let config = r#"
+[policy]
+name = "gear_sonic"
+
+[robot]
+config_path = "configs/robots/unitree_g1_mock.toml"
+
+[communication]
+frequency_hz = 50
+
+[inference]
+backend = "ort"
+device = "cpu"
+"#;
+
+        let parsed: AppConfig = toml::from_str(config).expect("config should parse");
+        let runtime_command = validate_config(&parsed).expect("default runtime should validate");
+        assert_eq!(
+            runtime_command,
+            ParsedRuntimeCommand::MotionTokens(default_motion_tokens())
+        );
+    }
+
+    #[test]
+    fn runtime_rejects_conflicting_command_fields() {
+        let config = r#"
+[policy]
+name = "gear_sonic"
+
+[robot]
+config_path = "configs/robots/unitree_g1_mock.toml"
+
+[communication]
+frequency_hz = 50
+
+[inference]
+backend = "ort"
+device = "cpu"
+
+[runtime]
+velocity = [0.3, 0.0, 0.0]
+motion_tokens = [0.1, 0.2]
+"#;
+
+        let parsed: AppConfig = toml::from_str(config).expect("config should parse");
+        let err = validate_config(&parsed).expect_err("conflicting runtime fields should fail");
+        assert!(err.contains("mutually exclusive"));
+        assert!(err.contains("runtime.velocity"));
+        assert!(err.contains("runtime.motion_tokens"));
+    }
+
+    #[test]
+    fn runtime_rejects_empty_motion_tokens_payload() {
+        let config = r#"
+[policy]
+name = "gear_sonic"
+
+[robot]
+config_path = "configs/robots/unitree_g1_mock.toml"
+
+[communication]
+frequency_hz = 50
+
+[inference]
+backend = "ort"
+device = "cpu"
+
+[runtime]
+motion_tokens = []
+"#;
+
+        let parsed: AppConfig = toml::from_str(config).expect("config should parse");
+        let err = validate_config(&parsed).expect_err("empty motion token payload should fail");
+        assert!(err.contains("standing_placeholder_tracking"));
+    }
+
+    #[test]
+    fn gear_sonic_accepts_standing_placeholder_tracking_alias() {
+        let config = r#"
+[policy]
+name = "gear_sonic"
+
+[robot]
+config_path = "configs/robots/unitree_g1.toml"
+
+[communication]
+frequency_hz = 50
+
+[inference]
+backend = "ort"
+device = "cpu"
+
+[runtime]
+standing_placeholder_tracking = true
+"#;
+
+        let parsed: AppConfig = toml::from_str(config).expect("config should parse");
+        let runtime_command =
+            validate_config(&parsed).expect("Gear-Sonic tracking alias should validate");
+        assert_eq!(
+            runtime_command,
+            ParsedRuntimeCommand::StandingPlaceholderTracking
+        );
+        assert_eq!(
+            runtime_command.to_wbc_command(),
+            WbcCommand::MotionTokens(Vec::new())
+        );
+        assert_eq!(
+            runtime_command.report_command_kind(),
+            "standing_placeholder_tracking"
+        );
+        assert!(runtime_command.report_command_data().is_empty());
+    }
+
+    #[test]
+    fn non_gear_sonic_rejects_standing_placeholder_tracking_alias() {
+        let config = r#"
+[policy]
+name = "decoupled_wbc"
+
+[robot]
+config_path = "configs/robots/unitree_g1.toml"
+
+[communication]
+frequency_hz = 50
+
+[inference]
+backend = "ort"
+device = "cpu"
+
+[runtime]
+standing_placeholder_tracking = true
+"#;
+
+        let parsed: AppConfig = toml::from_str(config).expect("config should parse");
+        let err = validate_config(&parsed).expect_err("non-gear_sonic tracking alias should fail");
+        assert!(err.contains("only supported"));
+        assert!(err.contains("gear_sonic"));
     }
 
     #[test]
@@ -1107,18 +1332,39 @@ rotation_xyzw = [0.0, 0.0, 0.0, 1.0]
         };
         // DecoupledWbcPolicy requires WbcCommand::Velocity.
         let runtime = RuntimeConfig {
-            motion_tokens: vec![0.0],
+            motion_tokens: None,
             velocity: Some([0.2, 0.0, 0.1]),
             kinematic_pose: None,
+            standing_placeholder_tracking: false,
             max_ticks: Some(1),
         };
+        let runtime_command = ParsedRuntimeCommand::from_app_config(&AppConfig {
+            policy: PolicySection {
+                name: "decoupled_wbc".to_owned(),
+                config: default_policy_table(),
+            },
+            robot: RobotSection {
+                config_path: PathBuf::from("configs/robots/unitree_g1_mock.toml"),
+            },
+            comm: comm.clone(),
+            inference: InferenceSection::default(),
+            runtime: runtime.clone(),
+            report: None,
+            hardware: None,
+            #[cfg(feature = "sim")]
+            sim: None,
+            #[cfg(feature = "vis")]
+            vis: None,
+        })
+        .expect("runtime should parse");
 
         let metrics = run_control_loop(
             &*policy,
             "decoupled_wbc",
             &robot,
             &comm,
-            &runtime,
+            &runtime_command,
+            runtime.max_ticks,
             None,
             &AtomicBool::new(true),
             None,

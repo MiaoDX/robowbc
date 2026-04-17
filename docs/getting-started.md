@@ -107,9 +107,12 @@ cargo run --release --bin robowbc -- run --config configs/sonic_g1.toml
 ```
 
 The default CLI config exercises the published `planner_sonic.onnx` velocity
-path at 50 Hz until you press Ctrl-C or `max_ticks` is reached. The real
-encoder/decoder tracking contract is also integrated — pass empty motion tokens
-to trigger the full 3-model pipeline.
+path at 50 Hz until you press Ctrl-C or `max_ticks` is reached. To exercise the
+narrow standing-placeholder tracking path instead, set
+`standing_placeholder_tracking = true` under `[runtime]` in
+`configs/sonic_g1.toml`. That path runs the encoder+decoder tracking contract
+with a zero-motion standing reference, does not execute `planner_sonic.onnx` on
+that tick, and is not a generic motion-reference API.
 
 ## Run BFM-Zero with the public G1 bundle
 

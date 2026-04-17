@@ -21,11 +21,13 @@ v0.1.0, 7 Rust crates (~4575 lines), CI green (check/test/clippy/fmt).
 - Benchmark framework: inference latency + control loop benchmarks via Criterion
 
 **Not yet done:**
-- All policies use mock ONNX fixtures (identity/ReLU models), not real weights
-- No real hardware transport (unitree_sdk2)
-- No Python bindings (PyO3)
-- No LeRobot integration
-- No roboharness visual testing pipeline
+- Real hardware transport (unitree_sdk2)
+- Python bindings (PyO3)
+- LeRobot integration
+
+**Recently completed / in progress:**
+- GEAR-SONIC real ONNX models: working end-to-end in MuJoCo simulation
+- Roboharness visual testing pipeline: script-based integration implemented and documented
 
 ---
 
@@ -37,27 +39,38 @@ Same as roboharness: each direction evaluated against (1) acquiring users and (2
 
 ## Do Now
 
-### A. GEAR-SONIC with Real ONNX Models
+### A. GEAR-Sonic Truth Alignment and Performance Closure
 
-**Why highest priority:** GEAR-SONIC is the most deployed, best-documented WBC system. Loading real models is the single strongest proof-of-value — showing a Rust runtime can execute the industry's leading WBC model.
+**Why highest priority:** the code already proves RoboWBC can run the public
+GEAR-Sonic checkpoints. The current risk is trust: the CLI surface, benchmark
+language, and status docs still disagree about what is actually live.
 
 **What to do:**
 
-1. Download actual `nvidia/GEAR-SONIC` ONNX checkpoints from HuggingFace (encoder_sonic.onnx, decoder_sonic.onnx, planner_sonic.onnx)
-2. Update `robowbc-ort` GEAR-SONIC wrapper to handle real model input/output shapes (not identity fixtures)
-3. Wire the 3-model pipeline: encoder → planner → decoder with correct tensor dimensions
-4. Match NVIDIA's ZMQ streaming protocol v4 (1280-byte headers) for compatibility
-5. Run inference on CPU first, then validate TensorRT EP on GPU
-6. Publish benchmark: robowbc (Rust + ort) vs NVIDIA's C++ gear_sonic_deploy — latency comparison
+1. Normalize CLI runtime command parsing around one parsed command surface
+2. Expose the narrow standing-placeholder tracking path explicitly instead of
+   relying on empty `motion_tokens` at the user-facing config layer
+3. Split benchmarks into cold-start, warm steady-state, replan, and
+   standing-placeholder tracking modes
+4. Rewrite README/config/docs/comments so every public surface says the same
+   thing about the live velocity path, the narrower tracking alias, and the
+   current CPU baseline
+5. Treat `32.3 Hz` as the honest planner-path CPU baseline and define
+   CUDA/TensorRT acceleration as the next milestone instead of pretending the
+   CPU path already meets 50 Hz
 
-**Exit criteria:** `robowbc run --config sonic_g1.toml` loads real GEAR-SONIC models, runs inference, outputs joint targets at 50 Hz.
+**Exit criteria:** `robowbc run --config configs/sonic_g1.toml` stays the
+default published velocity path, `standing_placeholder_tracking = true` triggers
+the encoder+decoder standing-placeholder path, benchmark/docs language matches
+the actual runtime code paths, and the roadmap names CUDA/TensorRT as the next
+performance milestone.
 
 **⚡ Action items:**
-- [ ] Add HuggingFace model download script or integration (similar to roboharness's SONIC controller)
-- [ ] Update `configs/sonic_g1.toml` to point at real model paths
-- [ ] Fix input/output tensor shapes in `robowbc-ort/src/lib.rs`
-- [ ] Add integration test that loads real models (mark as `#[ignore]` for CI without GPU)
-- [ ] Fill in `docs/benchmarks/README.md` comparison table with measured values
+- [ ] Add one parsed runtime-command representation inside `robowbc-cli`
+- [ ] Add explicit `standing_placeholder_tracking` CLI/config semantics for GEAR-Sonic
+- [ ] Keep JSON report/showcase metadata truthful while preserving compatibility
+- [ ] Split GEAR-Sonic benchmark names into cold-start, warm, replan, and tracking modes
+- [ ] Rewrite README, getting-started, configuration docs, config comments, and roadmap text around the shipped runtime behavior
 
 ### B. Unitree G1 Hardware Transport
 
@@ -146,13 +159,13 @@ NVIDIA's WBC-AGILE is now fully open-sourced, supporting G1 (35 DOF) and Booster
 
 | Direction | Related Issue | Status |
 |-----------|--------------|--------|
-| GEAR-SONIC real models | Extends existing #6 | Mock complete, real models needed |
+| GEAR-Sonic truth + performance closure | Extends existing #6 | Real models live, public surfaces still need alignment |
 | G1 hardware transport | New issue needed | Not started |
 | Python bindings | New issue needed | Not started |
 | BFM-Zero wrapper | New issue needed | Design phase |
 | WholeBodyVLA wrapper | New issue needed | Design phase |
 | LeRobot integration | New issue needed | Blocked on Python bindings |
-| Roboharness pipeline | New issue needed | Design phase |
+| Roboharness pipeline | New issue needed | Script implemented, documented |
 | Multi-embodiment | New issue needed | Blocked on G1 working |
 | WBC-AGILE wrapper | New issue needed | Not started |
-| Benchmarks vs NVIDIA C++ | Extends existing benchmarks | Template exists, no real data |
+| Benchmarks vs NVIDIA C++ | Extends existing benchmarks | Real CPU baseline published, semantics need split-by-mode wording |

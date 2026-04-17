@@ -95,12 +95,45 @@ velocity = [0.2, 0.0, 0.1]
 
 See `configs/decoupled_smoke.toml` for a no-download fixture example, and `configs/decoupled_g1.toml` for the public GR00T G1 checkpoint path.
 
+## Runtime command modes
+
+Exactly one user-facing runtime command selector may be set under `[runtime]`:
+
+- `motion_tokens = [...]`
+- `velocity = [vx, vy, yaw_rate]`
+- `[[runtime.kinematic_pose.links]]`
+- `standing_placeholder_tracking = true` for the Gear-Sonic-only standing placeholder path
+
+If none of those fields is set, the CLI falls back to `motion_tokens = [0.0]`
+for backward compatibility. `motion_tokens = []` is rejected; use
+`standing_placeholder_tracking = true` when you want the explicit Gear-Sonic
+standing-placeholder alias instead of an empty-array magic value.
+
+### `gear_sonic`
+
+- Default public path: `velocity = [vx, vy, yaw_rate]`
+- Optional narrow alias: `standing_placeholder_tracking = true`
+- Non-empty `motion_tokens` are for the older fixture-style mock pipeline, not
+  the published `planner_sonic.onnx` path
+
+### `wholebody_vla`
+
+- Uses `runtime.kinematic_pose`
+
+### `bfm_zero`
+
+- Uses its own prompt/context config under `[policy.config.tracking]`
+- `runtime.motion_tokens` is ignored unless you deliberately drive a custom
+  `WbcCommand::MotionTokens` path yourself
+
 ## Validation rules
 
 - `policy.name` must be non-empty; must match a name registered in the policy registry
 - `comm.frequency_hz` / `communication.frequency_hz` must be greater than zero
 - `inference.backend` currently supports only `ort`
 - `inference.device` must be non-empty
+- Runtime command fields are mutually exclusive; set exactly one of `motion_tokens`, `velocity`, `kinematic_pose`, or `standing_placeholder_tracking`
+- `standing_placeholder_tracking` is only supported when `policy.name = "gear_sonic"`
 
 ## Optional artifact sections
 
