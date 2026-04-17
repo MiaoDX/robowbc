@@ -1915,6 +1915,7 @@ mod tests {
     /// ```
     #[test]
     #[ignore = "requires real GEAR-SONIC ONNX models; run scripts/download_gear_sonic_models.sh first"]
+    #[allow(clippy::too_many_lines)]
     fn gear_sonic_real_model_inference() {
         use robowbc_core::WbcPolicy;
 
