@@ -38,6 +38,7 @@ Key pattern: `WbcPolicy` is a trait (`Send + Sync`). New policies implement it a
 
 - Branch from `main`
 - Commit messages: `type: description` (feat, fix, ci, docs, refactor)
+- Merge method: **rebase only** — squash and merge commits are disabled on this repository
 - CI runs on all PRs: `cargo check` + `cargo clippy` + `cargo fmt --check` + `cargo test`
 
 ### PR review strategy
