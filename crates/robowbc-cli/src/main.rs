@@ -1098,8 +1098,17 @@ rotation_xyzw = [0.0, 0.0, 0.0, 1.0]
         let full_cfg = insert_robot_into_policy(cfg, &robot).expect("robot should be inserted");
 
         // Use "decoupled_wbc" as the policy name — this is the policy switch.
-        let policy =
-            WbcRegistry::build("decoupled_wbc", &full_cfg).expect("decoupled_wbc should build");
+        let policy = match WbcRegistry::build("decoupled_wbc", &full_cfg) {
+            Ok(p) => p,
+            Err(e)
+                if e.to_string()
+                    .contains("ONNX Runtime shared library not found") =>
+            {
+                eprintln!("skipping: ORT not available in this environment");
+                return;
+            }
+            Err(e) => panic!("decoupled_wbc should build: {e}"),
+        };
 
         let comm = CommConfig {
             frequency_hz: 50,
