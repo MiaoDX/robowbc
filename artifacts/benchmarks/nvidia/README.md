@@ -11,6 +11,8 @@ same schema and case registry.
 - `official/`: normalized artifacts emitted by `python3 scripts/bench_nvidia_official.py`
 - `robowbc/`: normalized artifacts emitted by `scripts/bench_robowbc_compare.sh`
 - `SUMMARY.md`: generated Markdown matrix rendered from the committed artifacts
+- CI / Pages HTML: `benchmarks/nvidia/index.html` inside the generated showcase
+  bundle, rendered from the same normalized artifacts
 - `patches/`: notes for any helper patches or wrapper glue required to expose a
   fair benchmark seam in the upstream stack
 
@@ -61,6 +63,9 @@ honest output for an unavailable path; it is not a placeholder.
 5. Inspect `artifacts/benchmarks/nvidia/SUMMARY.md` plus the paired results
    under `artifacts/benchmarks/nvidia/robowbc/` and
    `artifacts/benchmarks/nvidia/official/`
+
+The CI showcase job also copies this directory into its Pages bundle and emits a
+static HTML report at `benchmarks/nvidia/index.html` from the same JSON rows.
 
 ## Decision table
 

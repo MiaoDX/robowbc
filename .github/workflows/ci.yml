@@ -65,6 +65,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -92,8 +94,8 @@ jobs:
             models/bfm_zero
           key: live-policy-models-${{ runner.os }}-v3
 
-      - name: Install BFM-Zero asset prep dependencies
-        run: pip install numpy joblib
+      - name: Install showcase and benchmark Python dependencies
+        run: pip install numpy joblib onnxruntime==1.24.4
 
       - name: Warm live policy checkpoint cache
         run: |
@@ -111,6 +113,24 @@ jobs:
             --repo-root . \
             --robowbc-binary ./target/debug/robowbc \
             --output-dir /tmp/policy-showcase
+
+      - name: Generate NVIDIA comparison HTML
+        run: |
+          bash scripts/bench_robowbc_compare.sh --all
+          python scripts/bench_nvidia_official.py --all
+          mkdir -p /tmp/policy-showcase/benchmarks
+          cp -R artifacts/benchmarks/nvidia /tmp/policy-showcase/benchmarks/nvidia
+          python scripts/render_nvidia_benchmark_summary.py \
+            --root /tmp/policy-showcase/benchmarks/nvidia \
+            --output /tmp/policy-showcase/benchmarks/nvidia/SUMMARY.md \
+            --html-output /tmp/policy-showcase/benchmarks/nvidia/index.html
+
+      - name: Upload NVIDIA benchmark comparison artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nvidia-benchmark-comparison
+          path: /tmp/policy-showcase/benchmarks/nvidia
+          retention-days: 30
 
       - name: Upload policy showcase artifact
         uses: actions/upload-artifact@v4
