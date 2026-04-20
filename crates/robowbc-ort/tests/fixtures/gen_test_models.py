@@ -51,8 +51,32 @@ def gen_dynamic_identity_model(path: str) -> None:
     print(f"wrote {path} ({os.path.getsize(path)} bytes)")
 
 
+def gen_constant_output_model(path: str, output_name: str, values: list[float]) -> None:
+    """Create a model with a fixed [1, len(values)] output and an unused 516D input."""
+    X = helper.make_tensor_value_info("input", TensorProto.FLOAT, [1, 516])
+    Y = helper.make_tensor_value_info("output", TensorProto.FLOAT, [1, len(values)])
+    tensor = helper.make_tensor(output_name, TensorProto.FLOAT, [1, len(values)], values)
+    node = helper.make_node("Constant", [], ["output"], value=tensor)
+    graph = helper.make_graph([node], output_name, [X], [Y])
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 13)])
+    model.ir_version = 7
+    onnx.checker.check_model(model)
+    onnx.save(model, path)
+    print(f"wrote {path} ({os.path.getsize(path)} bytes)")
+
+
 if __name__ == "__main__":
     script_dir = os.path.dirname(os.path.abspath(__file__))
     gen_identity_model(os.path.join(script_dir, "test_identity.onnx"))
     gen_relu_model(os.path.join(script_dir, "test_relu.onnx"))
     gen_dynamic_identity_model(os.path.join(script_dir, "test_dynamic_identity.onnx"))
+    gen_constant_output_model(
+        os.path.join(script_dir, "test_constant_walk.onnx"),
+        "test_constant_walk",
+        [1.0] * 15,
+    )
+    gen_constant_output_model(
+        os.path.join(script_dir, "test_constant_balance.onnx"),
+        "test_constant_balance",
+        [-1.0] * 15,
+    )

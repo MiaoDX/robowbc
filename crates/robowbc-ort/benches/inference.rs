@@ -298,44 +298,99 @@ fn bench_gear_sonic_modes(c: &mut Criterion) {
 // DecoupledWbcPolicy: RL lower-body + analytical upper-body
 // ---------------------------------------------------------------------------
 
-fn bench_decoupled_wbc_predict(c: &mut Criterion) {
-    let model_path = dynamic_identity_model();
-    if !model_path.exists() {
-        eprintln!(
-            "skipping decoupled_wbc benchmark: model not found at {}",
-            model_path.display()
-        );
-        return;
+fn load_decoupled_wbc_policy() -> Option<DecoupledWbcPolicy> {
+    let model_dir = if let Ok(d) = std::env::var("DECOUPLED_WBC_MODEL_DIR") {
+        PathBuf::from(d)
+    } else {
+        eprintln!("skipping decoupled_wbc benchmarks: DECOUPLED_WBC_MODEL_DIR not set");
+        return None;
+    };
+    let walk_model = model_dir.join("GR00T-WholeBodyControl-Walk.onnx");
+    let balance_model = model_dir.join("GR00T-WholeBodyControl-Balance.onnx");
+    for p in [&walk_model, &balance_model] {
+        if !p.exists() {
+            eprintln!(
+                "skipping decoupled_wbc benchmarks: model not found at {}",
+                p.display()
+            );
+            return None;
+        }
     }
 
+    let robot_config_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs/robots/unitree_g1.toml");
+    let robot = if robot_config_path.exists() {
+        robowbc_core::RobotConfig::from_toml_file(&robot_config_path)
+            .expect("robot config should load")
+    } else {
+        test_robot_config(29)
+    };
+
     let config = DecoupledWbcConfig {
-        rl_model: test_ort_config(model_path),
-        stand_model: None,
-        robot: test_robot_config(4),
-        lower_body_joints: vec![0, 1],
-        upper_body_joints: vec![2, 3],
-        contract: DecoupledObservationContract::Flat,
+        rl_model: test_ort_config(walk_model),
+        stand_model: Some(test_ort_config(balance_model)),
+        robot: robot.clone(),
+        lower_body_joints: (0..15).collect(),
+        upper_body_joints: (15..robot.joint_count).collect(),
+        contract: DecoupledObservationContract::GrootG1History,
         control_frequency_hz: 50,
     };
-    let policy = DecoupledWbcPolicy::new(config).expect("policy should build");
+    Some(DecoupledWbcPolicy::new(config).expect("policy should build"))
+}
 
-    let obs = Observation {
-        joint_positions: vec![0.5, -0.3, 0.1, 0.2],
-        joint_velocities: vec![0.01, -0.02, 0.0, 0.0],
+fn decoupled_wbc_obs(joint_count: usize, vx: f32, yaw_rate: f32) -> Observation {
+    Observation {
+        joint_positions: vec![0.0; joint_count],
+        joint_velocities: vec![0.0; joint_count],
         gravity_vector: [0.0, 0.0, -1.0],
         angular_velocity: [0.0, 0.0, 0.0],
         command: WbcCommand::Velocity(robowbc_core::Twist {
-            linear: [0.2, 0.0, 0.0],
-            angular: [0.0, 0.0, 0.1],
+            linear: [vx, 0.0, 0.0],
+            angular: [0.0, 0.0, yaw_rate],
         }),
         timestamp: Instant::now(),
-    };
+    }
+}
 
-    c.bench_function("policy/decoupled_wbc_predict", |b| {
-        b.iter(|| {
-            policy.predict(&obs).expect("prediction should succeed");
-        });
+fn bench_decoupled_wbc_modes(c: &mut Criterion) {
+    let Some(policy) = load_decoupled_wbc_policy() else {
+        eprintln!(
+            "skipping decoupled_wbc benchmarks: real GR00T WholeBodyControl checkpoints are required"
+        );
+        return;
+    };
+    let joint_count = policy.supported_robots()[0].joint_count;
+    let walk_obs = decoupled_wbc_obs(joint_count, 0.25, 0.05);
+    let balance_obs = decoupled_wbc_obs(joint_count, 0.0, 0.0);
+
+    let mut group = c.benchmark_group("policy/decoupled_wbc");
+    group.bench_function("walk_predict", |b| {
+        b.iter_batched(
+            || {
+                policy.reset();
+            },
+            |_| {
+                policy
+                    .predict(&walk_obs)
+                    .expect("walk prediction should succeed");
+            },
+            BatchSize::SmallInput,
+        );
     });
+    group.bench_function("balance_predict", |b| {
+        b.iter_batched(
+            || {
+                policy.reset();
+            },
+            |_| {
+                policy
+                    .predict(&balance_obs)
+                    .expect("balance prediction should succeed");
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.finish();
 }
 
 criterion_group!(
@@ -344,6 +399,6 @@ criterion_group!(
     bench_relu_inference,
     bench_dynamic_identity_scaling,
     bench_gear_sonic_modes,
-    bench_decoupled_wbc_predict,
+    bench_decoupled_wbc_modes,
 );
 criterion_main!(benches);
