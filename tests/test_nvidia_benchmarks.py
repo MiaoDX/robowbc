@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 REGISTRY_PATH = ROOT / "artifacts/benchmarks/nvidia/cases.json"
 NORMALIZER_PATH = ROOT / "scripts/normalize_nvidia_benchmarks.py"
 RENDER_PATH = ROOT / "scripts/render_nvidia_benchmark_summary.py"
+ROBOHARNESS_REPORT_PATH = ROOT / "scripts/roboharness_report.py"
 
 SPEC = importlib.util.spec_from_file_location("normalize_nvidia_benchmarks", NORMALIZER_PATH)
 NORMALIZER = importlib.util.module_from_spec(SPEC)
@@ -24,6 +25,13 @@ RENDER_SPEC = importlib.util.spec_from_file_location("render_nvidia_benchmark_su
 RENDER = importlib.util.module_from_spec(RENDER_SPEC)
 assert RENDER_SPEC.loader is not None
 RENDER_SPEC.loader.exec_module(RENDER)
+
+ROBOHARNESS_SPEC = importlib.util.spec_from_file_location(
+    "roboharness_report", ROBOHARNESS_REPORT_PATH
+)
+ROBOHARNESS = importlib.util.module_from_spec(ROBOHARNESS_SPEC)
+assert ROBOHARNESS_SPEC.loader is not None
+ROBOHARNESS_SPEC.loader.exec_module(ROBOHARNESS)
 
 
 class NvidiaBenchmarkTests(unittest.TestCase):
@@ -199,6 +207,66 @@ class NvidiaBenchmarkTests(unittest.TestCase):
             encoding="utf-8",
         )
         cargo_path.chmod(cargo_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        return fake_bin
+
+    def make_fake_robowbc_binary(self, root: Path) -> Path:
+        fake_bin = root / "fake-robowbc"
+        fake_bin.write_text(
+            textwrap.dedent(
+                """
+                #!/usr/bin/env python3
+                import json
+                import pathlib
+                import re
+                import sys
+
+
+                def main() -> int:
+                    args = sys.argv[1:]
+                    if args[:1] != ["run"] or "--config" not in args:
+                        raise SystemExit(f"unexpected robowbc invocation: {args!r}")
+
+                    config_path = pathlib.Path(args[args.index("--config") + 1])
+                    config_text = config_path.read_text(encoding="utf-8")
+                    output_match = re.search(r'^output_path\\s*=\\s*"([^"]+)"\\s*$', config_text, re.MULTILINE)
+                    if output_match is None:
+                        raise SystemExit("missing report output_path")
+
+                    output_path = pathlib.Path(output_match.group(1))
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    output_path.write_text(
+                        json.dumps(
+                            {
+                                "policy_name": "gear_sonic",
+                                "robot_name": "unitree_g1",
+                                "command_kind": "velocity",
+                                "command_data": [0.3, 0.0, 0.0],
+                                "metrics": {
+                                    "ticks": 3,
+                                    "average_inference_ms": 1.25,
+                                    "achieved_frequency_hz": 48.5,
+                                    "dropped_frames": 0,
+                                },
+                                "frames": [
+                                    {"tick": 0, "actual_positions": [0.0], "inference_latency_ms": 1.1},
+                                    {"tick": 1, "actual_positions": [0.1], "inference_latency_ms": 1.2},
+                                    {"tick": 2, "actual_positions": [0.2], "inference_latency_ms": 1.45},
+                                ],
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    return 0
+
+
+                if __name__ == "__main__":
+                    raise SystemExit(main())
+                """
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        fake_bin.chmod(fake_bin.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
         return fake_bin
 
     def test_registry_validates_and_contains_expected_cases(self) -> None:
@@ -469,6 +537,119 @@ class NvidiaBenchmarkTests(unittest.TestCase):
                 self.assertEqual(artifact["status"], "ok")
                 self.assertEqual(artifact["source_command"], case["robowbc_command"])
                 self.assertAlmostEqual(artifact["hz"], 41.25)
+
+    def test_roboharness_compose_run_config_injects_sections_and_updates_runtime(self) -> None:
+        base_toml = textwrap.dedent(
+            """
+            [policy]
+            name = "gear_sonic"
+
+            [runtime]
+            max_ticks = 1
+            """
+        ).strip()
+        showcase_context = {
+            "transport": "mujoco",
+            "model_path": "models/unitree_g1.xml",
+            "timestep": 0.002,
+            "substeps": 10,
+            "robot_config_path": "configs/robots/unitree_g1.toml",
+            "config_has_sim_section": False,
+        }
+
+        composed = ROBOHARNESS.compose_run_config(
+            base_toml,
+            Path("/tmp/report.json"),
+            Path("/tmp/run.rrd"),
+            showcase_context,
+            max_ticks=7,
+        )
+
+        self.assertIn("[sim]", composed)
+        self.assertIn('model_path = "models/unitree_g1.xml"', composed)
+        self.assertIn("[vis]", composed)
+        self.assertIn("[report]", composed)
+        self.assertIn('output_path = "/tmp/report.json"', composed)
+        self.assertIn('save_path = "/tmp/run.rrd"', composed)
+        self.assertEqual(composed.count("[runtime]"), 1)
+        self.assertIn("max_ticks = 7", composed)
+
+    def test_roboharness_resolve_showcase_context_uses_robot_model_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            robot_dir = repo_root / "configs" / "robots"
+            robot_dir.mkdir(parents=True)
+            robot_cfg = robot_dir / "unitree_g1_mock.toml"
+            robot_cfg.write_text('model_path = "models/unitree_g1.xml"\n', encoding="utf-8")
+            config_path = repo_root / "configs" / "sonic_g1.toml"
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text(
+                textwrap.dedent(
+                    """
+                    [robot]
+                    config_path = "configs/robots/unitree_g1_mock.toml"
+
+                    [communication]
+                    frequency_hz = 50
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+
+            context = ROBOHARNESS.resolve_showcase_context(repo_root, config_path)
+
+            self.assertEqual(context["transport"], "mujoco")
+            self.assertEqual(context["model_path"], "models/unitree_g1.xml")
+            self.assertEqual(context["substeps"], 10)
+            self.assertFalse(context["config_has_sim_section"])
+
+    def test_roboharness_run_robowbc_records_meta_and_report_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            output_dir = repo_root / "out"
+            output_dir.mkdir(parents=True)
+            robot_cfg = repo_root / "configs" / "robots" / "unitree_g1_mock.toml"
+            robot_cfg.parent.mkdir(parents=True, exist_ok=True)
+            robot_cfg.write_text('model_path = "models/unitree_g1.xml"\n', encoding="utf-8")
+            config_path = repo_root / "configs" / "sonic_g1.toml"
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text(
+                textwrap.dedent(
+                    """
+                    [robot]
+                    config_path = "configs/robots/unitree_g1_mock.toml"
+
+                    [communication]
+                    frequency_hz = 50
+
+                    [sim]
+                    model_path = "models/unitree_g1.xml"
+                    timestep = 0.002
+                    substeps = 10
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            fake_binary = self.make_fake_robowbc_binary(repo_root)
+
+            report = ROBOHARNESS.run_robowbc(
+                repo_root=repo_root,
+                binary=fake_binary,
+                output_dir=output_dir,
+                config_path=config_path,
+                env=os.environ.copy(),
+                max_ticks=3,
+            )
+
+            self.assertEqual(report["metrics"]["ticks"], 3)
+            self.assertEqual(report["_meta"]["showcase_context"]["transport"], "mujoco")
+            self.assertTrue(Path(report["_meta"]["json_path"]).is_file())
+            self.assertTrue(Path(report["_meta"]["temp_config"]).is_file())
+            temp_config_text = Path(report["_meta"]["temp_config"]).read_text(encoding="utf-8")
+            self.assertIn("[report]", temp_config_text)
+            self.assertIn("max_ticks = 3", temp_config_text)
 
 
 if __name__ == "__main__":
