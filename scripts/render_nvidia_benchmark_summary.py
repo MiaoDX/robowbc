@@ -169,7 +169,7 @@ def render_summary(registry: dict[str, Any], output_root: Path) -> str:
             "",
             "```bash",
             "scripts/bench_robowbc_compare.sh --all",
-            "scripts/bench_nvidia_official.sh --all",
+            "python3 scripts/bench_nvidia_official.py --all",
             "python3 scripts/render_nvidia_benchmark_summary.py --output artifacts/benchmarks/nvidia/SUMMARY.md",
             "```",
             "",

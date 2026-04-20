@@ -9,7 +9,7 @@ The source of truth lives under:
 - `artifacts/benchmarks/nvidia/README.md`
 - `artifacts/benchmarks/nvidia/SUMMARY.md`
 - `scripts/bench_robowbc_compare.sh`
-- `scripts/bench_nvidia_official.sh`
+- `scripts/bench_nvidia_official.py`
 
 The current committed CPU package contains measured RoboWBC and official NVIDIA
 rows for all eight canonical cases. Use `artifacts/benchmarks/nvidia/SUMMARY.md`
@@ -57,12 +57,15 @@ The decision is not "is Rust faster than C++?" The decision is:
 ### 1. Download the pinned model revisions
 
 ```bash
+git submodule update --init --recursive third_party/GR00T-WholeBodyControl
 bash scripts/download_gear_sonic_models.sh
 bash scripts/download_decoupled_wbc_models.sh
 ```
 
-These helpers now pin the default upstream revisions and write a `REVISION`
-file beside the downloaded assets so later artifact runs can record provenance.
+The comparison now uses a tracked git submodule checkout of
+`NVlabs/GR00T-WholeBodyControl` under `third_party/GR00T-WholeBodyControl`.
+The model-download helpers pin the default revisions and write a `REVISION` file
+beside the downloaded assets so later artifact runs can record provenance.
 
 ### 2. Emit RoboWBC artifacts
 
@@ -81,7 +84,7 @@ than pretending a comparison happened.
 ### 3. Emit official-wrapper artifacts
 
 ```bash
-scripts/bench_nvidia_official.sh --all
+python3 scripts/bench_nvidia_official.py --all
 ```
 
 The current committed CPU package measures all eight canonical official rows.

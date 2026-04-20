@@ -247,8 +247,8 @@ class NvidiaBenchmarkTests(unittest.TestCase):
             env["DECOUPLED_WBC_MODEL_DIR"] = str(Path(tmpdir) / "missing-decoupled-models")
             subprocess.run(
                 [
-                    "bash",
-                    str(ROOT / "scripts/bench_nvidia_official.sh"),
+                    "python3",
+                    str(ROOT / "scripts/bench_nvidia_official.py"),
                     "--case",
                     "decoupled_wbc/walk_predict",
                     "--repo-dir",
@@ -279,8 +279,8 @@ class NvidiaBenchmarkTests(unittest.TestCase):
 
             subprocess.run(
                 [
-                    "bash",
-                    str(ROOT / "scripts/bench_nvidia_official.sh"),
+                    "python3",
+                    str(ROOT / "scripts/bench_nvidia_official.py"),
                     "--all",
                     "--repo-dir",
                     str(repo_dir),
@@ -314,6 +314,17 @@ class NvidiaBenchmarkTests(unittest.TestCase):
                         self.assertIsNone(artifact["hz"])
                 else:
                     self.assertEqual(artifact["status"], "blocked")
+
+            policy_dir = (
+                repo_dir
+                / "decoupled_wbc"
+                / "sim2mujoco"
+                / "resources"
+                / "robots"
+                / "g1"
+                / "policy"
+            )
+            self.assertFalse(policy_dir.exists(), msg="official harness should not mutate the repo")
 
 
 if __name__ == "__main__":
