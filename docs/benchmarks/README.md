@@ -8,12 +8,17 @@ The source of truth lives under:
 - `artifacts/benchmarks/nvidia/cases.json`
 - `artifacts/benchmarks/nvidia/README.md`
 - `artifacts/benchmarks/nvidia/SUMMARY.md`
+- CI-generated HTML under the showcase / Pages bundle at
+  `benchmarks/nvidia/index.html`
 - `scripts/bench_robowbc_compare.sh`
 - `scripts/bench_nvidia_official.py`
 
 The current committed CPU package contains measured RoboWBC and official NVIDIA
 rows for all eight canonical cases. Use `artifacts/benchmarks/nvidia/SUMMARY.md`
 as the human-readable matrix and the paired JSON files as the provenance layer.
+CI now renders the same artifact set into a static HTML page so the comparison
+can be browsed directly from the uploaded showcase artifact and the `main`
+branch Pages site.
 
 ## Audience and decision
 
@@ -100,11 +105,21 @@ That is the honest output. It is not a placeholder.
 python3 scripts/render_nvidia_benchmark_summary.py --output artifacts/benchmarks/nvidia/SUMMARY.md
 ```
 
+In CI, the showcase job also renders the static HTML page:
+
+```bash
+python3 scripts/render_nvidia_benchmark_summary.py \
+  --root /tmp/policy-showcase/benchmarks/nvidia \
+  --output /tmp/policy-showcase/benchmarks/nvidia/SUMMARY.md \
+  --html-output /tmp/policy-showcase/benchmarks/nvidia/index.html
+```
+
 ## Artifact layout
 
 - `artifacts/benchmarks/nvidia/robowbc/*.json`
 - `artifacts/benchmarks/nvidia/official/*.json`
 - `artifacts/benchmarks/nvidia/SUMMARY.md`
+- CI / Pages: `benchmarks/nvidia/index.html`
 
 Every normalized artifact includes:
 

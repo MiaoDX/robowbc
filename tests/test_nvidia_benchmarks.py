@@ -12,11 +12,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 REGISTRY_PATH = ROOT / "artifacts/benchmarks/nvidia/cases.json"
 NORMALIZER_PATH = ROOT / "scripts/normalize_nvidia_benchmarks.py"
+RENDER_PATH = ROOT / "scripts/render_nvidia_benchmark_summary.py"
 
 SPEC = importlib.util.spec_from_file_location("normalize_nvidia_benchmarks", NORMALIZER_PATH)
 NORMALIZER = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(NORMALIZER)
+
+RENDER_SPEC = importlib.util.spec_from_file_location("render_nvidia_benchmark_summary", RENDER_PATH)
+RENDER = importlib.util.module_from_spec(RENDER_SPEC)
+assert RENDER_SPEC.loader is not None
+RENDER_SPEC.loader.exec_module(RENDER)
 
 
 class NvidiaBenchmarkTests(unittest.TestCase):
@@ -239,6 +245,45 @@ class NvidiaBenchmarkTests(unittest.TestCase):
             )
             self.assertEqual(artifact["p50_ns"], 1_500_000)
             self.assertEqual(artifact["hz"], 32.3)
+
+    def test_render_html_summary_contains_case_links(self) -> None:
+        registry = NORMALIZER.load_registry(REGISTRY_PATH)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "official").mkdir()
+            (root / "robowbc").mkdir()
+
+            case = NORMALIZER.registry_case(registry, "decoupled_wbc/walk_predict")
+            for stack_name, output_dir, p50_ns in (
+                ("official_nvidia", root / "official", 170_000),
+                ("robowbc", root / "robowbc", 41_000),
+            ):
+                artifact = NORMALIZER.build_artifact(
+                    case=case,
+                    stack=stack_name,
+                    upstream_commit="bc38f6d0ce6cab4589e025037ad0bfbab7ba73d8",
+                    robowbc_commit="cab3f22490f43c4a366a9f4cf769a250bcbe4063",
+                    provider="cpu",
+                    host_fingerprint="ci-host",
+                    samples_ns=[p50_ns, p50_ns + 1_000, p50_ns + 2_000],
+                    hz=None,
+                    notes="html test",
+                    source_command="python3 script.py",
+                    raw_source="raw.json",
+                    status="ok",
+                )
+                output_path = output_dir / "decoupled_wbc__walk_predict.json"
+                output_path.write_text(json.dumps(artifact), encoding="utf-8")
+
+            summary = RENDER.build_summary(registry, root)
+            html_summary = RENDER.render_html(summary)
+
+            self.assertIn("<!DOCTYPE html>", html_summary)
+            self.assertIn("RoboWBC NVIDIA Comparison", html_summary)
+            self.assertIn("decoupled_wbc/walk_predict", html_summary)
+            self.assertIn("robowbc/decoupled_wbc__walk_predict.json", html_summary)
+            self.assertIn("official/decoupled_wbc__walk_predict.json", html_summary)
+            self.assertIn("Policy showcase", html_summary)
 
     def test_official_wrapper_blocks_decoupled_case_when_models_are_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

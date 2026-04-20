@@ -32,7 +32,8 @@ The comparison substrate is now in place:
   explicit `walk_predict` and `balance_predict` cases on the real
   `groot_g1_history` contract
 - `scripts/render_nvidia_benchmark_summary.py` turns the paired normalized JSON
-  artifacts into `artifacts/benchmarks/nvidia/SUMMARY.md`
+  artifacts into `artifacts/benchmarks/nvidia/SUMMARY.md` and also supports a
+  CI-generated static HTML report for the showcase / Pages bundle
 - `docs/benchmarks/README.md`, `docs/community/groot-wbc-integration.md`,
   `docs/community/blog-posts.md`, and `docs/ecosystem-strategy.md` now describe
   the artifact-backed comparison workflow instead of `TBD` placeholders
