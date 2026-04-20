@@ -275,6 +275,7 @@ class NvidiaBenchmarkTests(unittest.TestCase):
             output_dir = tmp_path / "normalized"
             env = os.environ.copy()
             env["DECOUPLED_WBC_MODEL_DIR"] = str(model_dir)
+            env["GEAR_SONIC_MODEL_DIR"] = str(tmp_path / "missing-gear-models")
 
             subprocess.run(
                 [
