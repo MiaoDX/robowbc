@@ -28,7 +28,7 @@
       },
       "warmup_policy": "reset_then_single_tick",
       "robowbc_command": "GEAR_SONIC_MODEL_DIR=models/gear-sonic cargo bench -p robowbc-ort --bench inference -- --output-format bencher 'policy/gear_sonic_velocity/cold_start_tick'",
-      "official_command": "scripts/bench_nvidia_official.sh --case gear_sonic_velocity/cold_start_tick",
+      "official_command": "python3 scripts/bench_nvidia_official.py --case gear_sonic_velocity/cold_start_tick",
       "interpretation": "If this row regresses, RoboWBC still pays a measurable planner cold-start tax before any DX win can matter."
     },
     {
@@ -43,7 +43,7 @@
       },
       "warmup_policy": "reset_then_one_warmup_tick_then_measure",
       "robowbc_command": "GEAR_SONIC_MODEL_DIR=models/gear-sonic cargo bench -p robowbc-ort --bench inference -- --output-format bencher 'policy/gear_sonic_velocity/warm_steady_state_tick'",
-      "official_command": "scripts/bench_nvidia_official.sh --case gear_sonic_velocity/warm_steady_state_tick",
+      "official_command": "python3 scripts/bench_nvidia_official.py --case gear_sonic_velocity/warm_steady_state_tick",
       "interpretation": "This is the steady-state path most likely to dominate the average control budget for locomotion."
     },
     {
@@ -58,7 +58,7 @@
       },
       "warmup_policy": "reset_then_prime_until_replan_boundary",
       "robowbc_command": "GEAR_SONIC_MODEL_DIR=models/gear-sonic cargo bench -p robowbc-ort --bench inference -- --output-format bencher 'policy/gear_sonic_velocity/replan_tick'",
-      "official_command": "scripts/bench_nvidia_official.sh --case gear_sonic_velocity/replan_tick",
+      "official_command": "python3 scripts/bench_nvidia_official.py --case gear_sonic_velocity/replan_tick",
       "interpretation": "If replan ticks miss parity, the planner path needs attention before stronger NVIDIA comparison claims."
     },
     {
@@ -73,7 +73,7 @@
       },
       "warmup_policy": "reset_then_single_tracking_tick",
       "robowbc_command": "GEAR_SONIC_MODEL_DIR=models/gear-sonic cargo bench -p robowbc-ort --bench inference -- --output-format bencher 'policy/gear_sonic_tracking/standing_placeholder_tick'",
-      "official_command": "scripts/bench_nvidia_official.sh --case gear_sonic_tracking/standing_placeholder_tick",
+      "official_command": "python3 scripts/bench_nvidia_official.py --case gear_sonic_tracking/standing_placeholder_tick",
       "interpretation": "A tracking-path miss suggests the motion-reference contract is the real optimization target, not the planner path."
     },
     {
@@ -88,7 +88,7 @@
       },
       "warmup_policy": "reset_then_single_tick_with_motion_command",
       "robowbc_command": "DECOUPLED_WBC_MODEL_DIR=models/decoupled-wbc cargo bench -p robowbc-ort --bench inference -- --output-format bencher 'policy/decoupled_wbc/walk_predict'",
-      "official_command": "scripts/bench_nvidia_official.sh --case decoupled_wbc/walk_predict",
+      "official_command": "python3 scripts/bench_nvidia_official.py --case decoupled_wbc/walk_predict",
       "interpretation": "This row captures the locomotion path people hit while actually moving, not the standing fallback."
     },
     {
@@ -103,7 +103,7 @@
       },
       "warmup_policy": "reset_then_single_tick_with_balance_command",
       "robowbc_command": "DECOUPLED_WBC_MODEL_DIR=models/decoupled-wbc cargo bench -p robowbc-ort --bench inference -- --output-format bencher 'policy/decoupled_wbc/balance_predict'",
-      "official_command": "scripts/bench_nvidia_official.sh --case decoupled_wbc/balance_predict",
+      "official_command": "python3 scripts/bench_nvidia_official.py --case decoupled_wbc/balance_predict",
       "interpretation": "This row makes the command-magnitude model switch explicit instead of hiding it behind one average number."
     },
     {
@@ -118,7 +118,7 @@
       },
       "warmup_policy": "default_cli_loop_200_ticks",
       "robowbc_command": "scripts/bench_robowbc_compare.sh --case gear_sonic/end_to_end_cli_loop",
-      "official_command": "scripts/bench_nvidia_official.sh --case gear_sonic/end_to_end_cli_loop",
+      "official_command": "python3 scripts/bench_nvidia_official.py --case gear_sonic/end_to_end_cli_loop",
       "interpretation": "This row answers the operator-facing question: can the whole deployment loop hold the target frequency, not just one inference call?"
     },
     {
@@ -133,7 +133,7 @@
       },
       "warmup_policy": "default_cli_loop_200_ticks",
       "robowbc_command": "scripts/bench_robowbc_compare.sh --case decoupled_wbc/end_to_end_cli_loop",
-      "official_command": "scripts/bench_nvidia_official.sh --case decoupled_wbc/end_to_end_cli_loop",
+      "official_command": "python3 scripts/bench_nvidia_official.py --case decoupled_wbc/end_to_end_cli_loop",
       "interpretation": "If the loop holds up here, the comparison story can move beyond one policy tick and toward deployable control loops."
     }
   ]

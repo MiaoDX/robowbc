@@ -12,18 +12,21 @@ The comparison substrate is now in place:
 
 - `artifacts/benchmarks/nvidia/cases.json` defines the canonical case ids,
   audience, fairness rules, and rerun commands
+- `third_party/GR00T-WholeBodyControl` now pins the official NVIDIA source as a
+  Git submodule on `main`, replacing the older temporary clone workflow while
+  still recording the exact upstream commit in artifacts
 - `scripts/normalize_nvidia_benchmarks.py` normalizes Criterion, CLI, and
   blocked official artifacts into one schema
 - `scripts/bench_robowbc_compare.sh` runs the robowbc-side cases and emits
   normalized artifacts
-- `scripts/bench_nvidia_official.sh` and the new
+- `scripts/bench_nvidia_official.py` plus the dedicated
   `scripts/bench_nvidia_decoupled_official.py` now execute the pinned upstream
   Decoupled WBC policy path directly and emit measured official artifacts for
   `walk_predict`, `balance_predict`, and `end_to_end_cli_loop` when the models
   are present
 - `scripts/bench_nvidia_gear_sonic_official.cpp` now provides a dedicated
   upstream C++ / ONNX Runtime harness for the official GEAR-Sonic velocity,
-  tracking, and end-to-end seams, and `scripts/bench_nvidia_official.sh`
+  tracking, and end-to-end seams, and `scripts/bench_nvidia_official.py`
   publishes normalized artifacts for those cases instead of blocked placeholders
 - `crates/robowbc-ort/benches/inference.rs` now splits Decoupled WBC into
   explicit `walk_predict` and `balance_predict` cases on the real
@@ -48,7 +51,7 @@ and verification results now line up.
      end-to-end seams through the dedicated upstream C++ harness
 2. **Publish measured artifacts**
    - Status: complete
-   - `scripts/bench_nvidia_official.sh --all` and
+   - `python3 scripts/bench_nvidia_official.py --all` and
      `scripts/bench_robowbc_compare.sh --all` were rerun from the current
      worktree
    - `artifacts/benchmarks/nvidia/SUMMARY.md` was regenerated from the paired
@@ -180,7 +183,7 @@ rg -n "TBD|NVIDIA C\\+\\+|comparison" docs/community docs/benchmarks docs/ecosys
 ```
 
 ### Step 2: Add official-runtime wrapper entrypoints with normalized output
-**Files:** new comparison helpers such as `scripts/bench_nvidia_official.sh`,
+**Files:** new comparison helpers such as `scripts/bench_nvidia_official.py`,
 `scripts/normalize_nvidia_benchmarks.py`, `artifacts/benchmarks/nvidia/README.md`,
 and optional pinned helper patches under `artifacts/benchmarks/nvidia/patches/`
 
@@ -222,7 +225,7 @@ substituting a different path.
 
 **Verification:**
 ```bash
-scripts/bench_nvidia_official.sh --list-cases
+python3 scripts/bench_nvidia_official.py --list-cases
 ```
 
 ### Step 3: Complete robowbc-side case coverage for fair parity
@@ -778,7 +781,7 @@ I cloned the repo because the README and community docs imply that a serious NVI
 The magical moment is not "cargo bench finishes." It is:
 
 ```bash
-scripts/bench_nvidia_official.sh --case gear_sonic_velocity/replan_tick
+python3 scripts/bench_nvidia_official.py --case gear_sonic_velocity/replan_tick
 ```
 
 and
@@ -816,7 +819,7 @@ Delivery vehicle:
 
 | Confusion | Why it happens today | Plan fix |
 |-----------|----------------------|----------|
-| "Where do I start the comparison?" | There is no comparison command or case registry | Add `scripts/bench_nvidia_official.sh --list-cases` and document one golden path |
+| "Where do I start the comparison?" | There is no comparison command or case registry | Add `python3 scripts/bench_nvidia_official.py --list-cases` and document one golden path |
 | "Is Decoupled already a fair parity benchmark?" | Bench docs show `policy/decoupled_wbc_predict`, but that is not the GR00T history path | Split walk and balance rows before publication |
 | "Can I trust the exact model revision?" | Download helpers point at upstream `main` | Pin upstream commit and checksum per artifact |
 | "Why does the CLI JSON not match the planned comparison schema?" | `RunReport` was designed as a run log, not a parity artifact | Normalize raw reports and then extend the native schema if needed |
@@ -879,16 +882,16 @@ Unavailable in this environment. The Agent tool is not exposed in this session.
 
 DX IMPLEMENTATION CHECKLIST
 ============================
-[ ] `scripts/bench_nvidia_official.sh --list-cases` exists and matches the case registry
-[ ] One documented command runs a single official case and emits a raw artifact
-[ ] One documented command runs the matching robowbc case and emits a raw artifact
-[ ] The normalizer emits the same required fields for both stacks
-[ ] Every blocked case emits problem + cause + fix + next-step guidance
-[ ] Download helpers pin upstream commit and checksum
-[ ] Docs have copy-paste comparison commands that actually work
-[ ] Every published row links back to an artifact path and command
-[ ] Favorable / neutral / unfavorable result hooks are documented
-[ ] Adding a new upstream row means adding one registry entry, not editing four docs by hand
+[x] `python3 scripts/bench_nvidia_official.py --list-cases` exists and matches the case registry
+[x] One documented command runs a single official case and emits a raw artifact
+[x] One documented command runs the matching robowbc case and emits a raw artifact
+[x] The normalizer emits the same required fields for both stacks
+[x] Every blocked case emits problem + cause + fix + next-step guidance
+[x] Official NVIDIA source is pinned as a git submodule and model downloads remain scripted
+[x] Docs have copy-paste comparison commands that actually work
+[x] Every published row links back to an artifact path and command
+[x] Favorable / neutral / unfavorable result hooks are documented
+[x] Adding a new upstream row means adding one registry entry, not editing four docs by hand
 
 #### TTHW Assessment
 

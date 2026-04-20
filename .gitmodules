@@ -1,0 +1,4 @@
+[submodule "third_party/GR00T-WholeBodyControl"]
+	path = third_party/GR00T-WholeBodyControl
+	url = https://github.com/NVlabs/GR00T-WholeBodyControl.git
+	branch = main

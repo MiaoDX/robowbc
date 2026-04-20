@@ -92,23 +92,37 @@ def load_robot_default_pose(path: Path) -> np.ndarray:
     return np.array(parsed["default_pose"], dtype=np.float32)
 
 
-def prepare_upstream_model_layout(repo_dir: Path, model_dir: Path) -> tuple[Path, Path]:
-    policy_dir = repo_dir / "decoupled_wbc" / "sim2mujoco" / "resources" / "robots" / "g1" / "policy"
-    policy_dir.mkdir(parents=True, exist_ok=True)
-    balance_src = model_dir / "GR00T-WholeBodyControl-Balance.onnx"
-    walk_src = model_dir / "GR00T-WholeBodyControl-Walk.onnx"
+def resolve_model_paths(model_dir: Path) -> tuple[Path, Path]:
+    balance_src = (model_dir / "GR00T-WholeBodyControl-Balance.onnx").resolve()
+    walk_src = (model_dir / "GR00T-WholeBodyControl-Walk.onnx").resolve()
     if not balance_src.is_file() or not walk_src.is_file():
-        raise FileNotFoundError(
-            f"expected balance and walk ONNX models under {model_dir}"
-        )
+        raise FileNotFoundError(f"expected balance and walk ONNX models under {model_dir}")
+    return balance_src, walk_src
 
-    balance_dst = policy_dir / balance_src.name
-    walk_dst = policy_dir / walk_src.name
-    for src, dst in ((balance_src, balance_dst), (walk_src, walk_dst)):
-        if dst.exists() or dst.is_symlink():
-            dst.unlink()
-        dst.symlink_to(src.resolve())
-    return balance_dst, walk_dst
+
+@contextlib.contextmanager
+def patched_absolute_model_loading(policy_cls: type[Any]):
+    original = getattr(policy_cls, "load_onnx_policy", None)
+    if original is None:
+        yield
+        return
+
+    def patched(self: Any, model_path: str):
+        resolved_path = Path(model_path)
+        if not resolved_path.is_file():
+            marker = "/resources/robots/g1/"
+            if marker in model_path:
+                suffix = model_path.rsplit(marker, 1)[-1]
+                suffix_path = Path(suffix)
+                if suffix_path.is_file():
+                    model_path = str(suffix_path)
+        return original(self, model_path)
+
+    setattr(policy_cls, "load_onnx_policy", patched)
+    try:
+        yield
+    finally:
+        setattr(policy_cls, "load_onnx_policy", original)
 
 
 def build_observation(default_pose: np.ndarray) -> dict[str, np.ndarray]:
@@ -194,10 +208,10 @@ def parse_command(case_id: str) -> np.ndarray:
 
 def load_policy(repo_dir: Path, model_dir: Path) -> tuple[Any, str]:
     torch_backend = install_torch_shim_if_needed()
-    prepare_upstream_model_layout(repo_dir, model_dir)
+    balance_model, walk_model = resolve_model_paths(model_dir)
 
     sys.path.insert(0, str(repo_dir))
-    from decoupled_wbc.control.policy.g1_gear_wbc_policy import G1GearWbcPolicy  # type: ignore
+    from decoupled_wbc.control.policy import g1_gear_wbc_policy as policy_module  # type: ignore
 
     robot_model = UnitreeG1RobotModelStub()
     config_path = (
@@ -209,8 +223,10 @@ def load_policy(repo_dir: Path, model_dir: Path) -> tuple[Any, str]:
         / "g1"
         / "g1_gear_wbc.yaml"
     )
-    model_path = "policy/GR00T-WholeBodyControl-Balance.onnx,policy/GR00T-WholeBodyControl-Walk.onnx"
-    policy = G1GearWbcPolicy(robot_model=robot_model, config=str(config_path), model_path=model_path)
+    model_path = f"{balance_model},{walk_model}"
+    policy_cls = policy_module.G1GearWbcPolicy
+    with patched_absolute_model_loading(policy_cls):
+        policy = policy_cls(robot_model=robot_model, config=str(config_path), model_path=model_path)
     return policy, torch_backend
 
 
