@@ -3,27 +3,65 @@
 # Plan: NVIDIA-First Official Comparison and Open WBC Benchmark Standard
 
 Branch: main
-Reviewed against current worktree (HEAD `0a8fd26`)
+Reviewed against current worktree (HEAD `fb6a29d`)
 Design doc: `~/.gstack/projects/MiaoDX-robowbc/mi-main-design-20260416-100806.md` (stale GEAR-Sonic integration context, no dedicated comparison design doc yet)
+
+## Current status
+
+The comparison substrate is now in place:
+
+- `artifacts/benchmarks/nvidia/cases.json` defines the canonical case ids,
+  audience, fairness rules, and rerun commands
+- `scripts/normalize_nvidia_benchmarks.py` normalizes Criterion, CLI, and
+  blocked official artifacts into one schema
+- `scripts/bench_robowbc_compare.sh` runs the robowbc-side cases and emits
+  normalized artifacts
+- `scripts/bench_nvidia_official.sh` and the new
+  `scripts/bench_nvidia_decoupled_official.py` now execute the pinned upstream
+  Decoupled WBC policy path directly and emit measured official artifacts for
+  `walk_predict`, `balance_predict`, and `end_to_end_cli_loop` when the models
+  are present
+- `crates/robowbc-ort/benches/inference.rs` now splits Decoupled WBC into
+  explicit `walk_predict` and `balance_predict` cases on the real
+  `groot_g1_history` contract
+- `docs/benchmarks/README.md`, `docs/community/groot-wbc-integration.md`,
+  `docs/community/blog-posts.md`, and `docs/ecosystem-strategy.md` now describe
+  the artifact-backed comparison workflow instead of `TBD` placeholders
+
+What remains is narrower than the original plan: finish the official GEAR-Sonic
+C++ baseline and then publish the measured artifact set.
+
+## Remaining execution todos
+
+Execute these in order:
+
+1. **Official GEAR-Sonic C++ baseline**
+   - Build a headless benchmark harness that executes the pinned upstream
+     GEAR-Sonic planner / tracking seams in C++
+   - Measure `cold_start_tick`, `warm_steady_state_tick`, `replan_tick`, and
+     `standing_placeholder_tick` with the same path semantics as the robowbc
+     cases
+   - Add a comparable end-to-end loop measurement for the official GEAR-Sonic
+     path and emit normalized artifacts instead of blocked rows
+2. **Publish measured artifacts**
+   - Re-run the comparison wrappers so `artifacts/benchmarks/nvidia/official/`
+     contains measured rows where possible
+   - Update the benchmark/docs surfaces from those artifacts, not by hand
 
 ## Problem
 
 RoboWBC now has honest, path-specific GEAR-Sonic benchmark semantics and a real
-Decoupled WBC wrapper, but the repo still does not answer the comparison
+Decoupled WBC comparison harness, but the repo still does not answer the full
+comparison
 question it keeps teeing up: how does robowbc compare against NVIDIA's official
 deployment code on the same models and the same paths?
 
-Today the repo only publishes robowbc-side numbers. The public comparison
-surfaces are still placeholders:
-- `docs/community/groot-wbc-integration.md` still marks "Benchmark vs NVIDIA C++
-  runtime measured" as unchecked
-- `docs/community/blog-posts.md` still has a `TBD` comparison table
-- `docs/ecosystem-strategy.md` still treats the NVIDIA comparison table as a
-  future action item
-
-That leaves the most important credibility question unresolved. "We load the
-same ONNX files" is not the same as "we compared the same execution path under
-the same conditions and published the result."
+Today the repo has the comparison schema, robowbc-side measurements, measured
+official Decoupled rows, and public docs wired up, but the official GEAR-Sonic
+rows are still blocked rather than measured. That leaves the most important
+credibility question only partially resolved:
+"We load the same ONNX files" is not the same as "we compared the same
+execution path under the same conditions and published the result."
 
 ## Goal
 
@@ -143,6 +181,12 @@ Required wrapper coverage:
    standing reference
 3. Decoupled WBC official walk path
 4. Decoupled WBC official stand/balance path
+
+Status after the first execution pass:
+1. wrapper entrypoints, artifact schema, and blocked-row behavior are complete
+2. the remaining gap is executable upstream harnesses, not more wrapper shape
+3. execute the official Decoupled Python harness first, then the official
+   GEAR-Sonic C++ harness
 
 Normalized artifact fields:
 - `case_id`
