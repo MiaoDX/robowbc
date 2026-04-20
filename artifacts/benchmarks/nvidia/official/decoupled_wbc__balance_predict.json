@@ -1,0 +1,29 @@
+{
+  "case_id": "decoupled_wbc/balance_predict",
+  "command_fixture": {
+    "data": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "kind": "velocity"
+  },
+  "description": "GR00T G1 history contract with a near-zero command that routes to the balance checkpoint.",
+  "host_fingerprint": "mi-ThinkStation-P360-Tower | Linux 6.8.0-107-generic | x86_64 | 12th Gen Intel(R) Core(TM) i9-12900K",
+  "hz": null,
+  "interpretation": "This row makes the command-magnitude model switch explicit instead of hiding it behind one average number.",
+  "notes": "Measured via upstream Decoupled WBC headless harness on the pinned source checkout.",
+  "p50_ns": 157401,
+  "p95_ns": 197567,
+  "p99_ns": 203212,
+  "provider": "cpu",
+  "raw_source": "/home/mi/ws/gogo/robowbc/artifacts/benchmarks/nvidia/official/raw/decoupled_wbc__balance_predict.json",
+  "robowbc_commit": "98009ff146793cdc9a356d1dda93f13b63da6a12",
+  "samples": 100,
+  "schema_version": 1,
+  "source_command": "python3 /home/mi/ws/gogo/robowbc/scripts/bench_nvidia_decoupled_official.py --case-id decoupled_wbc/balance_predict --repo-dir /tmp/GR00T-WholeBodyControl --model-dir /home/mi/ws/gogo/robowbc/models/decoupled-wbc --robot-config /home/mi/ws/gogo/robowbc/configs/robots/unitree_g1.toml --samples 100 --ticks 200 --control-frequency-hz 50",
+  "stack": "official_nvidia",
+  "status": "ok",
+  "upstream_commit": "bc38f6d0ce6cab4589e025037ad0bfbab7ba73d8",
+  "warmup_policy": "reset_then_single_tick_with_balance_command"
+}

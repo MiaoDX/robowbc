@@ -96,9 +96,10 @@ No code changes. No recompilation.
 ### Benchmarks
 
 Do not hand-maintain a latency table in this post draft. Lift the exact rows
-from `artifacts/benchmarks/nvidia/` once the normalized artifacts exist.
+from `artifacts/benchmarks/nvidia/SUMMARY.md` and the paired JSON artifacts.
 
-Until then, keep the story anchored to the canonical cases:
+Even with measured rows checked in, keep the story anchored to the canonical
+cases:
 
 | Case ID | Reader-facing meaning |
 |--------|------------------------|
@@ -108,8 +109,10 @@ Until then, keep the story anchored to the canonical cases:
 | `decoupled_wbc/balance_predict` | Near-zero command through the balance checkpoint |
 | `gear_sonic/end_to_end_cli_loop` | Whole deployment loop, not just one inference call |
 
-If an official row is blocked, say that explicitly in the article. A blocked row
-is more credible than an approximate comparison.
+The current committed CPU package measures official and RoboWBC rows for all
+canonical GEAR-Sonic and Decoupled cases. If a future rerun blocks an official
+row, say that explicitly in the article. A blocked row is more credible than an
+approximate comparison.
 
 ### Python API
 
@@ -212,11 +215,10 @@ cargo run --release --bin robowbc -- run --config configs/hover_h1.toml
 
 ### 性能基准
 
-不要在这份草稿里手工维护延迟数字表。等
-`artifacts/benchmarks/nvidia/` 中的标准化 artifact 生成后，再把对应 case
-的数字抬进文章。
+不要在这份草稿里手工维护延迟数字表。直接使用
+`artifacts/benchmarks/nvidia/SUMMARY.md` 和配套 JSON artifact 中的最新数字。
 
-在此之前，这一节只保留对比语义：
+即使现在已经有测量结果，这一节也仍然要围绕标准 case 语义来写：
 
 | Case ID | 面向读者的含义 |
 |------|----------------|
@@ -226,8 +228,9 @@ cargo run --release --bin robowbc -- run --config configs/hover_h1.toml
 | `decoupled_wbc/balance_predict` | 零速度附近命中 balance checkpoint |
 | `gear_sonic/end_to_end_cli_loop` | 真正的部署控制环，而不是单次推理 |
 
-如果 NVIDIA 官方路径当前被阻塞，就在文章里明确写出阻塞原因。比起模糊的近似对比，
-明确的 blocked row 更可信。
+当前提交的 CPU 对比包已经包含 GEAR-Sonic 和 Decoupled 的官方 / RoboWBC
+测量行。如果未来某次重跑里 NVIDIA 官方路径被阻塞，就在文章里明确写出阻塞
+原因。比起模糊的近似对比，明确的 blocked row 更可信。
 
 ### Python API
 
@@ -261,7 +264,7 @@ robowbc 目前处于早期开发阶段。当前优先级：
 
 When ready to publish (after GEAR-SONIC demo + benchmarks):
 
-- [ ] Replace the case-registry table above with the latest normalized artifact rows before publishing
+- [ ] Replace the case-registry table above with the latest rows from `artifacts/benchmarks/nvidia/SUMMARY.md` before publishing
 - [ ] Add screenshots or terminal output showing policy running
 - [ ] English: publish on Medium, then cross-post to HuggingFace blog
 - [ ] English: submit to Hacker News (`Show HN: robowbc — unified WBC inference runtime for humanoid robots`)

@@ -1,0 +1,29 @@
+{
+  "case_id": "decoupled_wbc/end_to_end_cli_loop",
+  "command_fixture": {
+    "data": [
+      0.25,
+      0.0,
+      0.05
+    ],
+    "kind": "velocity"
+  },
+  "description": "RoboWBC CLI loop running configs/decoupled_g1.toml through the synthetic transport with a JSON report.",
+  "host_fingerprint": "mi-ThinkStation-P360-Tower | Linux 6.8.0-107-generic | x86_64 | 12th Gen Intel(R) Core(TM) i9-12900K",
+  "hz": 49.211149,
+  "interpretation": "If the loop holds up here, the comparison story can move beyond one policy tick and toward deployable control loops.",
+  "notes": "Normalized from robowbc-cli JSON run report.",
+  "p50_ns": 290356,
+  "p95_ns": 368820,
+  "p99_ns": 601324,
+  "provider": "cpu",
+  "raw_source": "/tmp/tmp.WqFuIPL5XL/report.json",
+  "robowbc_commit": "98009ff146793cdc9a356d1dda93f13b63da6a12",
+  "samples": 200,
+  "schema_version": 1,
+  "source_command": "cargo run -p robowbc-cli --bin robowbc -- run --config /tmp/tmp.WqFuIPL5XL/decoupled_g1.toml",
+  "stack": "robowbc",
+  "status": "ok",
+  "upstream_commit": "bc38f6d0ce6cab4589e025037ad0bfbab7ba73d8",
+  "warmup_policy": "default_cli_loop_200_ticks"
+}

@@ -1,0 +1,25 @@
+{
+  "case_id": "gear_sonic_tracking/standing_placeholder_tick",
+  "command_fixture": {
+    "data": [],
+    "kind": "standing_placeholder_tracking"
+  },
+  "description": "Encoder plus decoder standing-placeholder tracking tick with planner loaded but idle.",
+  "host_fingerprint": "mi-ThinkStation-P360-Tower | Linux 6.8.0-107-generic | x86_64 | 12th Gen Intel(R) Core(TM) i9-12900K",
+  "hz": null,
+  "interpretation": "A tracking-path miss suggests the motion-reference contract is the real optimization target, not the planner path.",
+  "notes": "Measured via official GEAR-Sonic C++ ONNX Runtime harness on the pinned source checkout.",
+  "p50_ns": 4034888,
+  "p95_ns": 5789638,
+  "p99_ns": 6498572,
+  "provider": "cpu",
+  "raw_source": "/home/mi/ws/gogo/robowbc/artifacts/benchmarks/nvidia/official/raw/gear_sonic_tracking__standing_placeholder_tick.json",
+  "robowbc_commit": "98009ff146793cdc9a356d1dda93f13b63da6a12",
+  "samples": 100,
+  "schema_version": 1,
+  "source_command": "/home/mi/ws/gogo/robowbc/target/nvidia-bench/bench_nvidia_gear_sonic_official --case-id gear_sonic_tracking/standing_placeholder_tick --model-dir /home/mi/ws/gogo/robowbc/models/gear-sonic --samples 100 --ticks 200 --control-frequency-hz 50 --output /home/mi/ws/gogo/robowbc/artifacts/benchmarks/nvidia/official/raw/gear_sonic_tracking__standing_placeholder_tick.json",
+  "stack": "official_nvidia",
+  "status": "ok",
+  "upstream_commit": "bc38f6d0ce6cab4589e025037ad0bfbab7ba73d8",
+  "warmup_policy": "reset_then_single_tracking_tick"
+}

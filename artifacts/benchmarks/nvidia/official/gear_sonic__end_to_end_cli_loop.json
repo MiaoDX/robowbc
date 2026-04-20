@@ -1,0 +1,29 @@
+{
+  "case_id": "gear_sonic/end_to_end_cli_loop",
+  "command_fixture": {
+    "data": [
+      0.3,
+      0.0,
+      0.0
+    ],
+    "kind": "velocity"
+  },
+  "description": "RoboWBC CLI loop running configs/sonic_g1.toml through the synthetic transport with a JSON report.",
+  "host_fingerprint": "mi-ThinkStation-P360-Tower | Linux 6.8.0-107-generic | x86_64 | 12th Gen Intel(R) Core(TM) i9-12900K",
+  "hz": 31.3731,
+  "interpretation": "This row answers the operator-facing question: can the whole deployment loop hold the target frequency, not just one inference call?",
+  "notes": "Measured via official GEAR-Sonic C++ ONNX Runtime harness on the pinned source checkout.",
+  "p50_ns": 2868,
+  "p95_ns": 82992230,
+  "p99_ns": 87584917,
+  "provider": "cpu",
+  "raw_source": "/home/mi/ws/gogo/robowbc/artifacts/benchmarks/nvidia/official/raw/gear_sonic__end_to_end_cli_loop.json",
+  "robowbc_commit": "98009ff146793cdc9a356d1dda93f13b63da6a12",
+  "samples": 200,
+  "schema_version": 1,
+  "source_command": "/home/mi/ws/gogo/robowbc/target/nvidia-bench/bench_nvidia_gear_sonic_official --case-id gear_sonic/end_to_end_cli_loop --model-dir /home/mi/ws/gogo/robowbc/models/gear-sonic --samples 100 --ticks 200 --control-frequency-hz 50 --output /home/mi/ws/gogo/robowbc/artifacts/benchmarks/nvidia/official/raw/gear_sonic__end_to_end_cli_loop.json",
+  "stack": "official_nvidia",
+  "status": "ok",
+  "upstream_commit": "bc38f6d0ce6cab4589e025037ad0bfbab7ba73d8",
+  "warmup_policy": "default_cli_loop_200_ticks"
+}

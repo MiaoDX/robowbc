@@ -1,6 +1,6 @@
 # RoboWBC Ecosystem & Community Strategy
 
-_Last updated: April 10, 2026_
+_Last updated: April 20, 2026_
 _Distribution, community, and positioning. Technical roadmap is in `docs/roadmap-2026-q2.md`._
 
 ---
@@ -52,7 +52,7 @@ Robot hardware PD controllers                    "muscles"
 
 **⚡ Action items:**
 - [ ] Draft article outline after GEAR-SONIC demo works
-- [ ] Publish the artifact-backed NVIDIA comparison package from `artifacts/benchmarks/nvidia/`
+- [x] Publish the artifact-backed NVIDIA comparison package from `artifacts/benchmarks/nvidia/SUMMARY.md`
 - [ ] Publish on Medium + HuggingFace blog + submit to Hacker News
 - [ ] Cross-post to ROS Discourse and robotics subreddits
 
@@ -78,7 +78,7 @@ NVIDIA dominates WBC: GEAR-SONIC, Decoupled WBC, HOVER, WBC-AGILE, GR00T N1.x al
 
 - [ ] After GEAR-SONIC demo works, open a discussion in https://github.com/NVlabs/GR00T-WholeBodyControl
 - Title: `Rust-based unified WBC inference runtime — looking for feedback`
-- Show the matched-path comparison package, including blocked rows when the official seam is not yet automatable
+- Show the matched-path comparison package from `artifacts/benchmarks/nvidia/SUMMARY.md`; if a future rerun blocks a seam, keep that row blocked instead of approximating it
 - Goal: get noticed by NVIDIA's WBC team, not compete
 
 **2. Isaac-GR00T Issue Engagement**
