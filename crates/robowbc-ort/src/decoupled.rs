@@ -108,6 +108,11 @@ impl DecoupledHistoryRuntime {
             default_lower_body_pose,
         })
     }
+
+    fn reset(&mut self) {
+        self.obs_history.clear();
+        self.last_action.fill(0.0);
+    }
 }
 
 enum DecoupledRuntime {
@@ -352,6 +357,14 @@ impl robowbc_core::WbcPolicy for DecoupledWbcPolicy {
         self.control_frequency_hz
     }
 
+    fn reset(&self) {
+        if let Ok(mut runtime) = self.runtime.lock() {
+            if let DecoupledRuntime::GrootG1History(history) = &mut *runtime {
+                history.reset();
+            }
+        }
+    }
+
     fn supported_robots(&self) -> &[RobotConfig] {
         std::slice::from_ref(&self.robot)
     }
@@ -446,8 +459,20 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test_dynamic_identity.onnx")
     }
 
+    fn constant_walk_model_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test_constant_walk.onnx")
+    }
+
+    fn constant_balance_model_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test_constant_balance.onnx")
+    }
+
     fn has_dynamic_model() -> bool {
         dynamic_model_path().exists()
+    }
+
+    fn has_constant_history_models() -> bool {
+        constant_walk_model_path().exists() && constant_balance_model_path().exists()
     }
 
     fn test_ort_config(model_path: PathBuf) -> OrtConfig {
@@ -818,6 +843,63 @@ mod tests {
         assert!((single_obs[10] - 0.0).abs() < 1e-6);
         assert!((single_obs[11] - 0.0).abs() < 1e-6);
         assert!((single_obs[12] + 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn groot_history_routes_balance_and_walk_commands_to_distinct_models() {
+        if !has_constant_history_models() {
+            eprintln!("skipping: constant history models not found");
+            return;
+        }
+
+        let robot = g1_robot_config();
+        let policy = DecoupledWbcPolicy::new(DecoupledWbcConfig {
+            rl_model: test_ort_config(constant_walk_model_path()),
+            stand_model: Some(test_ort_config(constant_balance_model_path())),
+            robot: robot.clone(),
+            lower_body_joints: (0..15).collect(),
+            upper_body_joints: (15..robot.joint_count).collect(),
+            contract: DecoupledObservationContract::GrootG1History,
+            control_frequency_hz: 50,
+        })
+        .expect("policy should build");
+
+        let base_obs = Observation {
+            joint_positions: robot.default_pose.clone(),
+            joint_velocities: vec![0.0; robot.joint_count],
+            gravity_vector: [0.0, 0.0, -1.0],
+            angular_velocity: [0.0, 0.0, 0.0],
+            command: WbcCommand::Velocity(Twist {
+                linear: [0.0, 0.0, 0.0],
+                angular: [0.0, 0.0, 0.0],
+            }),
+            timestamp: Instant::now(),
+        };
+
+        let balance_targets = policy
+            .predict(&base_obs)
+            .expect("balance-model inference should succeed");
+        for &idx in &[0_usize, 7, 14] {
+            let expected = robot.default_pose[idx] - GROOT_G1_ACTION_SCALE;
+            assert!((balance_targets.positions[idx] - expected).abs() < 1e-6);
+        }
+
+        policy.reset();
+
+        let walk_obs = Observation {
+            command: WbcCommand::Velocity(Twist {
+                linear: [0.25, 0.0, 0.05],
+                angular: [0.0, 0.0, 0.0],
+            }),
+            ..base_obs
+        };
+        let walk_targets = policy
+            .predict(&walk_obs)
+            .expect("walk-model inference should succeed");
+        for &idx in &[0_usize, 7, 14] {
+            let expected = robot.default_pose[idx] + GROOT_G1_ACTION_SCALE;
+            assert!((walk_targets.positions[idx] - expected).abs() < 1e-6);
+        }
     }
 
     /// Integration test requiring the published GR00T `WholeBodyControl` ONNX checkpoints.

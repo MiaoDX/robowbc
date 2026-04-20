@@ -2,9 +2,12 @@
 set -euo pipefail
 
 DEST_DIR="${1:-models/gear-sonic}"
-BASE_URL="https://huggingface.co/nvidia/GEAR-SONIC/resolve/main"
+HF_REVISION="${GEAR_SONIC_HF_REVISION:-cc80d505b7e055fd6ae26426ae8bfa0a74c26011}"
+BASE_URL="https://huggingface.co/nvidia/GEAR-SONIC/resolve/${HF_REVISION}"
 
 mkdir -p "${DEST_DIR}"
+printf '%s\n' "${HF_REVISION}" > "${DEST_DIR}/REVISION"
+echo "[info] pinned Hugging Face revision: ${HF_REVISION}"
 
 models=(
   "model_encoder.onnx"

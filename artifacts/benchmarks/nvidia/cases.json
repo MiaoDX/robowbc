@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "audience": "Robotics infrastructure engineers deciding whether RoboWBC is credible enough to adopt for the next whole-body-control wrapper or deployment stack.",
+  "decision": "Adopt RoboWBC when it stays inside an acceptable matched-path latency band while materially reducing setup friction, config complexity, and model-switch cost.",
+  "thresholds": {
+    "favorable": "RoboWBC is at or near CPU parity on the matched path and still easier to integrate or switch across models.",
+    "neutral": "RoboWBC is slower on CPU but still comfortably inside the control budget and the DX or portability win is substantial.",
+    "unfavorable": "RoboWBC is materially slower on a critical matched path or cannot expose the same path semantics without extra architecture work."
+  },
+  "fairness_rules": [
+    "Run both stacks on the same host machine and record the host fingerprint beside every artifact.",
+    "Match the execution provider for the row being compared; do not compare CPU against TensorRT under one label.",
+    "Record the upstream NVIDIA commit, RoboWBC commit, and model revision beside every result.",
+    "Use the exact command fixture and warmup policy named by the case registry.",
+    "Publish one row per matched path; do not collapse cold, warm, replan, tracking, walk, and balance into one aggregate number.",
+    "Pair every latency row with an explicit user-facing interpretation about why the result matters."
+  ],
+  "cases": [
+    {
+      "case_id": "gear_sonic_velocity/cold_start_tick",
+      "family": "gear_sonic",
+      "kind": "microbenchmark",
+      "description": "First velocity tick after reset; forces a fresh planner path.",
+      "criterion_id": "policy/gear_sonic_velocity/cold_start_tick",
+      "command_fixture": {
+        "kind": "velocity",
+        "data": [0.3, 0.0, 0.0]
+      },
+      "warmup_policy": "reset_then_single_tick",
+      "robowbc_command": "GEAR_SONIC_MODEL_DIR=models/gear-sonic cargo bench -p robowbc-ort --bench inference -- --output-format bencher 'policy/gear_sonic_velocity/cold_start_tick'",
+      "official_command": "scripts/bench_nvidia_official.sh --case gear_sonic_velocity/cold_start_tick",
+      "interpretation": "If this row regresses, RoboWBC still pays a measurable planner cold-start tax before any DX win can matter."
+    },
+    {
+      "case_id": "gear_sonic_velocity/warm_steady_state_tick",
+      "family": "gear_sonic",
+      "kind": "microbenchmark",
+      "description": "Velocity interpolation tick after an initial plan; planner stays idle.",
+      "criterion_id": "policy/gear_sonic_velocity/warm_steady_state_tick",
+      "command_fixture": {
+        "kind": "velocity",
+        "data": [0.3, 0.0, 0.0]
+      },
+      "warmup_policy": "reset_then_one_warmup_tick_then_measure",
+      "robowbc_command": "GEAR_SONIC_MODEL_DIR=models/gear-sonic cargo bench -p robowbc-ort --bench inference -- --output-format bencher 'policy/gear_sonic_velocity/warm_steady_state_tick'",
+      "official_command": "scripts/bench_nvidia_official.sh --case gear_sonic_velocity/warm_steady_state_tick",
+      "interpretation": "This is the steady-state path most likely to dominate the average control budget for locomotion."
+    },
+    {
+      "case_id": "gear_sonic_velocity/replan_tick",
+      "family": "gear_sonic",
+      "kind": "microbenchmark",
+      "description": "Velocity tick that crosses the replan boundary and executes planner_sonic.onnx.",
+      "criterion_id": "policy/gear_sonic_velocity/replan_tick",
+      "command_fixture": {
+        "kind": "velocity",
+        "data": [0.3, 0.0, 0.0]
+      },
+      "warmup_policy": "reset_then_prime_until_replan_boundary",
+      "robowbc_command": "GEAR_SONIC_MODEL_DIR=models/gear-sonic cargo bench -p robowbc-ort --bench inference -- --output-format bencher 'policy/gear_sonic_velocity/replan_tick'",
+      "official_command": "scripts/bench_nvidia_official.sh --case gear_sonic_velocity/replan_tick",
+      "interpretation": "If replan ticks miss parity, the planner path needs attention before stronger NVIDIA comparison claims."
+    },
+    {
+      "case_id": "gear_sonic_tracking/standing_placeholder_tick",
+      "family": "gear_sonic",
+      "kind": "microbenchmark",
+      "description": "Encoder plus decoder standing-placeholder tracking tick with planner loaded but idle.",
+      "criterion_id": "policy/gear_sonic_tracking/standing_placeholder_tick",
+      "command_fixture": {
+        "kind": "standing_placeholder_tracking",
+        "data": []
+      },
+      "warmup_policy": "reset_then_single_tracking_tick",
+      "robowbc_command": "GEAR_SONIC_MODEL_DIR=models/gear-sonic cargo bench -p robowbc-ort --bench inference -- --output-format bencher 'policy/gear_sonic_tracking/standing_placeholder_tick'",
+      "official_command": "scripts/bench_nvidia_official.sh --case gear_sonic_tracking/standing_placeholder_tick",
+      "interpretation": "A tracking-path miss suggests the motion-reference contract is the real optimization target, not the planner path."
+    },
+    {
+      "case_id": "decoupled_wbc/walk_predict",
+      "family": "decoupled_wbc",
+      "kind": "microbenchmark",
+      "description": "GR00T G1 history contract with a movement command that routes to the walk checkpoint.",
+      "criterion_id": "policy/decoupled_wbc/walk_predict",
+      "command_fixture": {
+        "kind": "velocity",
+        "data": [0.25, 0.0, 0.05]
+      },
+      "warmup_policy": "reset_then_single_tick_with_motion_command",
+      "robowbc_command": "DECOUPLED_WBC_MODEL_DIR=models/decoupled-wbc cargo bench -p robowbc-ort --bench inference -- --output-format bencher 'policy/decoupled_wbc/walk_predict'",
+      "official_command": "scripts/bench_nvidia_official.sh --case decoupled_wbc/walk_predict",
+      "interpretation": "This row captures the locomotion path people hit while actually moving, not the standing fallback."
+    },
+    {
+      "case_id": "decoupled_wbc/balance_predict",
+      "family": "decoupled_wbc",
+      "kind": "microbenchmark",
+      "description": "GR00T G1 history contract with a near-zero command that routes to the balance checkpoint.",
+      "criterion_id": "policy/decoupled_wbc/balance_predict",
+      "command_fixture": {
+        "kind": "velocity",
+        "data": [0.0, 0.0, 0.0]
+      },
+      "warmup_policy": "reset_then_single_tick_with_balance_command",
+      "robowbc_command": "DECOUPLED_WBC_MODEL_DIR=models/decoupled-wbc cargo bench -p robowbc-ort --bench inference -- --output-format bencher 'policy/decoupled_wbc/balance_predict'",
+      "official_command": "scripts/bench_nvidia_official.sh --case decoupled_wbc/balance_predict",
+      "interpretation": "This row makes the command-magnitude model switch explicit instead of hiding it behind one average number."
+    },
+    {
+      "case_id": "gear_sonic/end_to_end_cli_loop",
+      "family": "gear_sonic",
+      "kind": "end_to_end",
+      "description": "RoboWBC CLI loop running configs/sonic_g1.toml through the synthetic transport with a JSON report.",
+      "config_path": "configs/sonic_g1.toml",
+      "command_fixture": {
+        "kind": "velocity",
+        "data": [0.3, 0.0, 0.0]
+      },
+      "warmup_policy": "default_cli_loop_200_ticks",
+      "robowbc_command": "scripts/bench_robowbc_compare.sh --case gear_sonic/end_to_end_cli_loop",
+      "official_command": "scripts/bench_nvidia_official.sh --case gear_sonic/end_to_end_cli_loop",
+      "interpretation": "This row answers the operator-facing question: can the whole deployment loop hold the target frequency, not just one inference call?"
+    },
+    {
+      "case_id": "decoupled_wbc/end_to_end_cli_loop",
+      "family": "decoupled_wbc",
+      "kind": "end_to_end",
+      "description": "RoboWBC CLI loop running configs/decoupled_g1.toml through the synthetic transport with a JSON report.",
+      "config_path": "configs/decoupled_g1.toml",
+      "command_fixture": {
+        "kind": "velocity",
+        "data": [0.25, 0.0, 0.05]
+      },
+      "warmup_policy": "default_cli_loop_200_ticks",
+      "robowbc_command": "scripts/bench_robowbc_compare.sh --case decoupled_wbc/end_to_end_cli_loop",
+      "official_command": "scripts/bench_nvidia_official.sh --case decoupled_wbc/end_to_end_cli_loop",
+      "interpretation": "If the loop holds up here, the comparison story can move beyond one policy tick and toward deployable control loops."
+    }
+  ]
+}
