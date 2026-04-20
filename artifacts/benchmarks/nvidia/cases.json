@@ -117,7 +117,7 @@
         "data": [0.3, 0.0, 0.0]
       },
       "warmup_policy": "default_cli_loop_200_ticks",
-      "robowbc_command": "scripts/bench_robowbc_compare.sh --case gear_sonic/end_to_end_cli_loop",
+      "robowbc_command": "python3 scripts/bench_robowbc_compare.py --case gear_sonic/end_to_end_cli_loop",
       "official_command": "python3 scripts/bench_nvidia_official.py --case gear_sonic/end_to_end_cli_loop",
       "interpretation": "This row answers the operator-facing question: can the whole deployment loop hold the target frequency, not just one inference call?"
     },
@@ -132,7 +132,7 @@
         "data": [0.25, 0.0, 0.05]
       },
       "warmup_policy": "default_cli_loop_200_ticks",
-      "robowbc_command": "scripts/bench_robowbc_compare.sh --case decoupled_wbc/end_to_end_cli_loop",
+      "robowbc_command": "python3 scripts/bench_robowbc_compare.py --case decoupled_wbc/end_to_end_cli_loop",
       "official_command": "python3 scripts/bench_nvidia_official.py --case decoupled_wbc/end_to_end_cli_loop",
       "interpretation": "If the loop holds up here, the comparison story can move beyond one policy tick and toward deployable control loops."
     }
