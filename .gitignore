@@ -2,6 +2,8 @@
 /target/
 /models/
 /vis/
+/artifacts/
+/.cache/
 *.onnx
 # Allow small test fixture models
 !crates/robowbc-ort/tests/fixtures/*.onnx
@@ -10,4 +12,7 @@
 __pycache__/
 *.pyc
 .env
-
+onnxruntime_profile__*.json
+observation_config.yaml
+sonic_release/
+uv.lock
