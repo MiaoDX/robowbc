@@ -18,6 +18,7 @@
 # Reference
 
 - [Architecture](architecture.md)
+- [Roboharness Integration](roboharness-integration.md)
 - [Benchmarks](benchmarks/README.md)
 
 ---
