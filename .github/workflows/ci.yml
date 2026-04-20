@@ -95,7 +95,7 @@ jobs:
           key: live-policy-models-${{ runner.os }}-v3
 
       - name: Install showcase and benchmark Python dependencies
-        run: pip install numpy joblib onnxruntime==1.24.4
+        run: pip install numpy joblib onnxruntime==1.24.4 pyyaml
 
       - name: Warm live policy checkpoint cache
         run: |
