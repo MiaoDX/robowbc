@@ -519,8 +519,8 @@ class NvidiaBenchmarkTests(unittest.TestCase):
             ):
                 subprocess.run(
                     [
-                        "bash",
-                        str(ROOT / "scripts/bench_robowbc_compare.sh"),
+                        "python3",
+                        str(ROOT / "scripts/bench_robowbc_compare.py"),
                         "--case",
                         case_id,
                         "--output-root",

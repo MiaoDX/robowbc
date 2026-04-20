@@ -17,7 +17,7 @@ The comparison substrate is now in place:
   still recording the exact upstream commit in artifacts
 - `scripts/normalize_nvidia_benchmarks.py` normalizes Criterion, CLI, and
   blocked official artifacts into one schema
-- `scripts/bench_robowbc_compare.sh` runs the robowbc-side cases and emits
+- `scripts/bench_robowbc_compare.py` runs the robowbc-side cases and emits
   normalized artifacts
 - `scripts/bench_nvidia_official.py` plus the dedicated
   `scripts/bench_nvidia_decoupled_official.py` now execute the pinned upstream
@@ -52,8 +52,8 @@ and verification results now line up.
      end-to-end seams through the dedicated upstream C++ harness
 2. **Publish measured artifacts**
    - Status: complete
-   - `python3 scripts/bench_nvidia_official.py --all` and
-     `scripts/bench_robowbc_compare.sh --all` were rerun from the current
+  - `python3 scripts/bench_nvidia_official.py --all` and
+     `python3 scripts/bench_robowbc_compare.py --all` were rerun from the current
      worktree
    - `artifacts/benchmarks/nvidia/SUMMARY.md` was regenerated from the paired
      normalized JSON artifacts

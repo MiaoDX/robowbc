@@ -177,7 +177,7 @@ Run the artifact-backed comparison suite:
 
 ```bash
 git submodule update --init --recursive third_party/GR00T-WholeBodyControl
-scripts/bench_robowbc_compare.sh --all
+python3 scripts/bench_robowbc_compare.py --all
 python3 scripts/bench_nvidia_official.py --all
 python3 scripts/render_nvidia_benchmark_summary.py --output artifacts/benchmarks/nvidia/SUMMARY.md
 ```

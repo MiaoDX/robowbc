@@ -154,7 +154,7 @@ jobs:
 
       - name: Generate NVIDIA comparison HTML
         run: |
-          bash scripts/bench_robowbc_compare.sh --all
+          python3 scripts/bench_robowbc_compare.py --all
           python scripts/bench_nvidia_official.py --all
           mkdir -p /tmp/policy-showcase/benchmarks
           cp -R artifacts/benchmarks/nvidia /tmp/policy-showcase/benchmarks/nvidia

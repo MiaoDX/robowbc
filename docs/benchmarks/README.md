@@ -10,7 +10,7 @@ The source of truth lives under:
 - `artifacts/benchmarks/nvidia/SUMMARY.md`
 - CI-generated HTML under the showcase / Pages bundle at
   `benchmarks/nvidia/index.html`
-- `scripts/bench_robowbc_compare.sh`
+- `scripts/bench_robowbc_compare.py`
 - `scripts/bench_nvidia_official.py`
 
 The current committed CPU package contains measured RoboWBC and official NVIDIA
@@ -75,7 +75,7 @@ beside the downloaded assets so later artifact runs can record provenance.
 ### 2. Emit RoboWBC artifacts
 
 ```bash
-scripts/bench_robowbc_compare.sh --all
+python3 scripts/bench_robowbc_compare.py --all
 ```
 
 This wrapper does two things:

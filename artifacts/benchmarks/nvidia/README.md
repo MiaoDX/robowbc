@@ -9,7 +9,7 @@ same schema and case registry.
 - `cases.json`: source of truth for case IDs, command fixtures, warmup rules,
   rerun commands, and interpretation hooks
 - `official/`: normalized artifacts emitted by `python3 scripts/bench_nvidia_official.py`
-- `robowbc/`: normalized artifacts emitted by `scripts/bench_robowbc_compare.sh`
+- `robowbc/`: normalized artifacts emitted by `python3 scripts/bench_robowbc_compare.py`
 - `SUMMARY.md`: generated Markdown matrix rendered from the committed artifacts
 - CI / Pages HTML: `benchmarks/nvidia/index.html` inside the generated showcase
   bundle, rendered from the same normalized artifacts
@@ -55,7 +55,7 @@ honest output for an unavailable path; it is not a placeholder.
    `bash scripts/download_gear_sonic_models.sh`
    `bash scripts/download_decoupled_wbc_models.sh`
 2. Emit the RoboWBC artifacts:
-   `scripts/bench_robowbc_compare.sh --all`
+   `python3 scripts/bench_robowbc_compare.py --all`
 3. Emit the official-wrapper artifacts:
    `python3 scripts/bench_nvidia_official.py --all`
 4. Render the Markdown summary:

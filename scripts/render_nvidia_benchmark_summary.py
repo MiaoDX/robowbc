@@ -215,7 +215,7 @@ def render_markdown(summary: dict[str, Any]) -> str:
             "## Rerun",
             "",
             "```bash",
-            "scripts/bench_robowbc_compare.sh --all",
+            "python3 scripts/bench_robowbc_compare.py --all",
             "python3 scripts/bench_nvidia_official.py --all",
             "python3 scripts/render_nvidia_benchmark_summary.py --output artifacts/benchmarks/nvidia/SUMMARY.md",
             "```",
@@ -259,7 +259,7 @@ def render_html(summary: dict[str, Any]) -> str:
 
     rerun_cmds = "\n".join(
         [
-            "scripts/bench_robowbc_compare.sh --all",
+            "python3 scripts/bench_robowbc_compare.py --all",
             "python3 scripts/bench_nvidia_official.py --all",
             "python3 scripts/render_nvidia_benchmark_summary.py --output artifacts/benchmarks/nvidia/SUMMARY.md --html-output /tmp/policy-showcase/benchmarks/nvidia/index.html",
         ]
