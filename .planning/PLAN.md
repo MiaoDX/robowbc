@@ -3,7 +3,7 @@
 # Plan: NVIDIA-First Official Comparison and Open WBC Benchmark Standard
 
 Branch: main
-Reviewed against current worktree (HEAD `98009ff`)
+Reviewed against the NVIDIA comparison package lineage rooted at HEAD `98009ff`
 Design doc: `~/.gstack/projects/MiaoDX-robowbc/mi-main-design-20260416-100806.md` (stale GEAR-Sonic integration context, no dedicated comparison design doc yet)
 
 ## Current status
