@@ -104,6 +104,44 @@ jobs:
           bash scripts/download_wbc_agile_models.sh models/wbc-agile
           bash scripts/download_bfm_zero_models.sh models/bfm_zero
 
+      - name: Ensure MuJoCo runtime is present for cached sim builds
+        run: |
+          set -euxo pipefail
+          mujoco_version="3.6.0"
+          case "$(uname -m)" in
+            x86_64|amd64) mujoco_arch="x86_64" ;;
+            aarch64|arm64) mujoco_arch="aarch64" ;;
+            *)
+              echo "unsupported runner architecture: $(uname -m)" >&2
+              exit 1
+              ;;
+          esac
+
+          mujoco_root="${MUJOCO_DOWNLOAD_DIR}/mujoco-${mujoco_version}"
+          mujoco_lib="${mujoco_root}/lib/libmujoco.so"
+          if [ -f "${mujoco_lib}" ]; then
+            exit 0
+          fi
+
+          archive="mujoco-${mujoco_version}-linux-${mujoco_arch}.tar.gz"
+          archive_path="/tmp/${archive}"
+          checksum_path="${archive_path}.sha256"
+          base_url="https://github.com/google-deepmind/mujoco/releases/download/${mujoco_version}"
+
+          mkdir -p "${MUJOCO_DOWNLOAD_DIR}"
+          curl -fsSL "${base_url}/${archive}" -o "${archive_path}"
+          curl -fsSL "${base_url}/${archive}.sha256" -o "${checksum_path}"
+
+          expected_sha="$(cut -d' ' -f1 < "${checksum_path}")"
+          actual_sha="$(sha256sum "${archive_path}" | cut -d' ' -f1)"
+          if [ "${expected_sha}" != "${actual_sha}" ]; then
+            echo "MuJoCo archive checksum mismatch" >&2
+            exit 1
+          fi
+
+          tar -xzf "${archive_path}" -C "${MUJOCO_DOWNLOAD_DIR}"
+          test -f "${mujoco_lib}"
+
       - name: Build robowbc with sim + vis showcase features
         run: cargo build --bin robowbc --features robowbc-cli/sim-auto-download,robowbc-cli/vis
 
