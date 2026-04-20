@@ -21,7 +21,7 @@
   "robowbc_commit": "cab3f22490f43c4a366a9f4cf769a250bcbe4063",
   "samples": 200,
   "schema_version": 1,
-  "source_command": "cargo run -p robowbc-cli --bin robowbc -- run --config /tmp/tmp.P7JhC26RUu/sonic_g1.toml",
+  "source_command": "scripts/bench_robowbc_compare.sh --case gear_sonic/end_to_end_cli_loop",
   "stack": "robowbc",
   "status": "ok",
   "upstream_commit": "cc80d505b7e055fd6ae26426ae8bfa0a74c26011",

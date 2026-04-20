@@ -178,7 +178,7 @@ run_cli_case() {
   cp "${ROOT_DIR}/${config_path}" "${temp_config}"
   printf '\n[report]\noutput_path = "%s"\nmax_frames = 200\n' "${raw_report}" >> "${temp_config}"
   local source_command
-  source_command="cargo run -p robowbc-cli --bin robowbc -- run --config ${temp_config}"
+  source_command="scripts/bench_robowbc_compare.sh --case ${case_id}"
   (
     cd "${ROOT_DIR}"
     cargo run -p robowbc-cli --bin robowbc -- run --config "${temp_config}"
