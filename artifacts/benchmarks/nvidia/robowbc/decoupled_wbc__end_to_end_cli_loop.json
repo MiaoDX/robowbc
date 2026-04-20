@@ -21,7 +21,7 @@
   "robowbc_commit": "cab3f22490f43c4a366a9f4cf769a250bcbe4063",
   "samples": 200,
   "schema_version": 1,
-  "source_command": "cargo run -p robowbc-cli --bin robowbc -- run --config /tmp/tmp.zQ7o08IoTW/decoupled_g1.toml",
+  "source_command": "scripts/bench_robowbc_compare.sh --case decoupled_wbc/end_to_end_cli_loop",
   "stack": "robowbc",
   "status": "ok",
   "upstream_commit": "bc38f6d0ce6cab4589e025037ad0bfbab7ba73d8",

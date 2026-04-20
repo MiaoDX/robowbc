@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import stat
 import shutil
 import subprocess
 import tempfile
@@ -139,6 +140,66 @@ class NvidiaBenchmarkTests(unittest.TestCase):
             model_dir / "GR00T-WholeBodyControl-Walk.onnx",
         )
         return model_dir
+
+    def make_gear_sonic_model_dir(self, root: Path) -> Path:
+        model_dir = root / "gear-sonic-models"
+        model_dir.mkdir(parents=True)
+        for filename in ("model_encoder.onnx", "model_decoder.onnx", "planner_sonic.onnx"):
+            (model_dir / filename).write_text("stub\n", encoding="utf-8")
+        return model_dir
+
+    def make_fake_cargo(self, root: Path) -> Path:
+        fake_bin = root / "fake-bin"
+        fake_bin.mkdir(parents=True)
+        cargo_path = fake_bin / "cargo"
+        cargo_path.write_text(
+            textwrap.dedent(
+                """
+                #!/usr/bin/env python3
+                import json
+                import pathlib
+                import re
+                import sys
+
+
+                def main() -> int:
+                    args = sys.argv[1:]
+                    if not args or args[0] != "run" or "--config" not in args:
+                        raise SystemExit(f"unexpected cargo invocation: {args!r}")
+
+                    config_path = pathlib.Path(args[args.index("--config") + 1])
+                    config_text = config_path.read_text(encoding="utf-8")
+                    match = re.search(r'^output_path\\s*=\\s*"([^"]+)"\\s*$', config_text, re.MULTILINE)
+                    if match is None:
+                        raise SystemExit("report output_path missing from generated config")
+
+                    report_path = pathlib.Path(match.group(1))
+                    report_path.parent.mkdir(parents=True, exist_ok=True)
+                    report_path.write_text(
+                        json.dumps(
+                            {
+                                "metrics": {"achieved_frequency_hz": 41.25},
+                                "frames": [
+                                    {"inference_latency_ms": 1.2},
+                                    {"inference_latency_ms": 1.4},
+                                    {"inference_latency_ms": 1.6},
+                                ],
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    return 0
+
+
+                if __name__ == "__main__":
+                    raise SystemExit(main())
+                """
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        cargo_path.chmod(cargo_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        return fake_bin
 
     def test_registry_validates_and_contains_expected_cases(self) -> None:
         registry = NORMALIZER.load_registry(REGISTRY_PATH)
@@ -370,6 +431,44 @@ class NvidiaBenchmarkTests(unittest.TestCase):
                 / "policy"
             )
             self.assertFalse(policy_dir.exists(), msg="official harness should not mutate the repo")
+
+    def test_robowbc_cli_wrapper_records_stable_case_command(self) -> None:
+        registry = NORMALIZER.load_registry(REGISTRY_PATH)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            fake_bin = self.make_fake_cargo(tmp_path)
+            gear_sonic_model_dir = self.make_gear_sonic_model_dir(tmp_path)
+            decoupled_model_dir = self.make_decoupled_model_dir(tmp_path)
+            output_dir = tmp_path / "robowbc-artifacts"
+            env = os.environ.copy()
+            env["PATH"] = str(fake_bin) + os.pathsep + env["PATH"]
+            env["GEAR_SONIC_MODEL_DIR"] = str(gear_sonic_model_dir)
+            env["DECOUPLED_WBC_MODEL_DIR"] = str(decoupled_model_dir)
+
+            for case_id in (
+                "gear_sonic/end_to_end_cli_loop",
+                "decoupled_wbc/end_to_end_cli_loop",
+            ):
+                subprocess.run(
+                    [
+                        "bash",
+                        str(ROOT / "scripts/bench_robowbc_compare.sh"),
+                        "--case",
+                        case_id,
+                        "--output-root",
+                        str(output_dir),
+                    ],
+                    check=True,
+                    cwd=ROOT,
+                    env=env,
+                )
+
+                case = NORMALIZER.registry_case(registry, case_id)
+                artifact_path = output_dir / f"{case_id.replace('/', '__')}.json"
+                artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+                self.assertEqual(artifact["status"], "ok")
+                self.assertEqual(artifact["source_command"], case["robowbc_command"])
+                self.assertAlmostEqual(artifact["hz"], 41.25)
 
 
 if __name__ == "__main__":
