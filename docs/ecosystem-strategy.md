@@ -52,7 +52,7 @@ Robot hardware PD controllers                    "muscles"
 
 **⚡ Action items:**
 - [ ] Draft article outline after GEAR-SONIC demo works
-- [ ] Include benchmark: robowbc (Rust) vs NVIDIA C++ — latency comparison table
+- [ ] Publish the artifact-backed NVIDIA comparison package from `artifacts/benchmarks/nvidia/`
 - [ ] Publish on Medium + HuggingFace blog + submit to Hacker News
 - [ ] Cross-post to ROS Discourse and robotics subreddits
 
@@ -78,7 +78,7 @@ NVIDIA dominates WBC: GEAR-SONIC, Decoupled WBC, HOVER, WBC-AGILE, GR00T N1.x al
 
 - [ ] After GEAR-SONIC demo works, open a discussion in https://github.com/NVlabs/GR00T-WholeBodyControl
 - Title: `Rust-based unified WBC inference runtime — looking for feedback`
-- Show benchmark comparison, link to robowbc
+- Show the matched-path comparison package, including blocked rows when the official seam is not yet automatable
 - Goal: get noticed by NVIDIA's WBC team, not compete
 
 **2. Isaac-GR00T Issue Engagement**

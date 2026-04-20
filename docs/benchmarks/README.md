@@ -1,84 +1,117 @@
 # Performance Benchmarks
 
-Reproducible benchmarks for RoboWBC inference latency and control-loop performance.
+RoboWBC now treats the NVIDIA comparison as a reproducible artifact pipeline,
+not a hand-maintained latency table.
 
-## Running Benchmarks
+The source of truth lives under:
+
+- `artifacts/benchmarks/nvidia/cases.json`
+- `artifacts/benchmarks/nvidia/README.md`
+- `scripts/bench_robowbc_compare.sh`
+- `scripts/bench_nvidia_official.sh`
+
+## Audience and decision
+
+This comparison is for robotics infrastructure engineers deciding whether
+RoboWBC is credible enough to adopt for the next whole-body-control wrapper or
+deployment stack.
+
+The decision is not "is Rust faster than C++?" The decision is:
+
+1. Does RoboWBC stay inside an acceptable matched-path latency band?
+2. If it is slower, is it still inside the control budget while being easier to
+   integrate, configure, and switch across policies?
+3. If it is slower on a critical path, what architecture or provider work does
+   that force next?
+
+## Canonical comparison cases
+
+| Case ID | What is measured | Why it matters |
+|---------|------------------|----------------|
+| `gear_sonic_velocity/cold_start_tick` | First velocity tick after reset | Exposes planner cold-start cost |
+| `gear_sonic_velocity/warm_steady_state_tick` | Velocity interpolation tick with planner idle | Captures steady-state locomotion path |
+| `gear_sonic_velocity/replan_tick` | Velocity tick that executes `planner_sonic.onnx` | Measures the expensive replanning boundary |
+| `gear_sonic_tracking/standing_placeholder_tick` | Encoder plus decoder standing-placeholder path | Separates tracking cost from planner cost |
+| `decoupled_wbc/walk_predict` | GR00T G1 history contract with motion command | Makes the walk checkpoint explicit |
+| `decoupled_wbc/balance_predict` | GR00T G1 history contract with near-zero command | Makes the balance checkpoint explicit |
+| `gear_sonic/end_to_end_cli_loop` | Full RoboWBC CLI loop for `configs/sonic_g1.toml` | Answers the deployable control-loop question |
+| `decoupled_wbc/end_to_end_cli_loop` | Full RoboWBC CLI loop for `configs/decoupled_g1.toml` | Measures real loop behavior, not one policy tick |
+
+## Fairness rules
+
+1. Same host machine, host fingerprint, and provider per row.
+2. Same upstream commit, model revision, and RoboWBC commit recorded beside the artifact.
+3. Same command fixture and warmup policy as defined in `cases.json`.
+4. One row per matched path; no aggregate "predict" number that hides warm,
+   replan, tracking, walk, or balance semantics.
+5. Every latency row must carry a short interpretation about why a developer
+   should care.
+
+## Running the comparison
+
+### 1. Download the pinned model revisions
 
 ```bash
-# All benchmarks
-cargo bench
-
-# Inference-only (OrtBackend + policy predict)
-cargo bench -p robowbc-ort
-
-# Control loop (transport I/O + tick overhead)
-cargo bench -p robowbc-comm
+bash scripts/download_gear_sonic_models.sh
+bash scripts/download_decoupled_wbc_models.sh
 ```
 
-## What Is Measured
+These helpers now pin the default upstream revisions and write a `REVISION`
+file beside the downloaded assets so later artifact runs can record provenance.
 
-### Inference Latency (`robowbc-ort`)
+### 2. Emit RoboWBC artifacts
 
-| Benchmark | Description |
-|-----------|-------------|
-| `ort/identity_1x4` | Baseline ONNX Runtime overhead — identity model, 4 elements |
-| `ort/relu_1x8` | Minimal compute — ReLU activation, 8 elements |
-| `ort/dynamic_identity/{N}` | Tensor size scaling — identity model at 4, 29, 64, 256 elements |
-| `policy/gear_sonic_velocity/cold_start_tick` | First velocity tick after `policy.reset()`, forcing a planner replan from cold state |
-| `policy/gear_sonic_velocity/warm_steady_state_tick` | Velocity interpolation tick after a recent plan, with `planner_sonic.onnx` idle |
-| `policy/gear_sonic_velocity/replan_tick` | Velocity tick that crosses the replan boundary and executes `planner_sonic.onnx` |
-| `policy/gear_sonic_tracking/standing_placeholder_tick` | Encoder+decoder standing-placeholder tracking tick; planner stays loaded but idle |
-| `policy/decoupled_wbc_predict` | Decoupled WBC: RL lower-body + analytical upper-body |
-
-### Control Loop Latency (`robowbc-comm`)
-
-| Benchmark | Description |
-|-----------|-------------|
-| `comm/control_tick/joints/{N}` | Single tick: transport read → policy → transport write |
-| `comm/end_to_end/29_joints` | Full pipeline with 29-DOF robot (Unitree G1 scale) |
-
-## Interpreting Results
-
-Criterion reports the **median** (P50) with 95% confidence intervals. For tail
-latency analysis (P99, P999), inspect the raw JSON output:
-
-```
-target/criterion/<benchmark_name>/new/raw.csv
+```bash
+scripts/bench_robowbc_compare.sh --all
 ```
 
-## Current Published CPU Baseline
+This wrapper does two things:
 
-Measured on an Intel Core i9-14900K, ONNX Runtime CPU EP, with the public
-GEAR-SONIC checkpoints loaded.
+- runs the exact Criterion microbench or CLI loop for the named case
+- normalizes the result into the shared artifact schema
 
-- The checked-in end-to-end CLI baseline is `32.3 Hz` from
-  `cargo run -- run --config configs/sonic_g1.toml`.
-- Treat that as the honest planner-path CPU baseline, not proof that the CPU
-  path already meets the 50 Hz target.
-- All three ONNX models are loaded for the policy, but the execution path still
-  depends on the command:
-  - velocity warm ticks interpolate without calling `planner_sonic.onnx`
-  - velocity replan ticks execute `planner_sonic.onnx`
-  - standing-placeholder tracking ticks execute encoder + decoder only
-- The next performance milestone is CUDA/TensorRT acceleration, plus a clear
-  definition of whether "50 Hz" means end-to-end achieved rate, replan latency,
-  or dropped-frame budget.
+If the required models are missing, the wrapper emits a blocked artifact rather
+than pretending a comparison happened.
 
-### How to Reproduce
+### 3. Emit official-wrapper artifacts
 
-1. **Inference latency**: `GEAR_SONIC_MODEL_DIR=models/gear-sonic cargo bench -p robowbc-ort -- gear_sonic`
-2. **Memory**: `GEAR_SONIC_MODEL_DIR=models/gear-sonic /usr/bin/time -v cargo bench -p robowbc-ort -- gear_sonic`
-3. **Control loop frequency**: `cargo run -- run --config configs/sonic_g1.toml`
-4. **GPU utilization**: `nvidia-smi dmon -s u -d 1` while benchmark runs (CUDA EP only).
+```bash
+scripts/bench_nvidia_official.sh --all
+```
 
-## Test Models
+The official wrapper is intentionally conservative. If the pinned upstream stack
+does not expose a fair, non-interactive benchmark seam for a case in the
+current environment, it emits a blocked artifact with the exact blocker.
 
-The GEAR-Sonic benchmark group now splits the real execution modes instead of
-publishing one ambiguous `predict` number. Other benchmarks still use minimal
-test fixtures (identity, ReLU) to measure framework overhead.
+That is the honest output. It is not a placeholder.
 
-## Hardware Requirements
+## Artifact layout
 
-- **CPU benchmarks**: Any x86-64 or aarch64 machine.
-- **CUDA benchmarks**: Requires `ort` built with CUDA EP and a compatible NVIDIA GPU.
-- **TensorRT benchmarks**: Requires TensorRT libraries matching the `ort` version.
+- `artifacts/benchmarks/nvidia/robowbc/*.json`
+- `artifacts/benchmarks/nvidia/official/*.json`
+
+Every normalized artifact includes:
+
+- `case_id`
+- `stack`
+- `upstream_commit`
+- `robowbc_commit`
+- `provider`
+- `host_fingerprint`
+- `command_fixture`
+- `warmup_policy`
+- `samples`
+- `p50_ns`
+- `p95_ns`
+- `p99_ns`
+- `hz`
+- `notes`
+
+## Current publication rule
+
+Do not publish a "RoboWBC vs NVIDIA" claim by hand from terminal output.
+Publish only what exists as a normalized artifact under
+`artifacts/benchmarks/nvidia/`.
+
+If a row is blocked, say so explicitly. If a row is measured, link the row back
+to the artifact path and rerun command from `cases.json`.

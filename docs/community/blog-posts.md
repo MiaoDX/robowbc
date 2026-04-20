@@ -95,14 +95,21 @@ No code changes. No recompilation.
 
 ### Benchmarks
 
-[TBD — to be filled in after GEAR-SONIC real model inference is confirmed. Include:
-inference latency (μs), control loop jitter, comparison with reference C++ runtime.]
+Do not hand-maintain a latency table in this post draft. Lift the exact rows
+from `artifacts/benchmarks/nvidia/` once the normalized artifacts exist.
 
-| Metric | NVIDIA C++ | robowbc (Rust) |
-|--------|-----------|----------------|
-| GEAR-SONIC inference (p50) | TBD | TBD |
-| GEAR-SONIC inference (p99) | TBD | TBD |
-| Control loop @ 50 Hz jitter | TBD | TBD |
+Until then, keep the story anchored to the canonical cases:
+
+| Case ID | Reader-facing meaning |
+|--------|------------------------|
+| `gear_sonic_velocity/replan_tick` | Planner-heavy path for locomotion |
+| `gear_sonic_tracking/standing_placeholder_tick` | Encoder+decoder tracking path |
+| `decoupled_wbc/walk_predict` | Movement command through the walk checkpoint |
+| `decoupled_wbc/balance_predict` | Near-zero command through the balance checkpoint |
+| `gear_sonic/end_to_end_cli_loop` | Whole deployment loop, not just one inference call |
+
+If an official row is blocked, say that explicitly in the article. A blocked row
+is more credible than an approximate comparison.
 
 ### Python API
 
@@ -205,14 +212,22 @@ cargo run --release --bin robowbc -- run --config configs/hover_h1.toml
 
 ### 性能基准
 
-[待填充——在 GEAR-SONIC 真实模型推理验证后补充。包含：推理延迟（μs）、控制循环抖动、
-与参考 C++ 运行时的对比。]
+不要在这份草稿里手工维护延迟数字表。等
+`artifacts/benchmarks/nvidia/` 中的标准化 artifact 生成后，再把对应 case
+的数字抬进文章。
 
-| 指标 | NVIDIA C++ | robowbc（Rust） |
-|------|-----------|-----------------|
-| GEAR-SONIC 推理（p50） | 待测 | 待测 |
-| GEAR-SONIC 推理（p99） | 待测 | 待测 |
-| 50 Hz 控制循环抖动 | 待测 | 待测 |
+在此之前，这一节只保留对比语义：
+
+| Case ID | 面向读者的含义 |
+|------|----------------|
+| `gear_sonic_velocity/replan_tick` | 规划器最重的 locomotion 路径 |
+| `gear_sonic_tracking/standing_placeholder_tick` | 编码器+解码器跟踪路径 |
+| `decoupled_wbc/walk_predict` | 行走指令命中 walk checkpoint |
+| `decoupled_wbc/balance_predict` | 零速度附近命中 balance checkpoint |
+| `gear_sonic/end_to_end_cli_loop` | 真正的部署控制环，而不是单次推理 |
+
+如果 NVIDIA 官方路径当前被阻塞，就在文章里明确写出阻塞原因。比起模糊的近似对比，
+明确的 blocked row 更可信。
 
 ### Python API
 
@@ -246,7 +261,7 @@ robowbc 目前处于早期开发阶段。当前优先级：
 
 When ready to publish (after GEAR-SONIC demo + benchmarks):
 
-- [ ] Fill in all benchmark tables with real numbers
+- [ ] Replace the case-registry table above with the latest normalized artifact rows before publishing
 - [ ] Add screenshots or terminal output showing policy running
 - [ ] English: publish on Medium, then cross-post to HuggingFace blog
 - [ ] English: submit to Hacker News (`Show HN: robowbc — unified WBC inference runtime for humanoid robots`)
