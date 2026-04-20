@@ -1260,6 +1260,7 @@ standing_placeholder_tracking = true
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn loop_runs_with_decoupled_wbc() {
         // Verify that changing policy.name to "decoupled_wbc" in the config
         // routes through a completely different WbcPolicy implementation.

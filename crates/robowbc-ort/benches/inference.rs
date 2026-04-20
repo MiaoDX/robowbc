@@ -232,7 +232,7 @@ fn bench_gear_sonic_modes(c: &mut Criterion) {
             || {
                 policy.reset().expect("reset should succeed");
             },
-            |_| {
+            |()| {
                 policy
                     .predict(&velocity_obs)
                     .expect("cold-start planner tick should succeed");
@@ -248,7 +248,7 @@ fn bench_gear_sonic_modes(c: &mut Criterion) {
                     .predict(&velocity_obs)
                     .expect("warmup planner tick should succeed");
             },
-            |_| {
+            |()| {
                 policy
                     .predict(&velocity_obs)
                     .expect("warm steady-state tick should succeed");
@@ -266,7 +266,7 @@ fn bench_gear_sonic_modes(c: &mut Criterion) {
                         .expect("preparing replan tick should succeed");
                 }
             },
-            |_| {
+            |()| {
                 policy
                     .predict(&velocity_obs)
                     .expect("replan tick should succeed");
@@ -283,7 +283,7 @@ fn bench_gear_sonic_modes(c: &mut Criterion) {
                 || {
                     policy.reset().expect("reset should succeed");
                 },
-                |_| {
+                |()| {
                     policy
                         .predict(&tracking_obs)
                         .expect("standing-placeholder tracking tick should succeed");
@@ -369,7 +369,7 @@ fn bench_decoupled_wbc_modes(c: &mut Criterion) {
             || {
                 policy.reset();
             },
-            |_| {
+            |()| {
                 policy
                     .predict(&walk_obs)
                     .expect("walk prediction should succeed");
@@ -382,7 +382,7 @@ fn bench_decoupled_wbc_modes(c: &mut Criterion) {
             || {
                 policy.reset();
             },
-            |_| {
+            |()| {
                 policy
                     .predict(&balance_obs)
                     .expect("balance prediction should succeed");
