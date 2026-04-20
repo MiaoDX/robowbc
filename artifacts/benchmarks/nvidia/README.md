@@ -10,6 +10,7 @@ same schema and case registry.
   rerun commands, and interpretation hooks
 - `official/`: normalized artifacts emitted by `scripts/bench_nvidia_official.sh`
 - `robowbc/`: normalized artifacts emitted by `scripts/bench_robowbc_compare.sh`
+- `SUMMARY.md`: generated Markdown matrix rendered from the committed artifacts
 - `patches/`: notes for any helper patches or wrapper glue required to expose a
   fair benchmark seam in the upstream stack
 
@@ -37,12 +38,13 @@ artifact with the exact blocker rather than silently substituting a nearby path.
 
 ## Current status
 
-The comparison registry and wrappers are checked in. Official NVIDIA rows may
-still emit blocked artifacts when the pinned upstream stack does not expose a
-clean non-interactive benchmark seam in the current environment.
+The current committed CPU artifact set contains measured RoboWBC and official
+NVIDIA rows for all eight canonical GEAR-Sonic and Decoupled cases.
 
-That is intentional. A blocked artifact is the honest output for an unavailable
-path; it is not a placeholder.
+If a future rerun loses prerequisites or the pinned upstream stack stops
+exposing a clean non-interactive seam, the wrapper must fall back to a blocked
+artifact with the exact blocker. That is intentional. A blocked artifact is the
+honest output for an unavailable path; it is not a placeholder.
 
 ## How to rerun
 
@@ -53,7 +55,10 @@ path; it is not a placeholder.
    `scripts/bench_robowbc_compare.sh --all`
 3. Emit the official-wrapper artifacts:
    `scripts/bench_nvidia_official.sh --all`
-4. Inspect the results under `artifacts/benchmarks/nvidia/robowbc/` and
+4. Render the Markdown summary:
+   `python3 scripts/render_nvidia_benchmark_summary.py --output artifacts/benchmarks/nvidia/SUMMARY.md`
+5. Inspect `artifacts/benchmarks/nvidia/SUMMARY.md` plus the paired results
+   under `artifacts/benchmarks/nvidia/robowbc/` and
    `artifacts/benchmarks/nvidia/official/`
 
 ## Decision table

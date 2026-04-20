@@ -7,8 +7,13 @@ The source of truth lives under:
 
 - `artifacts/benchmarks/nvidia/cases.json`
 - `artifacts/benchmarks/nvidia/README.md`
+- `artifacts/benchmarks/nvidia/SUMMARY.md`
 - `scripts/bench_robowbc_compare.sh`
 - `scripts/bench_nvidia_official.sh`
+
+The current committed CPU package contains measured RoboWBC and official NVIDIA
+rows for all eight canonical cases. Use `artifacts/benchmarks/nvidia/SUMMARY.md`
+as the human-readable matrix and the paired JSON files as the provenance layer.
 
 ## Audience and decision
 
@@ -79,16 +84,24 @@ than pretending a comparison happened.
 scripts/bench_nvidia_official.sh --all
 ```
 
-The official wrapper is intentionally conservative. If the pinned upstream stack
-does not expose a fair, non-interactive benchmark seam for a case in the
-current environment, it emits a blocked artifact with the exact blocker.
+The current committed CPU package measures all eight canonical official rows.
+The wrapper remains intentionally conservative: if a future environment does not
+have the required models, ONNX Runtime bundle, or a fair non-interactive seam,
+it emits a blocked artifact with the exact blocker.
 
 That is the honest output. It is not a placeholder.
+
+### 4. Render the summary
+
+```bash
+python3 scripts/render_nvidia_benchmark_summary.py --output artifacts/benchmarks/nvidia/SUMMARY.md
+```
 
 ## Artifact layout
 
 - `artifacts/benchmarks/nvidia/robowbc/*.json`
 - `artifacts/benchmarks/nvidia/official/*.json`
+- `artifacts/benchmarks/nvidia/SUMMARY.md`
 
 Every normalized artifact includes:
 

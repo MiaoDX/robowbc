@@ -3,7 +3,7 @@
 # Plan: NVIDIA-First Official Comparison and Open WBC Benchmark Standard
 
 Branch: main
-Reviewed against current worktree (HEAD `fb6a29d`)
+Reviewed against current worktree (HEAD `98009ff`)
 Design doc: `~/.gstack/projects/MiaoDX-robowbc/mi-main-design-20260416-100806.md` (stale GEAR-Sonic integration context, no dedicated comparison design doc yet)
 
 ## Current status
@@ -21,47 +21,59 @@ The comparison substrate is now in place:
   Decoupled WBC policy path directly and emit measured official artifacts for
   `walk_predict`, `balance_predict`, and `end_to_end_cli_loop` when the models
   are present
+- `scripts/bench_nvidia_gear_sonic_official.cpp` now provides a dedicated
+  upstream C++ / ONNX Runtime harness for the official GEAR-Sonic velocity,
+  tracking, and end-to-end seams, and `scripts/bench_nvidia_official.sh`
+  publishes normalized artifacts for those cases instead of blocked placeholders
 - `crates/robowbc-ort/benches/inference.rs` now splits Decoupled WBC into
   explicit `walk_predict` and `balance_predict` cases on the real
   `groot_g1_history` contract
+- `scripts/render_nvidia_benchmark_summary.py` turns the paired normalized JSON
+  artifacts into `artifacts/benchmarks/nvidia/SUMMARY.md`
 - `docs/benchmarks/README.md`, `docs/community/groot-wbc-integration.md`,
   `docs/community/blog-posts.md`, and `docs/ecosystem-strategy.md` now describe
   the artifact-backed comparison workflow instead of `TBD` placeholders
+- The committed benchmark package has now been rerun from the current worktree
+  and `artifacts/benchmarks/nvidia/SUMMARY.md` reflects the current measured CPU
+  matrix for both RoboWBC and the official NVIDIA stack
 
-What remains is narrower than the original plan: finish the official GEAR-Sonic
-C++ baseline and then publish the measured artifact set.
+This plan's execution is complete for the current worktree: the artifacts, docs,
+and verification results now line up.
 
-## Remaining execution todos
-
-Execute these in order:
+## Completed execution checklist
 
 1. **Official GEAR-Sonic C++ baseline**
-   - Build a headless benchmark harness that executes the pinned upstream
-     GEAR-Sonic planner / tracking seams in C++
-   - Measure `cold_start_tick`, `warm_steady_state_tick`, `replan_tick`, and
-     `standing_placeholder_tick` with the same path semantics as the robowbc
-     cases
-   - Add a comparable end-to-end loop measurement for the official GEAR-Sonic
-     path and emit normalized artifacts instead of blocked rows
+   - Status: complete at `98009ff`
+   - Official CPU rows are now measured for the velocity, tracking, and
+     end-to-end seams through the dedicated upstream C++ harness
 2. **Publish measured artifacts**
-   - Re-run the comparison wrappers so `artifacts/benchmarks/nvidia/official/`
-     contains measured rows where possible
-   - Update the benchmark/docs surfaces from those artifacts, not by hand
+   - Status: complete
+   - `scripts/bench_nvidia_official.sh --all` and
+     `scripts/bench_robowbc_compare.sh --all` were rerun from the current
+     worktree
+   - `artifacts/benchmarks/nvidia/SUMMARY.md` was regenerated from the paired
+     normalized JSON artifacts
+3. **Refresh docs and close verification**
+   - Status: complete
+   - The benchmark/community docs now cite
+     `artifacts/benchmarks/nvidia/SUMMARY.md` as the current CPU matrix while
+     preserving blocked-row language as fallback behavior for future reruns
+   - Verification passed:
+     `rustc --version`, `cargo --version`, `cargo build`, `cargo check`,
+     `python3 -m unittest tests.test_nvidia_benchmarks -v`, `cargo test`,
+     `cargo clippy -- -D warnings`, `cargo fmt --check`, and
+     `cargo doc --no-deps`
 
 ## Problem
 
-RoboWBC now has honest, path-specific GEAR-Sonic benchmark semantics and a real
-Decoupled WBC comparison harness, but the repo still does not answer the full
-comparison
-question it keeps teeing up: how does robowbc compare against NVIDIA's official
-deployment code on the same models and the same paths?
+RoboWBC now has honest, path-specific GEAR-Sonic benchmark semantics, a real
+Decoupled WBC comparison harness, measured official Decoupled rows, and measured
+official GEAR-Sonic rows. The remaining risk is no longer benchmark coverage.
+It is publish discipline.
 
-Today the repo has the comparison schema, robowbc-side measurements, measured
-official Decoupled rows, and public docs wired up, but the official GEAR-Sonic
-rows are still blocked rather than measured. That leaves the most important
-credibility question only partially resolved:
-"We load the same ONNX files" is not the same as "we compared the same
-execution path under the same conditions and published the result."
+This close-out work exists because "we ran the same paths and published the
+artifacts" is stronger than "the harness exists locally and the docs mostly
+describe it." The current worktree now reaches the stronger state.
 
 ## Goal
 

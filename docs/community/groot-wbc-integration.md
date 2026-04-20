@@ -9,7 +9,7 @@ _Tracks issue [#17](https://github.com/MiaoDX/robowbc/issues/17). Ready-to-submi
 | Item | Status | Link / Notes |
 |------|--------|--------------|
 | GEAR-SONIC inference working locally | [ ] | Requires real model checkpoints (#37) |
-| NVIDIA comparison package published | [ ] | See `docs/benchmarks/` and `artifacts/benchmarks/nvidia/` |
+| NVIDIA comparison package published | [x] | See `artifacts/benchmarks/nvidia/SUMMARY.md` |
 | GR00T-WBC community discussion opened | [ ] | — |
 | Integration guide PR submitted | [ ] | — |
 
@@ -32,8 +32,9 @@ The comparison story for this PR is now artifact-backed:
 1. Use the canonical case IDs from `artifacts/benchmarks/nvidia/cases.json`
 2. Link every published number back to a normalized artifact in
    `artifacts/benchmarks/nvidia/`
-3. If an official NVIDIA row is blocked because the upstream stack does not
-   expose a fair benchmark seam, say so explicitly instead of substituting a
+3. Cite `artifacts/benchmarks/nvidia/SUMMARY.md` as the current CPU matrix
+4. If a future official NVIDIA row is blocked because the upstream stack does
+   not expose a fair benchmark seam, say so explicitly instead of substituting a
    nearby path
 
 ---
@@ -64,8 +65,10 @@ for config-driven multi-model switching and a single deployment binary.
 
 **What I tested:** the matched-path RoboWBC benchmark harness plus the pinned
 official-wrapper comparison package described in `artifacts/benchmarks/nvidia/`.
-Published rows come from normalized artifacts; blocked rows stay blocked until
-the upstream stack exposes a fair non-interactive seam.
+The current committed CPU package includes measured official and RoboWBC rows
+for all eight canonical cases. Published rows come from normalized artifacts;
+if a future rerun loses a fair non-interactive seam, the affected row stays
+blocked instead of being approximated.
 ```
 
 ---
@@ -175,11 +178,12 @@ Run the artifact-backed comparison suite:
 ```bash
 scripts/bench_robowbc_compare.sh --all
 scripts/bench_nvidia_official.sh --all
+python3 scripts/render_nvidia_benchmark_summary.py --output artifacts/benchmarks/nvidia/SUMMARY.md
 ```
 
 See the benchmark registry in `artifacts/benchmarks/nvidia/cases.json` and the
 artifact README in `artifacts/benchmarks/nvidia/README.md` for the matched-path
-case list, fairness rules, and rerun commands.
+case list, fairness rules, rerun commands, and the current published matrix.
 
 ## Configuration reference
 

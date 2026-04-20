@@ -1,0 +1,29 @@
+{
+  "case_id": "gear_sonic_velocity/warm_steady_state_tick",
+  "command_fixture": {
+    "data": [
+      0.3,
+      0.0,
+      0.0
+    ],
+    "kind": "velocity"
+  },
+  "description": "Velocity interpolation tick after an initial plan; planner stays idle.",
+  "host_fingerprint": "mi-ThinkStation-P360-Tower | Linux 6.8.0-107-generic | x86_64 | 12th Gen Intel(R) Core(TM) i9-12900K",
+  "hz": null,
+  "interpretation": "This is the steady-state path most likely to dominate the average control budget for locomotion.",
+  "notes": "Normalized from Criterion sample.json per-iteration timings.",
+  "p50_ns": 1052,
+  "p95_ns": 1303,
+  "p99_ns": 1396,
+  "provider": "cpu",
+  "raw_source": "/home/mi/ws/gogo/robowbc/target/criterion/policy_gear_sonic_velocity/warm_steady_state_tick/base/sample.json",
+  "robowbc_commit": "98009ff146793cdc9a356d1dda93f13b63da6a12",
+  "samples": 100,
+  "schema_version": 1,
+  "source_command": "GEAR_SONIC_MODEL_DIR=/home/mi/ws/gogo/robowbc/models/gear-sonic cargo bench -p robowbc-ort --bench inference -- --output-format bencher 'policy/gear_sonic_velocity/warm_steady_state_tick'",
+  "stack": "robowbc",
+  "status": "ok",
+  "upstream_commit": "cc80d505b7e055fd6ae26426ae8bfa0a74c26011",
+  "warmup_policy": "reset_then_one_warmup_tick_then_measure"
+}

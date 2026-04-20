@@ -1,0 +1,29 @@
+{
+  "case_id": "gear_sonic/end_to_end_cli_loop",
+  "command_fixture": {
+    "data": [
+      0.3,
+      0.0,
+      0.0
+    ],
+    "kind": "velocity"
+  },
+  "description": "RoboWBC CLI loop running configs/sonic_g1.toml through the synthetic transport with a JSON report.",
+  "host_fingerprint": "mi-ThinkStation-P360-Tower | Linux 6.8.0-107-generic | x86_64 | 12th Gen Intel(R) Core(TM) i9-12900K",
+  "hz": 26.327061,
+  "interpretation": "This row answers the operator-facing question: can the whole deployment loop hold the target frequency, not just one inference call?",
+  "notes": "Normalized from robowbc-cli JSON run report.",
+  "p50_ns": 18172,
+  "p95_ns": 105159760,
+  "p99_ns": 208491243,
+  "provider": "cpu",
+  "raw_source": "/tmp/tmp.y3cCftpB4i/report.json",
+  "robowbc_commit": "98009ff146793cdc9a356d1dda93f13b63da6a12",
+  "samples": 200,
+  "schema_version": 1,
+  "source_command": "cargo run -p robowbc-cli --bin robowbc -- run --config /tmp/tmp.y3cCftpB4i/sonic_g1.toml",
+  "stack": "robowbc",
+  "status": "ok",
+  "upstream_commit": "cc80d505b7e055fd6ae26426ae8bfa0a74c26011",
+  "warmup_policy": "default_cli_loop_200_ticks"
+}

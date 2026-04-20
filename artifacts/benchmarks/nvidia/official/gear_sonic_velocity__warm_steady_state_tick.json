@@ -1,0 +1,29 @@
+{
+  "case_id": "gear_sonic_velocity/warm_steady_state_tick",
+  "command_fixture": {
+    "data": [
+      0.3,
+      0.0,
+      0.0
+    ],
+    "kind": "velocity"
+  },
+  "description": "Velocity interpolation tick after an initial plan; planner stays idle.",
+  "host_fingerprint": "mi-ThinkStation-P360-Tower | Linux 6.8.0-107-generic | x86_64 | 12th Gen Intel(R) Core(TM) i9-12900K",
+  "hz": null,
+  "interpretation": "This is the steady-state path most likely to dominate the average control budget for locomotion.",
+  "notes": "Measured via official GEAR-Sonic C++ ONNX Runtime harness on the pinned source checkout.",
+  "p50_ns": 673,
+  "p95_ns": 961,
+  "p99_ns": 1043,
+  "provider": "cpu",
+  "raw_source": "/home/mi/ws/gogo/robowbc/artifacts/benchmarks/nvidia/official/raw/gear_sonic_velocity__warm_steady_state_tick.json",
+  "robowbc_commit": "98009ff146793cdc9a356d1dda93f13b63da6a12",
+  "samples": 100,
+  "schema_version": 1,
+  "source_command": "/home/mi/ws/gogo/robowbc/target/nvidia-bench/bench_nvidia_gear_sonic_official --case-id gear_sonic_velocity/warm_steady_state_tick --model-dir /home/mi/ws/gogo/robowbc/models/gear-sonic --samples 100 --ticks 200 --control-frequency-hz 50 --output /home/mi/ws/gogo/robowbc/artifacts/benchmarks/nvidia/official/raw/gear_sonic_velocity__warm_steady_state_tick.json",
+  "stack": "official_nvidia",
+  "status": "ok",
+  "upstream_commit": "bc38f6d0ce6cab4589e025037ad0bfbab7ba73d8",
+  "warmup_policy": "reset_then_one_warmup_tick_then_measure"
+}
