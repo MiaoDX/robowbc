@@ -9,7 +9,7 @@ _Tracks issue [#17](https://github.com/MiaoDX/robowbc/issues/17). Ready-to-submi
 | Item | Status | Link / Notes |
 |------|--------|--------------|
 | GEAR-SONIC inference working locally | [ ] | Requires real model checkpoints (#37) |
-| Benchmark vs NVIDIA C++ runtime measured | [ ] | See `docs/benchmarks/` |
+| NVIDIA comparison package published | [ ] | See `docs/benchmarks/` and `artifacts/benchmarks/nvidia/` |
 | GR00T-WBC community discussion opened | [ ] | — |
 | Integration guide PR submitted | [ ] | — |
 
@@ -24,6 +24,17 @@ to their repository. The PR should be framed as a community contribution — a t
 guide showing users how to run GEAR-SONIC models through robowbc, not a competing project.
 
 **Tone:** contributor, not promoter. Show working code and benchmarks first.
+
+## Comparison contract
+
+The comparison story for this PR is now artifact-backed:
+
+1. Use the canonical case IDs from `artifacts/benchmarks/nvidia/cases.json`
+2. Link every published number back to a normalized artifact in
+   `artifacts/benchmarks/nvidia/`
+3. If an official NVIDIA row is blocked because the upstream stack does not
+   expose a fair benchmark seam, say so explicitly instead of substituting a
+   nearby path
 
 ---
 
@@ -51,8 +62,10 @@ for config-driven multi-model switching and a single deployment binary.
 - Rust binary with no Python dependency at inference time
 - Zenoh transport bridges DDS, ZMQ, and ROS2 without reconfiguring the robot
 
-**What I tested:** GEAR-SONIC inference on [hardware/sim TBD] with matching latency benchmarks
-vs the reference C++ runtime.
+**What I tested:** the matched-path RoboWBC benchmark harness plus the pinned
+official-wrapper comparison package described in `artifacts/benchmarks/nvidia/`.
+Published rows come from normalized artifacts; blocked rows stay blocked until
+the upstream stack exposes a fair non-interactive seam.
 ```
 
 ---
@@ -157,14 +170,16 @@ Observation → GearSonicPolicy::predict()
 
 ## Benchmarks
 
-Run the robowbc benchmark suite:
+Run the artifact-backed comparison suite:
 
 ```bash
-cargo bench --bench inference_latency
+scripts/bench_robowbc_compare.sh --all
+scripts/bench_nvidia_official.sh --all
 ```
 
-See [robowbc benchmarks](https://github.com/MiaoDX/robowbc/tree/main/docs/benchmarks) for
-end-to-end latency comparisons.
+See the benchmark registry in `artifacts/benchmarks/nvidia/cases.json` and the
+artifact README in `artifacts/benchmarks/nvidia/README.md` for the matched-path
+case list, fairness rules, and rerun commands.
 
 ## Configuration reference
 
