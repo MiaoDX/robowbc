@@ -26,7 +26,6 @@ const GROOT_G1_HISTORY_OBS_DIM: usize = GROOT_G1_HISTORY_SINGLE_OBS_DIM * GROOT_
 const GROOT_G1_NUM_ACTIONS: usize = 15;
 const GROOT_G1_HISTORY_OBS_DIM_I64: i64 = 516;
 const GROOT_G1_ACTION_SCALE: f32 = 0.25;
-const GROOT_G1_ANG_VEL_SCALE: f32 = 0.5;
 const GROOT_G1_DOF_POS_SCALE: f32 = 1.0;
 const GROOT_G1_DOF_VEL_SCALE: f32 = 0.05;
 const GROOT_G1_CMD_SCALE: [f32; 3] = [2.0, 2.0, 0.5];
@@ -82,7 +81,7 @@ impl DecoupledHistoryRuntime {
     fn new(config: &DecoupledWbcConfig, walk_backend: OrtBackend) -> CoreResult<Self> {
         if config.lower_body_joints.len() != GROOT_G1_NUM_ACTIONS {
             return Err(WbcError::InvalidObservation(
-                "groot_g1_history expects 15 lower_body_joints",
+                "groot_g1_history expects 15 lower_body_joints".to_owned(),
             ));
         }
 
@@ -139,14 +138,14 @@ impl DecoupledWbcPolicy {
         for &idx in &config.lower_body_joints {
             if idx >= n {
                 return Err(WbcError::InvalidObservation(
-                    "lower_body_joints index out of range",
+                    "lower_body_joints index out of range".to_owned(),
                 ));
             }
         }
         for &idx in &config.upper_body_joints {
             if idx >= n {
                 return Err(WbcError::InvalidObservation(
-                    "upper_body_joints index out of range",
+                    "upper_body_joints index out of range".to_owned(),
                 ));
             }
         }
@@ -161,7 +160,8 @@ impl DecoupledWbcPolicy {
         all_joints.dedup();
         if all_joints.len() != n {
             return Err(WbcError::InvalidObservation(
-                "lower_body_joints and upper_body_joints must cover all joints exactly once",
+                "lower_body_joints and upper_body_joints must cover all joints exactly once"
+                    .to_owned(),
             ));
         }
 
@@ -321,12 +321,12 @@ impl robowbc_core::WbcPolicy for DecoupledWbcPolicy {
     fn predict(&self, obs: &Observation) -> CoreResult<JointPositionTargets> {
         if obs.joint_positions.len() != self.robot.joint_count {
             return Err(WbcError::InvalidObservation(
-                "joint_positions length does not match robot.joint_count",
+                "joint_positions length does not match robot.joint_count".to_owned(),
             ));
         }
         if obs.joint_velocities.len() != self.robot.joint_count {
             return Err(WbcError::InvalidObservation(
-                "joint_velocities length does not match robot.joint_count",
+                "joint_velocities length does not match robot.joint_count".to_owned(),
             ));
         }
 
@@ -390,9 +390,12 @@ fn build_groot_g1_single_observation(
     single_obs[1] = twist.linear[1] * GROOT_G1_CMD_SCALE[1];
     single_obs[2] = twist.angular[2] * GROOT_G1_CMD_SCALE[2];
     single_obs[3] = GROOT_G1_HEIGHT_CMD;
-    single_obs[7] = 0.0 * GROOT_G1_ANG_VEL_SCALE;
-    single_obs[8] = 0.0 * GROOT_G1_ANG_VEL_SCALE;
-    single_obs[9] = 0.0 * GROOT_G1_ANG_VEL_SCALE;
+    // GR00T WholeBodyControl contract v1 leaves angular-velocity slots [7..9] at
+    // zero regardless of `obs.angular_velocity`; the model was trained without them.
+    // Keep the explicit zero-assigns to match the upstream observation layout table.
+    single_obs[7] = 0.0;
+    single_obs[8] = 0.0;
+    single_obs[9] = 0.0;
     single_obs[10..13].copy_from_slice(&obs.gravity_vector);
 
     for (i, (&joint_idx, &default_pose)) in lower_body_joints

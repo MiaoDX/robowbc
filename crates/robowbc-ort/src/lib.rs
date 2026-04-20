@@ -654,13 +654,16 @@ pub struct GearSonicConfig {
 }
 
 const GEAR_SONIC_PLANNER_QPOS_DIM: usize = 36;
-const GEAR_SONIC_PLANNER_QPOS_DIM_I64: i64 = 36;
+#[allow(clippy::cast_possible_wrap)]
+const GEAR_SONIC_PLANNER_QPOS_DIM_I64: i64 = GEAR_SONIC_PLANNER_QPOS_DIM as i64;
 const GEAR_SONIC_PLANNER_JOINT_OFFSET: usize = 7;
 const GEAR_SONIC_PLANNER_CONTEXT_LEN: usize = 4;
-const GEAR_SONIC_PLANNER_CONTEXT_LEN_I64: i64 = 4;
+#[allow(clippy::cast_possible_wrap)]
+const GEAR_SONIC_PLANNER_CONTEXT_LEN_I64: i64 = GEAR_SONIC_PLANNER_CONTEXT_LEN as i64;
 const GEAR_SONIC_PLANNER_REPLAN_INTERVAL_TICKS: usize = 5;
 const GEAR_SONIC_ALLOWED_PRED_NUM_TOKENS: usize = 11;
-const GEAR_SONIC_ALLOWED_PRED_NUM_TOKENS_I64: i64 = 11;
+#[allow(clippy::cast_possible_wrap)]
+const GEAR_SONIC_ALLOWED_PRED_NUM_TOKENS_I64: i64 = GEAR_SONIC_ALLOWED_PRED_NUM_TOKENS as i64;
 const GEAR_SONIC_DEFAULT_HEIGHT_METERS: f32 = 0.74;
 const GEAR_SONIC_DEFAULT_MODE_WALK: i64 = 2;
 const GEAR_SONIC_PLANNER_INTERP_STEP: f32 = 30.0 / 50.0;
@@ -1187,7 +1190,7 @@ impl GearSonicPolicy {
         }
         if self.robot.joint_count != GEAR_SONIC_PLANNER_QPOS_DIM - GEAR_SONIC_PLANNER_JOINT_OFFSET {
             return Err(robowbc_core::WbcError::InvalidObservation(
-                "GearSonicPolicy planner mode currently expects robot.joint_count = 29",
+                "GearSonicPolicy planner mode currently expects robot.joint_count = 29".to_owned(),
             ));
         }
 
@@ -1336,7 +1339,7 @@ impl GearSonicPolicy {
         let expected_joint_count = GEAR_SONIC_PLANNER_QPOS_DIM - GEAR_SONIC_PLANNER_JOINT_OFFSET;
         if self.robot.joint_count != expected_joint_count {
             return Err(robowbc_core::WbcError::InvalidObservation(
-                "GearSonicPolicy tracking mode currently expects robot.joint_count = 29",
+                "GearSonicPolicy tracking mode currently expects robot.joint_count = 29".to_owned(),
             ));
         }
 
@@ -1420,12 +1423,12 @@ impl robowbc_core::WbcPolicy for GearSonicPolicy {
     fn predict(&self, obs: &Observation) -> CoreResult<JointPositionTargets> {
         if obs.joint_positions.len() != self.robot.joint_count {
             return Err(robowbc_core::WbcError::InvalidObservation(
-                "joint_positions length does not match robot.joint_count",
+                "joint_positions length does not match robot.joint_count".to_owned(),
             ));
         }
         if obs.joint_velocities.len() != self.robot.joint_count {
             return Err(robowbc_core::WbcError::InvalidObservation(
-                "joint_velocities length does not match robot.joint_count",
+                "joint_velocities length does not match robot.joint_count".to_owned(),
             ));
         }
 

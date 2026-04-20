@@ -100,7 +100,7 @@ impl HoverPolicy {
     pub fn new(config: HoverConfig) -> CoreResult<Self> {
         if config.mode_mask.len() != config.command_dim {
             return Err(WbcError::InvalidObservation(
-                "mode_mask length must equal command_dim",
+                "mode_mask length must equal command_dim".to_owned(),
             ));
         }
 
@@ -141,7 +141,8 @@ impl HoverPolicy {
             .iter()
             .find(|l| l.link_name.contains("pelvis"))
             .ok_or(WbcError::InvalidObservation(
-                "KinematicPose for HoverPolicy must contain a link with 'pelvis' in its name",
+                "KinematicPose for HoverPolicy must contain a link with 'pelvis' in its name"
+                    .to_owned(),
             ))?;
 
         // height(3)=z-translation, roll(4)=qx, yaw(5)=qz
@@ -197,12 +198,12 @@ impl robowbc_core::WbcPolicy for HoverPolicy {
     fn predict(&self, obs: &Observation) -> CoreResult<JointPositionTargets> {
         if obs.joint_positions.len() != self.robot.joint_count {
             return Err(WbcError::InvalidObservation(
-                "joint_positions length does not match robot.joint_count",
+                "joint_positions length does not match robot.joint_count".to_owned(),
             ));
         }
         if obs.joint_velocities.len() != self.robot.joint_count {
             return Err(WbcError::InvalidObservation(
-                "joint_velocities length does not match robot.joint_count",
+                "joint_velocities length does not match robot.joint_count".to_owned(),
             ));
         }
 

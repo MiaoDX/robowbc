@@ -227,12 +227,12 @@ impl BfmZeroTrackingRuntime {
             .tracking
             .as_ref()
             .ok_or(WbcError::InvalidObservation(
-                "g1_tracking requires [policy.config.tracking] with a context_path",
+                "g1_tracking requires [policy.config.tracking] with a context_path".to_owned(),
             ))?;
 
         if tracking.window_size == 0 {
             return Err(WbcError::InvalidObservation(
-                "g1_tracking window_size must be greater than zero",
+                "g1_tracking window_size must be greater than zero".to_owned(),
             ));
         }
 
@@ -240,12 +240,12 @@ impl BfmZeroTrackingRuntime {
 
         if context.nrows() == 0 {
             return Err(WbcError::InvalidObservation(
-                "g1_tracking context file must contain at least one latent frame",
+                "g1_tracking context file must contain at least one latent frame".to_owned(),
             ));
         }
         if context.ncols() != BFM_G1_CONTEXT_DIM {
             return Err(WbcError::InvalidObservation(
-                "g1_tracking context must have shape [T, 256]",
+                "g1_tracking context must have shape [T, 256]".to_owned(),
             ));
         }
 
@@ -444,12 +444,12 @@ impl robowbc_core::WbcPolicy for BfmZeroPolicy {
 
         if obs.joint_positions.len() != n {
             return Err(WbcError::InvalidObservation(
-                "joint_positions length does not match robot.joint_count",
+                "joint_positions length does not match robot.joint_count".to_owned(),
             ));
         }
         if obs.joint_velocities.len() != n {
             return Err(WbcError::InvalidObservation(
-                "joint_velocities length does not match robot.joint_count",
+                "joint_velocities length does not match robot.joint_count".to_owned(),
             ));
         }
 
@@ -517,20 +517,20 @@ fn validate_robot_for_contract(
 
     if robot.joint_count != BFM_G1_JOINT_COUNT {
         return Err(WbcError::InvalidObservation(
-            "g1_tracking requires a 29-DOF Unitree G1 robot config",
+            "g1_tracking requires a 29-DOF Unitree G1 robot config".to_owned(),
         ));
     }
 
     if robot.joint_names.len() != BFM_G1_JOINT_COUNT {
         return Err(WbcError::InvalidObservation(
-            "g1_tracking requires 29 ordered joint names",
+            "g1_tracking requires 29 ordered joint names".to_owned(),
         ));
     }
 
     for (actual, expected) in robot.joint_names.iter().zip(BFM_G1_JOINT_NAMES.iter()) {
         if actual != expected {
             return Err(WbcError::InvalidObservation(
-                "g1_tracking requires the published BFM-Zero Unitree G1 joint ordering",
+                "g1_tracking requires the published BFM-Zero Unitree G1 joint ordering".to_owned(),
             ));
         }
     }
@@ -541,7 +541,7 @@ fn validate_robot_for_contract(
 fn build_g1_dof_pos_minus_default(obs: &Observation) -> CoreResult<Vec<f32>> {
     if obs.joint_positions.len() != BFM_G1_JOINT_COUNT {
         return Err(WbcError::InvalidObservation(
-            "g1_tracking requires 29 joint positions",
+            "g1_tracking requires 29 joint positions".to_owned(),
         ));
     }
 

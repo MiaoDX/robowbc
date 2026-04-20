@@ -395,12 +395,12 @@ impl robowbc_core::WbcPolicy for WbcAgilePolicy {
 
         if obs.joint_positions.len() != n {
             return Err(WbcError::InvalidObservation(
-                "joint_positions length does not match robot.joint_count",
+                "joint_positions length does not match robot.joint_count".to_owned(),
             ));
         }
         if obs.joint_velocities.len() != n {
             return Err(WbcError::InvalidObservation(
-                "joint_velocities length does not match robot.joint_count",
+                "joint_velocities length does not match robot.joint_count".to_owned(),
             ));
         }
 
@@ -460,12 +460,9 @@ fn joint_indices_from_names(robot: &RobotConfig, names: &[&str]) -> CoreResult<V
                 .iter()
                 .position(|joint_name| joint_name == name)
                 .ok_or_else(|| {
-                    WbcError::InvalidObservation(Box::leak(
-                        format!(
-                            "robot '{}' is missing WBC-AGILE joint '{}' required by the selected contract",
-                            robot.name, name
-                        )
-                        .into_boxed_str(),
+                    WbcError::InvalidObservation(format!(
+                        "robot '{}' is missing WBC-AGILE joint '{}' required by the selected contract",
+                        robot.name, name
                     ))
                 })
         })
