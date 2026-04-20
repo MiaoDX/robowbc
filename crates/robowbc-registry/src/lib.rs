@@ -176,7 +176,9 @@ mod tests {
                 .unwrap_or(1.0) as f32;
 
             if gain <= 0.0 {
-                return Err(WbcError::InvalidObservation("gain must be positive"));
+                return Err(WbcError::InvalidObservation(
+                    "gain must be positive".to_owned(),
+                ));
             }
 
             Ok(Self {

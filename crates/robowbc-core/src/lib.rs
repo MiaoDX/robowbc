@@ -11,7 +11,7 @@ pub type Result<T> = std::result::Result<T, WbcError>;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WbcError {
     /// The observation does not satisfy a policy's expected schema.
-    InvalidObservation(&'static str),
+    InvalidObservation(String),
     /// The command payload is not supported by a policy implementation.
     UnsupportedCommand(&'static str),
     /// The produced target vector is malformed for the selected robot.
@@ -255,7 +255,9 @@ mod tests {
     impl WbcPolicy for DummyPolicy {
         fn predict(&self, obs: &Observation) -> Result<JointPositionTargets> {
             if obs.joint_positions.is_empty() {
-                return Err(WbcError::InvalidObservation("joint_positions is empty"));
+                return Err(WbcError::InvalidObservation(
+                    "joint_positions is empty".to_owned(),
+                ));
             }
 
             Ok(JointPositionTargets {

@@ -137,12 +137,12 @@ impl robowbc_core::WbcPolicy for WholeBodyVlaPolicy {
 
         if obs.joint_positions.len() != n {
             return Err(WbcError::InvalidObservation(
-                "joint_positions length does not match robot.joint_count",
+                "joint_positions length does not match robot.joint_count".to_owned(),
             ));
         }
         if obs.joint_velocities.len() != n {
             return Err(WbcError::InvalidObservation(
-                "joint_velocities length does not match robot.joint_count",
+                "joint_velocities length does not match robot.joint_count".to_owned(),
             ));
         }
 
