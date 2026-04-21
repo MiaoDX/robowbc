@@ -471,12 +471,39 @@ struct Metrics {
     dropped_frames: usize,
     average_inference_ms: f64,
     achieved_frequency_hz: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    velocity_tracking: Option<VelocityTrackingMetrics>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+struct ReportBasePose {
+    position_world: [f32; 3],
+    rotation_xyzw: [f32; 4],
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct VelocityTrackingMetrics {
+    sample_count: usize,
+    vx_rmse_mps: f64,
+    vy_rmse_mps: f64,
+    yaw_rate_rmse_rad_s: f64,
+    vx_mean_abs_error_mps: f64,
+    vy_mean_abs_error_mps: f64,
+    yaw_rate_mean_abs_error_rad_s: f64,
+    vx_peak_abs_error_mps: f64,
+    vy_peak_abs_error_mps: f64,
+    yaw_rate_peak_abs_error_rad_s: f64,
+    forward_distance_m: f64,
+    lateral_distance_m: f64,
+    heading_change_deg: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
 struct ReportFrame {
     tick: usize,
     command_data: Vec<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    base_pose: Option<ReportBasePose>,
     actual_positions: Vec<f32>,
     actual_velocities: Vec<f32>,
     target_positions: Vec<f32>,
@@ -677,8 +704,193 @@ fn build_policy(app: &AppConfig) -> Result<(Box<dyn WbcPolicy>, RobotConfig), St
     Ok((policy, robot))
 }
 
+trait ReportTelemetryProvider {
+    fn report_base_pose(&self) -> Option<ReportBasePose> {
+        None
+    }
+}
+
+impl ReportTelemetryProvider for SyntheticTransport {}
+
+impl ReportTelemetryProvider for UnitreeG1Transport {}
+
+#[cfg(feature = "sim")]
+impl ReportTelemetryProvider for MujocoTransport {
+    fn report_base_pose(&self) -> Option<ReportBasePose> {
+        self.floating_base_pose()
+            .map(|(position_world, rotation_xyzw)| ReportBasePose {
+                position_world,
+                rotation_xyzw,
+            })
+    }
+}
+
+#[derive(Default)]
+struct VelocityTrackingAccumulator {
+    sample_count: usize,
+    vx_sq_error_sum: f64,
+    vy_sq_error_sum: f64,
+    yaw_sq_error_sum: f64,
+    vx_abs_error_sum: f64,
+    vy_abs_error_sum: f64,
+    yaw_abs_error_sum: f64,
+    vx_peak_abs_error: f64,
+    vy_peak_abs_error: f64,
+    yaw_peak_abs_error: f64,
+    forward_distance_m: f64,
+    lateral_distance_m: f64,
+    heading_change_rad: f64,
+}
+
+impl VelocityTrackingAccumulator {
+    fn update(
+        &mut self,
+        command: [f32; 3],
+        actual_body_displacement: [f32; 2],
+        actual_yaw_delta_rad: f32,
+        dt_secs: f64,
+    ) {
+        let actual_forward_velocity = f64::from(actual_body_displacement[0]) / dt_secs;
+        let actual_lateral_velocity = f64::from(actual_body_displacement[1]) / dt_secs;
+        let actual_yaw_rate = f64::from(actual_yaw_delta_rad) / dt_secs;
+
+        let forward_velocity_error = actual_forward_velocity - f64::from(command[0]);
+        let lateral_velocity_error = actual_lateral_velocity - f64::from(command[1]);
+        let yaw_error = actual_yaw_rate - f64::from(command[2]);
+
+        self.sample_count = self.sample_count.saturating_add(1);
+        self.vx_sq_error_sum += forward_velocity_error * forward_velocity_error;
+        self.vy_sq_error_sum += lateral_velocity_error * lateral_velocity_error;
+        self.yaw_sq_error_sum += yaw_error * yaw_error;
+        self.vx_abs_error_sum += forward_velocity_error.abs();
+        self.vy_abs_error_sum += lateral_velocity_error.abs();
+        self.yaw_abs_error_sum += yaw_error.abs();
+        self.vx_peak_abs_error = self.vx_peak_abs_error.max(forward_velocity_error.abs());
+        self.vy_peak_abs_error = self.vy_peak_abs_error.max(lateral_velocity_error.abs());
+        self.yaw_peak_abs_error = self.yaw_peak_abs_error.max(yaw_error.abs());
+        self.forward_distance_m += f64::from(actual_body_displacement[0]);
+        self.lateral_distance_m += f64::from(actual_body_displacement[1]);
+        self.heading_change_rad += f64::from(actual_yaw_delta_rad);
+    }
+
+    fn finish(self) -> Option<VelocityTrackingMetrics> {
+        if self.sample_count == 0 {
+            return None;
+        }
+
+        #[allow(clippy::cast_precision_loss)]
+        let sample_count = self.sample_count as f64;
+
+        Some(VelocityTrackingMetrics {
+            sample_count: self.sample_count,
+            vx_rmse_mps: (self.vx_sq_error_sum / sample_count).sqrt(),
+            vy_rmse_mps: (self.vy_sq_error_sum / sample_count).sqrt(),
+            yaw_rate_rmse_rad_s: (self.yaw_sq_error_sum / sample_count).sqrt(),
+            vx_mean_abs_error_mps: self.vx_abs_error_sum / sample_count,
+            vy_mean_abs_error_mps: self.vy_abs_error_sum / sample_count,
+            yaw_rate_mean_abs_error_rad_s: self.yaw_abs_error_sum / sample_count,
+            vx_peak_abs_error_mps: self.vx_peak_abs_error,
+            vy_peak_abs_error_mps: self.vy_peak_abs_error,
+            yaw_rate_peak_abs_error_rad_s: self.yaw_peak_abs_error,
+            forward_distance_m: self.forward_distance_m,
+            lateral_distance_m: self.lateral_distance_m,
+            heading_change_deg: self.heading_change_rad.to_degrees(),
+        })
+    }
+}
+
+fn compute_velocity_tracking_metrics(
+    frames: &[ReportFrame],
+    runtime_command: &ParsedRuntimeCommand,
+    frequency_hz: u32,
+) -> Option<VelocityTrackingMetrics> {
+    if !matches!(
+        runtime_command,
+        ParsedRuntimeCommand::Velocity(_) | ParsedRuntimeCommand::VelocitySchedule(_)
+    ) {
+        return None;
+    }
+
+    if frequency_hz == 0 || frames.len() < 2 {
+        return None;
+    }
+
+    let dt_secs = 1.0 / f64::from(frequency_hz);
+    let mut accumulator = VelocityTrackingAccumulator::default();
+
+    for pair in frames.windows(2) {
+        let previous = &pair[0];
+        let current = &pair[1];
+
+        if previous.command_data.len() < 3 {
+            continue;
+        }
+
+        let (Some(previous_pose), Some(current_pose)) = (previous.base_pose, current.base_pose)
+        else {
+            continue;
+        };
+
+        let command = [
+            previous.command_data[0],
+            previous.command_data[1],
+            previous.command_data[2],
+        ];
+
+        let body_displacement = world_to_body_planar_delta(
+            previous_pose.position_world,
+            previous_pose.rotation_xyzw,
+            current_pose.position_world,
+        );
+        let yaw_delta = wrap_angle_rad(
+            yaw_from_rotation_xyzw(current_pose.rotation_xyzw)
+                - yaw_from_rotation_xyzw(previous_pose.rotation_xyzw),
+        );
+
+        accumulator.update(command, body_displacement, yaw_delta, dt_secs);
+    }
+
+    accumulator.finish()
+}
+
+fn yaw_from_rotation_xyzw(rotation_xyzw: [f32; 4]) -> f32 {
+    let [x, y, z, w] = rotation_xyzw;
+    let siny_cosp = 2.0 * (w * z + x * y);
+    let cosy_cosp = 1.0 - 2.0 * (y * y + z * z);
+    siny_cosp.atan2(cosy_cosp)
+}
+
+fn wrap_angle_rad(angle_rad: f32) -> f32 {
+    let mut wrapped = angle_rad;
+    while wrapped > std::f32::consts::PI {
+        wrapped -= 2.0 * std::f32::consts::PI;
+    }
+    while wrapped < -std::f32::consts::PI {
+        wrapped += 2.0 * std::f32::consts::PI;
+    }
+    wrapped
+}
+
+#[allow(clippy::similar_names)]
+fn world_to_body_planar_delta(
+    previous_position_world: [f32; 3],
+    previous_rotation_xyzw: [f32; 4],
+    current_position_world: [f32; 3],
+) -> [f32; 2] {
+    let delta_x_world = current_position_world[0] - previous_position_world[0];
+    let delta_y_world = current_position_world[1] - previous_position_world[1];
+    let yaw = yaw_from_rotation_xyzw(previous_rotation_xyzw);
+    let cos_yaw = yaw.cos();
+    let sin_yaw = yaw.sin();
+
+    [
+        cos_yaw * delta_x_world + sin_yaw * delta_y_world,
+        -sin_yaw * delta_x_world + cos_yaw * delta_y_world,
+    ]
+}
+
 #[allow(clippy::too_many_arguments)]
-fn run_control_loop_inner<T: RobotTransport>(
+fn run_control_loop_inner<T: RobotTransport + ReportTelemetryProvider>(
     transport: &mut T,
     policy: &dyn WbcPolicy,
     comm: &CommConfig,
@@ -705,6 +917,7 @@ fn run_control_loop_inner<T: RobotTransport>(
         let cycle_start = Instant::now();
         let tick_index = ticks;
         let command = runtime_command.command_for_tick(tick_index, comm.frequency_hz);
+        let base_pose = transport.report_base_pose();
         let mut captured_tick: Option<ReportFrame> = None;
 
         run_control_tick(transport, command.clone(), |obs| {
@@ -716,6 +929,7 @@ fn run_control_loop_inner<T: RobotTransport>(
             captured_tick = Some(ReportFrame {
                 tick: tick_index,
                 command_data: runtime_command.command_data_for_tick(tick_index, comm.frequency_hz),
+                base_pose,
                 actual_positions: obs.joint_positions.clone(),
                 actual_velocities: obs.joint_velocities.clone(),
                 target_positions: output
@@ -933,21 +1147,34 @@ fn run_control_loop(
     let achieved_frequency_hz = (ticks as f64) / run_time_secs;
     #[allow(clippy::cast_precision_loss)]
     let average_inference_ms = (inference_total.as_secs_f64() * 1_000.0) / (ticks as f64);
+    let velocity_tracking =
+        compute_velocity_tracking_metrics(&report_frames, runtime_command, comm.frequency_hz);
 
     println!(
         "runtime metrics: ticks={ticks}, sent_commands={sent_count}, avg_inference_ms={average_inference_ms:.3}, achieved_hz={achieved_frequency_hz:.2}, dropped_frames={dropped_frames}",
     );
+    if let Some(tracking) = &velocity_tracking {
+        println!(
+            "velocity tracking: vx_rmse={:.3} m/s, vy_rmse={:.3} m/s, yaw_rmse={:.3} rad/s, forward_distance={:.3} m, heading_change={:.1} deg",
+            tracking.vx_rmse_mps,
+            tracking.vy_rmse_mps,
+            tracking.yaw_rate_rmse_rad_s,
+            tracking.forward_distance_m,
+            tracking.heading_change_deg,
+        );
+    }
 
     let metrics = Metrics {
         ticks,
         dropped_frames,
         average_inference_ms,
         achieved_frequency_hz,
+        velocity_tracking,
     };
 
     if let Some(report_cfg) = report_config {
         let report = RunReport {
-            report_version: 1,
+            report_version: 2,
             policy_name: policy_name.to_owned(),
             robot_name: robot.name.clone(),
             joint_names: robot.joint_names.clone(),
@@ -1069,6 +1296,13 @@ mod tests {
                 "expected {expected}, got {actual}"
             );
         }
+    }
+
+    fn assert_f64_approx_eq(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() <= 1e-6,
+            "expected {expected}, got {actual}"
+        );
     }
 
     fn fixture(path: &str) -> PathBuf {
@@ -1492,7 +1726,7 @@ standing_placeholder_tracking = true
         let path = root.join("nested/report.json");
 
         let report = RunReport {
-            report_version: 1,
+            report_version: 2,
             policy_name: "decoupled_wbc".to_owned(),
             robot_name: "unitree_g1_mock".to_owned(),
             joint_names: vec!["j0".to_owned()],
@@ -1505,10 +1739,12 @@ standing_placeholder_tracking = true
                 dropped_frames: 0,
                 average_inference_ms: 0.5,
                 achieved_frequency_hz: 50.0,
+                velocity_tracking: None,
             },
             frames: vec![ReportFrame {
                 tick: 0,
                 command_data: vec![0.2, 0.0, 0.1],
+                base_pose: None,
                 actual_positions: vec![0.1],
                 actual_velocities: vec![0.0],
                 target_positions: vec![0.1],
@@ -1550,6 +1786,112 @@ standing_placeholder_tracking = true
 
         let err = validate_config(&config).expect_err("backend should be rejected");
         assert!(err.contains("not supported yet"));
+    }
+
+    #[test]
+    fn compute_velocity_tracking_metrics_matches_perfect_forward_motion() {
+        let runtime_command = ParsedRuntimeCommand::Velocity([0.5, 0.0, 0.0]);
+        let frames = vec![
+            ReportFrame {
+                tick: 0,
+                command_data: vec![0.5, 0.0, 0.0],
+                base_pose: Some(ReportBasePose {
+                    position_world: [0.0, 0.0, 0.0],
+                    rotation_xyzw: [0.0, 0.0, 0.0, 1.0],
+                }),
+                actual_positions: vec![],
+                actual_velocities: vec![],
+                target_positions: vec![],
+                inference_latency_ms: 0.0,
+            },
+            ReportFrame {
+                tick: 1,
+                command_data: vec![0.5, 0.0, 0.0],
+                base_pose: Some(ReportBasePose {
+                    position_world: [0.01, 0.0, 0.0],
+                    rotation_xyzw: [0.0, 0.0, 0.0, 1.0],
+                }),
+                actual_positions: vec![],
+                actual_velocities: vec![],
+                target_positions: vec![],
+                inference_latency_ms: 0.0,
+            },
+            ReportFrame {
+                tick: 2,
+                command_data: vec![0.5, 0.0, 0.0],
+                base_pose: Some(ReportBasePose {
+                    position_world: [0.02, 0.0, 0.0],
+                    rotation_xyzw: [0.0, 0.0, 0.0, 1.0],
+                }),
+                actual_positions: vec![],
+                actual_velocities: vec![],
+                target_positions: vec![],
+                inference_latency_ms: 0.0,
+            },
+        ];
+
+        let metrics = compute_velocity_tracking_metrics(&frames, &runtime_command, 50)
+            .expect("forward-motion metrics should be computed");
+        assert_eq!(metrics.sample_count, 2);
+        assert_f64_approx_eq(metrics.vx_rmse_mps, 0.0);
+        assert_f64_approx_eq(metrics.vy_rmse_mps, 0.0);
+        assert_f64_approx_eq(metrics.yaw_rate_rmse_rad_s, 0.0);
+        assert_f64_approx_eq(metrics.forward_distance_m, 0.02);
+        assert_f64_approx_eq(metrics.lateral_distance_m, 0.0);
+        assert_f64_approx_eq(metrics.heading_change_deg, 0.0);
+    }
+
+    #[test]
+    fn compute_velocity_tracking_metrics_matches_perfect_turn_rate() {
+        let runtime_command = ParsedRuntimeCommand::Velocity([0.0, 0.0, 1.0]);
+        let frames = vec![
+            ReportFrame {
+                tick: 0,
+                command_data: vec![0.0, 0.0, 1.0],
+                base_pose: Some(ReportBasePose {
+                    position_world: [0.0, 0.0, 0.0],
+                    rotation_xyzw: [0.0, 0.0, 0.0, 1.0],
+                }),
+                actual_positions: vec![],
+                actual_velocities: vec![],
+                target_positions: vec![],
+                inference_latency_ms: 0.0,
+            },
+            ReportFrame {
+                tick: 1,
+                command_data: vec![0.0, 0.0, 1.0],
+                base_pose: Some(ReportBasePose {
+                    position_world: [0.0, 0.0, 0.0],
+                    rotation_xyzw: [0.0, 0.0, 0.01_f32.sin(), 0.01_f32.cos()],
+                }),
+                actual_positions: vec![],
+                actual_velocities: vec![],
+                target_positions: vec![],
+                inference_latency_ms: 0.0,
+            },
+            ReportFrame {
+                tick: 2,
+                command_data: vec![0.0, 0.0, 1.0],
+                base_pose: Some(ReportBasePose {
+                    position_world: [0.0, 0.0, 0.0],
+                    rotation_xyzw: [0.0, 0.0, 0.02_f32.sin(), 0.02_f32.cos()],
+                }),
+                actual_positions: vec![],
+                actual_velocities: vec![],
+                target_positions: vec![],
+                inference_latency_ms: 0.0,
+            },
+        ];
+
+        let metrics = compute_velocity_tracking_metrics(&frames, &runtime_command, 50)
+            .expect("turn-rate metrics should be computed");
+        assert_eq!(metrics.sample_count, 2);
+        assert_f64_approx_eq(metrics.vx_rmse_mps, 0.0);
+        assert_f64_approx_eq(metrics.vy_rmse_mps, 0.0);
+        assert_f64_approx_eq(metrics.yaw_rate_rmse_rad_s, 0.0);
+        assert_f64_approx_eq(metrics.forward_distance_m, 0.0);
+        assert_f64_approx_eq(metrics.lateral_distance_m, 0.0);
+        assert_f64_approx_eq(metrics.heading_change_deg, (0.04_f64).to_degrees());
     }
 
     #[test]
