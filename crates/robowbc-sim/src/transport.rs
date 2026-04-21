@@ -1,7 +1,7 @@
 //! `MuJoCo`-backed [`RobotTransport`] implementation.
 
 use crate::{MujocoConfig, SimError};
-use mujoco_rs::wrappers::{MjData, MjModel, MjtSensor, MjtTrn};
+use mujoco_rs::wrappers::{MjData, MjModel, MjtJoint, MjtSensor, MjtTrn};
 use robowbc_comm::{CommError, ImuSample, JointState, RobotTransport};
 use robowbc_core::{JointPositionTargets, RobotConfig};
 use std::collections::BTreeSet;
@@ -14,12 +14,19 @@ struct JointMapping {
     qpos_adr: Option<usize>,
     qvel_adr: Option<usize>,
     actuator_id: Option<usize>,
+    ctrl_range: Option<[f64; 2]>,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct SensorSpan {
     start: usize,
     len: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct FloatingBaseMapping {
+    qpos_adr: usize,
+    qvel_adr: usize,
 }
 
 struct LoadedModel {
@@ -29,10 +36,11 @@ struct LoadedModel {
 
 /// A [`RobotTransport`] that steps a `MuJoCo` physics simulation.
 ///
-/// Joint states are read from `MuJoCo` `qpos` / `qvel`, IMU data comes from the
-/// model's gyro and accelerometer sensors, and targets are written into the
-/// actuator `ctrl` vector. The simulation is advanced by
-/// [`MujocoConfig::substeps`] on each
+/// Joint states are read from `MuJoCo` `qpos` / `qvel`, IMU-like root-state
+/// signals are derived from the floating base when available (falling back to
+/// model sensors otherwise), and position targets are converted into PD control
+/// torques written into the actuator `ctrl` vector. The simulation is advanced
+/// by [`MujocoConfig::substeps`] on each
 /// [`send_joint_targets`](RobotTransport::send_joint_targets) call.
 pub struct MujocoTransport {
     data: MjData<Box<MjModel>>,
@@ -40,6 +48,7 @@ pub struct MujocoTransport {
     config: MujocoConfig,
     joint_mappings: Vec<JointMapping>,
     mapped_joint_count: usize,
+    floating_base: Option<FloatingBaseMapping>,
     gyro_sensor: SensorSpan,
     accel_sensor: SensorSpan,
     model_variant: &'static str,
@@ -86,6 +95,7 @@ impl MujocoTransport {
             });
         }
 
+        let floating_base = floating_base_mapping(&model);
         let gyro_sensor = find_sensor_span(&model, MjtSensor::mjSENS_GYRO, 3, "gyro")?;
         let accel_sensor =
             find_sensor_span(&model, MjtSensor::mjSENS_ACCELEROMETER, 3, "accelerometer")?;
@@ -99,6 +109,7 @@ impl MujocoTransport {
             config,
             joint_mappings,
             mapped_joint_count,
+            floating_base,
             gyro_sensor,
             accel_sensor,
             model_variant,
@@ -162,6 +173,29 @@ impl RobotTransport for MujocoTransport {
     }
 
     fn recv_imu(&mut self) -> Result<ImuSample, CommError> {
+        if let Some(floating_base) = self.floating_base {
+            let qpos = self.data.qpos();
+            let qvel = self.data.qvel();
+            let quat_wxyz = [
+                qpos[floating_base.qpos_adr + 3],
+                qpos[floating_base.qpos_adr + 4],
+                qpos[floating_base.qpos_adr + 5],
+                qpos[floating_base.qpos_adr + 6],
+            ];
+            let angular_velocity = [
+                mj_scalar(qvel[floating_base.qvel_adr + 3]),
+                mj_scalar(qvel[floating_base.qvel_adr + 4]),
+                mj_scalar(qvel[floating_base.qvel_adr + 5]),
+            ];
+            let gravity_vector = gravity_from_free_joint_quaternion(quat_wxyz);
+
+            return Ok(ImuSample {
+                gravity_vector,
+                angular_velocity,
+                timestamp: Instant::now(),
+            });
+        }
+
         let sensor = self.data.sensordata();
         let gyro = &sensor[self.gyro_sensor.start..self.gyro_sensor.start + self.gyro_sensor.len];
         let accel =
@@ -202,13 +236,38 @@ impl RobotTransport for MujocoTransport {
             });
         }
 
-        // Write mapped position targets into MuJoCo's ctrl vector.
+        let qpos = self.data.qpos().to_vec();
+        let qvel = self.data.qvel().to_vec();
+        let commanded_ctrls = self
+            .joint_mappings
+            .iter()
+            .enumerate()
+            .filter_map(|(joint_index, mapping)| {
+                let actuator_id = mapping.actuator_id?;
+                let current_position = mapping.qpos_adr.map_or_else(
+                    || f64::from(self.robot_config.default_pose[joint_index]),
+                    |adr| qpos[adr],
+                );
+                let current_velocity = mapping.qvel_adr.map_or(0.0, |adr| qvel[adr]);
+                let gains = self.robot_config.pd_gains[joint_index];
+                Some((
+                    actuator_id,
+                    compute_pd_control(
+                        targets.positions[joint_index],
+                        current_position,
+                        current_velocity,
+                        gains.kp,
+                        gains.kd,
+                        mapping.ctrl_range,
+                    ),
+                ))
+            })
+            .collect::<Vec<_>>();
+
+        // Write mapped control torques into MuJoCo's ctrl vector.
         let ctrl = self.data.ctrl_mut();
-        for (joint_index, mapping) in self.joint_mappings.iter().enumerate() {
-            let Some(actuator_id) = mapping.actuator_id else {
-                continue;
-            };
-            ctrl[actuator_id] = f64::from(targets.positions[joint_index]);
+        for (actuator_id, command) in commanded_ctrls {
+            ctrl[actuator_id] = command;
         }
 
         // Advance simulation by the configured number of substeps.
@@ -411,6 +470,18 @@ fn write_temporary_meshless_model(model_path: &Path, contents: &[u8]) -> Result<
     }
 }
 
+fn floating_base_mapping(model: &MjModel) -> Option<FloatingBaseMapping> {
+    model
+        .jnt_type()
+        .iter()
+        .position(|joint_type| *joint_type == MjtJoint::mjJNT_FREE)
+        .and_then(|joint_id| {
+            let qpos_adr = usize::try_from(model.jnt_qposadr()[joint_id]).ok()?;
+            let qvel_adr = usize::try_from(model.jnt_dofadr()[joint_id]).ok()?;
+            Some(FloatingBaseMapping { qpos_adr, qvel_adr })
+        })
+}
+
 fn joint_mapping(model: &MjModel, joint_name: &str) -> Result<JointMapping, SimError> {
     let Some(joint_info) = model.joint(joint_name) else {
         return Ok(JointMapping::default());
@@ -435,17 +506,68 @@ fn joint_mapping(model: &MjModel, joint_name: &str) -> Result<JointMapping, SimE
         .iter()
         .zip(model.actuator_trnid().iter())
         .position(|(transmission, ids)| *transmission == MjtTrn::mjTRN_JOINT && ids[0] == joint_id);
+    let ctrl_range = actuator_id.and_then(|id| {
+        model
+            .actuator_ctrllimited()
+            .get(id)
+            .copied()
+            .filter(|limited| *limited)
+            .map(|_| model.actuator_ctrlrange()[id])
+    });
 
     Ok(JointMapping {
         qpos_adr: Some(qpos_adr),
         qvel_adr: Some(qvel_adr),
         actuator_id,
+        ctrl_range,
     })
 }
 
 #[allow(clippy::cast_possible_truncation)]
 fn mj_scalar(value: f64) -> f32 {
     value as f32
+}
+
+fn gravity_from_free_joint_quaternion(quat_wxyz: [f64; 4]) -> [f32; 3] {
+    let [w, x, y, z] = quat_wxyz;
+    let qw2 = w * w;
+    let qx2 = x * x;
+    let qy2 = y * y;
+    let qz2 = z * z;
+
+    let gx = 2.0 * (w * y - x * z);
+    let gy = -2.0 * (w * x + y * z);
+    let gz = -(qw2 - qx2 - qy2 + qz2);
+
+    let norm = (gx * gx + gy * gy + gz * gz).sqrt();
+    if norm > f64::EPSILON {
+        [
+            mj_scalar(gx / norm),
+            mj_scalar(gy / norm),
+            mj_scalar(gz / norm),
+        ]
+    } else {
+        [0.0, 0.0, -1.0]
+    }
+}
+
+fn compute_pd_control(
+    target_position: f32,
+    current_position: f64,
+    current_velocity: f64,
+    kp: f32,
+    kd: f32,
+    ctrl_range: Option<[f64; 2]>,
+) -> f64 {
+    let position_error = f64::from(target_position) - current_position;
+    let velocity_error = -current_velocity;
+    let command = f64::from(kp) * position_error + f64::from(kd) * velocity_error;
+
+    if let Some([min, max]) = ctrl_range {
+        command.clamp(min, max)
+    } else {
+        command
+    }
 }
 
 fn find_sensor_span(
@@ -496,7 +618,7 @@ fn initialize_state(
             data.qvel_mut()[qvel_adr] = 0.0;
         }
         if let Some(actuator_id) = mapping.actuator_id {
-            data.ctrl_mut()[actuator_id] = default_position;
+            data.ctrl_mut()[actuator_id] = 0.0;
         }
     }
 
@@ -587,5 +709,145 @@ mod tests {
                 timestamp: Instant::now(),
             })
             .expect("sending 35-dof targets should skip unmapped joints instead of failing");
+    }
+
+    #[test]
+    fn send_joint_targets_default_pose_yields_zero_pd_control() {
+        let robot = load_robot_config("configs/robots/unitree_g1.toml");
+        let mut transport = MujocoTransport::new(
+            MujocoConfig {
+                model_path: g1_model_path(),
+                timestep: 0.002,
+                substeps: 1,
+            },
+            robot.clone(),
+        )
+        .expect("transport should initialize");
+
+        transport
+            .send_joint_targets(&JointPositionTargets {
+                positions: robot.default_pose.clone(),
+                timestamp: Instant::now(),
+            })
+            .expect("default pose command should succeed");
+
+        let ctrl = transport.data.ctrl();
+        for mapping in &transport.joint_mappings {
+            let Some(actuator_id) = mapping.actuator_id else {
+                continue;
+            };
+            assert!(
+                ctrl[actuator_id].abs() < 1e-9,
+                "default pose should produce near-zero PD control, got {} for actuator {}",
+                ctrl[actuator_id],
+                actuator_id
+            );
+        }
+    }
+
+    #[test]
+    fn send_joint_targets_computes_pd_control_from_position_error() {
+        let robot = load_robot_config("configs/robots/unitree_g1.toml");
+        let mut transport = MujocoTransport::new(
+            MujocoConfig {
+                model_path: g1_model_path(),
+                timestep: 0.002,
+                substeps: 1,
+            },
+            robot.clone(),
+        )
+        .expect("transport should initialize");
+
+        let mut positions = robot.default_pose.clone();
+        positions[0] += 0.1;
+
+        transport
+            .send_joint_targets(&JointPositionTargets {
+                positions,
+                timestamp: Instant::now(),
+            })
+            .expect("offset command should succeed");
+
+        let actuator_id = transport.joint_mappings[0]
+            .actuator_id
+            .expect("first G1 joint should map to an actuator");
+        let expected = f64::from(robot.pd_gains[0].kp) * 0.1;
+        let actual = transport.data.ctrl()[actuator_id];
+
+        assert!(
+            (actual - expected).abs() < 1e-6,
+            "expected PD control {expected}, got {actual}",
+        );
+    }
+
+    #[test]
+    fn send_joint_targets_clamps_pd_control_to_actuator_ctrlrange() {
+        let robot = load_robot_config("configs/robots/unitree_g1.toml");
+        let mut transport = MujocoTransport::new(
+            MujocoConfig {
+                model_path: g1_model_path(),
+                timestep: 0.002,
+                substeps: 1,
+            },
+            robot.clone(),
+        )
+        .expect("transport should initialize");
+
+        let mut positions = robot.default_pose.clone();
+        positions[0] += 100.0;
+
+        transport
+            .send_joint_targets(&JointPositionTargets {
+                positions,
+                timestamp: Instant::now(),
+            })
+            .expect("large offset command should succeed");
+
+        let mapping = transport.joint_mappings[0];
+        let actuator_id = mapping
+            .actuator_id
+            .expect("first G1 joint should map to an actuator");
+        let [_, max] = mapping
+            .ctrl_range
+            .expect("G1 hip actuator should be control-limited");
+        let actual = transport.data.ctrl()[actuator_id];
+
+        assert!(
+            (actual - max).abs() < 1e-9,
+            "expected control clamp at {max}, got {actual}",
+        );
+    }
+
+    #[test]
+    fn gravity_from_free_joint_quaternion_matches_identity_pose() {
+        let gravity = gravity_from_free_joint_quaternion([1.0, 0.0, 0.0, 0.0]);
+        assert!((gravity[0] - 0.0).abs() < 1e-6);
+        assert!((gravity[1] - 0.0).abs() < 1e-6);
+        assert!((gravity[2] + 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn recv_imu_uses_floating_base_state_when_available() {
+        let robot = load_robot_config("configs/robots/unitree_g1.toml");
+        let mut transport = MujocoTransport::new(
+            MujocoConfig {
+                model_path: g1_model_path(),
+                timestep: 0.002,
+                substeps: 1,
+            },
+            robot,
+        )
+        .expect("transport should initialize");
+
+        let floating_base = transport
+            .floating_base
+            .expect("G1 model should expose a floating base");
+        transport.data.qvel_mut()[floating_base.qvel_adr + 3] = 1.25;
+        transport.data.qvel_mut()[floating_base.qvel_adr + 4] = -0.5;
+        transport.data.qvel_mut()[floating_base.qvel_adr + 5] = 0.25;
+
+        let imu = transport.recv_imu().expect("imu should be readable");
+        assert_eq!(imu.gravity_vector, [0.0, 0.0, -1.0]);
+        assert_eq!(imu.angular_velocity, [1.25, -0.5, 0.25]);
     }
 }

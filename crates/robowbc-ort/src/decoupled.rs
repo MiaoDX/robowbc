@@ -24,15 +24,20 @@ const GROOT_G1_HISTORY_SINGLE_OBS_DIM: usize = 86;
 const GROOT_G1_HISTORY_LEN: usize = 6;
 const GROOT_G1_HISTORY_OBS_DIM: usize = GROOT_G1_HISTORY_SINGLE_OBS_DIM * GROOT_G1_HISTORY_LEN;
 const GROOT_G1_NUM_ACTIONS: usize = 15;
+const GROOT_G1_NUM_BODY_JOINTS: usize = 29;
 #[allow(clippy::cast_possible_wrap)]
 const GROOT_G1_HISTORY_OBS_DIM_I64: i64 = GROOT_G1_HISTORY_OBS_DIM as i64;
 const GROOT_G1_ACTION_SCALE: f32 = 0.25;
+const GROOT_G1_ANG_VEL_SCALE: f32 = 0.5;
 const GROOT_G1_DOF_POS_SCALE: f32 = 1.0;
 const GROOT_G1_DOF_VEL_SCALE: f32 = 0.05;
 const GROOT_G1_CMD_SCALE: [f32; 3] = [2.0, 2.0, 0.5];
 const GROOT_G1_HEIGHT_CMD: f32 = 0.74;
 const GROOT_G1_COMMAND_SWITCH_THRESHOLD: f32 = 0.05;
 const GROOT_G1_MODEL_INPUT_SHAPE: [i64; 2] = [1, GROOT_G1_HISTORY_OBS_DIM_I64];
+const GROOT_G1_DEFAULT_LOWER_BODY_POSE: [f32; GROOT_G1_NUM_ACTIONS] = [
+    -0.1, 0.0, 0.0, 0.3, -0.2, 0.0, -0.1, 0.0, 0.0, 0.3, -0.2, 0.0, 0.0, 0.0, 0.0,
+];
 
 fn default_control_frequency_hz() -> u32 {
     50
@@ -85,6 +90,12 @@ impl DecoupledHistoryRuntime {
                 "groot_g1_history expects 15 lower_body_joints".to_owned(),
             ));
         }
+        if config.robot.joint_count != GROOT_G1_NUM_BODY_JOINTS {
+            return Err(WbcError::InvalidObservation(format!(
+                "groot_g1_history expects a 29-DOF body robot config, got {} joints",
+                config.robot.joint_count
+            )));
+        }
 
         let stand_backend = match &config.stand_model {
             Some(stand_model) => Some(
@@ -94,18 +105,12 @@ impl DecoupledHistoryRuntime {
             None => None,
         };
 
-        let default_lower_body_pose = config
-            .lower_body_joints
-            .iter()
-            .map(|&idx| config.robot.default_pose[idx])
-            .collect();
-
         Ok(Self {
             walk_backend,
             stand_backend,
             obs_history: VecDeque::with_capacity(GROOT_G1_HISTORY_LEN),
             last_action: vec![0.0; GROOT_G1_NUM_ACTIONS],
-            default_lower_body_pose,
+            default_lower_body_pose: GROOT_G1_DEFAULT_LOWER_BODY_POSE.to_vec(),
         })
     }
 
@@ -262,7 +267,6 @@ impl DecoupledWbcPolicy {
         let single_obs = build_groot_g1_single_observation(
             obs,
             twist,
-            &self.lower_body_joints,
             &runtime.default_lower_body_pose,
             &runtime.last_action,
         );
@@ -395,7 +399,6 @@ impl RegistryPolicy for DecoupledWbcPolicy {
 fn build_groot_g1_single_observation(
     obs: &Observation,
     twist: &Twist,
-    lower_body_joints: &[usize],
     default_lower_body_pose: &[f32],
     last_action: &[f32],
 ) -> Vec<f32> {
@@ -404,25 +407,25 @@ fn build_groot_g1_single_observation(
     single_obs[1] = twist.linear[1] * GROOT_G1_CMD_SCALE[1];
     single_obs[2] = twist.angular[2] * GROOT_G1_CMD_SCALE[2];
     single_obs[3] = GROOT_G1_HEIGHT_CMD;
-    // GR00T WholeBodyControl contract v1 leaves angular-velocity slots [7..9] at
-    // zero regardless of `obs.angular_velocity`; the model was trained without them.
-    // Keep the explicit zero-assigns to match the upstream observation layout table.
-    single_obs[7] = 0.0;
-    single_obs[8] = 0.0;
-    single_obs[9] = 0.0;
+    single_obs[7] = obs.angular_velocity[0] * GROOT_G1_ANG_VEL_SCALE;
+    single_obs[8] = obs.angular_velocity[1] * GROOT_G1_ANG_VEL_SCALE;
+    single_obs[9] = obs.angular_velocity[2] * GROOT_G1_ANG_VEL_SCALE;
     single_obs[10..13].copy_from_slice(&obs.gravity_vector);
 
-    for (i, (&joint_idx, &default_pose)) in lower_body_joints
-        .iter()
-        .zip(default_lower_body_pose.iter())
-        .enumerate()
-    {
-        single_obs[13 + i] =
-            (obs.joint_positions[joint_idx] - default_pose) * GROOT_G1_DOF_POS_SCALE;
-        single_obs[13 + GROOT_G1_NUM_ACTIONS + i] =
-            obs.joint_velocities[joint_idx] * GROOT_G1_DOF_VEL_SCALE;
-        single_obs[13 + 2 * GROOT_G1_NUM_ACTIONS + i] = last_action[i];
+    let joint_count = obs.joint_positions.len();
+    debug_assert_eq!(joint_count, GROOT_G1_NUM_BODY_JOINTS);
+    let position_start = 13;
+    let velocity_start = position_start + joint_count;
+    let action_start = velocity_start + joint_count;
+
+    for i in 0..joint_count {
+        let default_pose = default_lower_body_pose.get(i).copied().unwrap_or(0.0);
+        single_obs[position_start + i] =
+            (obs.joint_positions[i] - default_pose) * GROOT_G1_DOF_POS_SCALE;
+        single_obs[velocity_start + i] = obs.joint_velocities[i] * GROOT_G1_DOF_VEL_SCALE;
     }
+    single_obs[action_start..action_start + GROOT_G1_NUM_ACTIONS]
+        .copy_from_slice(&last_action[..GROOT_G1_NUM_ACTIONS]);
 
     single_obs
 }
@@ -811,16 +814,16 @@ mod tests {
     #[test]
     fn groot_history_builds_expected_single_observation() {
         let robot = g1_robot_config();
-        let lower_body_joints: Vec<usize> = (0..15).collect();
-        let default_lower_body_pose = lower_body_joints
-            .iter()
-            .map(|&idx| robot.default_pose[idx])
-            .collect::<Vec<_>>();
+        let mut joint_positions = vec![0.0; robot.joint_count];
+        joint_positions[..GROOT_G1_NUM_ACTIONS].copy_from_slice(&GROOT_G1_DEFAULT_LOWER_BODY_POSE);
+        joint_positions[18] = 0.75;
+        let mut joint_velocities = vec![0.0; robot.joint_count];
+        joint_velocities[18] = -1.0;
         let obs = Observation {
-            joint_positions: robot.default_pose.clone(),
-            joint_velocities: vec![0.0; robot.joint_count],
+            joint_positions,
+            joint_velocities,
             gravity_vector: [0.0, 0.0, -1.0],
-            angular_velocity: [0.0, 0.0, 0.0],
+            angular_velocity: [0.2, -0.4, 0.6],
             command: WbcCommand::Velocity(Twist {
                 linear: [0.5, 0.1, 0.0],
                 angular: [0.0, 0.0, 0.2],
@@ -834,8 +837,7 @@ mod tests {
         let single_obs = build_groot_g1_single_observation(
             &obs,
             twist,
-            &lower_body_joints,
-            &default_lower_body_pose,
+            &GROOT_G1_DEFAULT_LOWER_BODY_POSE,
             &[0.0; GROOT_G1_NUM_ACTIONS],
         );
 
@@ -844,9 +846,15 @@ mod tests {
         assert!((single_obs[1] - 0.2).abs() < 1e-6);
         assert!((single_obs[2] - 0.1).abs() < 1e-6);
         assert!((single_obs[3] - GROOT_G1_HEIGHT_CMD).abs() < 1e-6);
+        assert!((single_obs[7] - 0.1).abs() < 1e-6);
+        assert!((single_obs[8] + 0.2).abs() < 1e-6);
+        assert!((single_obs[9] - 0.3).abs() < 1e-6);
         assert!((single_obs[10] - 0.0).abs() < 1e-6);
         assert!((single_obs[11] - 0.0).abs() < 1e-6);
         assert!((single_obs[12] + 1.0).abs() < 1e-6);
+        assert!((single_obs[13 + 18] - 0.75).abs() < 1e-6);
+        assert!((single_obs[13 + GROOT_G1_NUM_BODY_JOINTS + 18] + 0.05).abs() < 1e-6);
+        assert!(single_obs[71..86].iter().all(|value| value.abs() < 1e-6));
     }
 
     #[test]
@@ -884,7 +892,7 @@ mod tests {
             .predict(&base_obs)
             .expect("balance-model inference should succeed");
         for &idx in &[0_usize, 7, 14] {
-            let expected = robot.default_pose[idx] - GROOT_G1_ACTION_SCALE;
+            let expected = GROOT_G1_DEFAULT_LOWER_BODY_POSE[idx] - GROOT_G1_ACTION_SCALE;
             assert!((balance_targets.positions[idx] - expected).abs() < 1e-6);
         }
 
@@ -901,7 +909,7 @@ mod tests {
             .predict(&walk_obs)
             .expect("walk-model inference should succeed");
         for &idx in &[0_usize, 7, 14] {
-            let expected = robot.default_pose[idx] + GROOT_G1_ACTION_SCALE;
+            let expected = GROOT_G1_DEFAULT_LOWER_BODY_POSE[idx] + GROOT_G1_ACTION_SCALE;
             assert!((walk_targets.positions[idx] - expected).abs() < 1e-6);
         }
     }
