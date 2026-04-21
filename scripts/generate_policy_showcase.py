@@ -25,11 +25,13 @@ POLICIES = [
         "title": "GEAR-SONIC",
         "config": "configs/showcase/gear_sonic_real.toml",
         "source": "NVIDIA GR00T",
-        "summary": "Real CPU planner_sonic.onnx run inside the MuJoCo-backed G1 showcase using the published multi-input velocity contract and the full Unitree G1 robot config.",
-        "coverage": "Planner-only locomotion showcase",
+        "summary": "Real CPU planner_sonic.onnx run inside the MuJoCo-backed G1 showcase, driven by an explicit staged velocity-tracking script instead of a single constant command.",
+        "coverage": "Planner-only velocity tracking on the published G1 planner contract",
         "execution_kind": "real",
         "checkpoint_source": "Published GEAR-SONIC ONNX checkpoints",
-        "command_source": "runtime.velocity",
+        "command_source": "runtime.velocity_schedule",
+        "demo_family": "Velocity tracking",
+        "demo_sequence": "Stand, accelerate from 0.0 to 0.6 m/s over 2 s, command a 90 degree right turn over 1 s, accelerate into a 1.0 m/s run over 3 s, then settle back to stand.",
         "model_artifact": "models/gear-sonic/planner_sonic.onnx",
         "required_paths": [
             "models/gear-sonic/model_encoder.onnx",
@@ -43,11 +45,13 @@ POLICIES = [
         "title": "Decoupled WBC",
         "config": "configs/showcase/decoupled_wbc_real.toml",
         "source": "NVIDIA GR00T",
-        "summary": "Real public GR00T WholeBodyControl run inside the MuJoCo-backed G1 showcase using the official 516D history contract plus separate balance and walk checkpoints.",
-        "coverage": "Lower body RL + upper body default-pose baseline",
+        "summary": "Real public GR00T WholeBodyControl run inside the MuJoCo-backed G1 showcase, driven by the same staged locomotion script used for the velocity-only cards.",
+        "coverage": "Lower-body RL locomotion with default upper-body posture",
         "execution_kind": "real",
         "checkpoint_source": "Published GR00T WholeBodyControl ONNX checkpoints",
-        "command_source": "runtime.velocity",
+        "command_source": "runtime.velocity_schedule",
+        "demo_family": "Velocity tracking",
+        "demo_sequence": "Stand, accelerate from 0.0 to 0.6 m/s over 2 s, command a 90 degree right turn over 1 s, accelerate into a 1.0 m/s run over 3 s, then settle back to stand.",
         "model_artifact": "models/decoupled-wbc/GR00T-WholeBodyControl-Walk.onnx",
         "required_paths": [
             "models/decoupled-wbc/GR00T-WholeBodyControl-Balance.onnx",
@@ -60,11 +64,13 @@ POLICIES = [
         "title": "BFM-Zero",
         "config": "configs/bfm_zero_g1.toml",
         "source": "CMU",
-        "summary": "Real public G1 tracking contract running inside the MuJoCo-backed showcase with a 721D prompt-conditioned observation, IMU gyro/history features, and a 256D latent context.",
-        "coverage": "Full-body prompt-conditioned G1 controller",
+        "summary": "Real public G1 tracking contract running inside the MuJoCo-backed showcase with a 721D prompt-conditioned observation, IMU gyro/history features, and the shipped walking latent context.",
+        "coverage": "Reference/context walking tracking",
         "execution_kind": "real",
         "checkpoint_source": "Prepared BFM-Zero ONNX checkpoint plus tracking context assets",
         "command_source": "runtime.motion_tokens",
+        "demo_family": "Reference / pose tracking",
+        "demo_sequence": "Replays the shipped `zs_walking.npy` latent walking context. No verified public waving or upper-body mocap clip is bundled in this repo today.",
         "model_artifact": "models/bfm_zero/bfm_zero_g1.onnx",
         "required_paths": [
             "models/bfm_zero/bfm_zero_g1.onnx",
@@ -82,6 +88,8 @@ POLICIES = [
         "execution_kind": "real",
         "checkpoint_source": "User-exported HOVER ONNX checkpoint",
         "command_source": "runtime.velocity",
+        "demo_family": "Velocity tracking",
+        "demo_sequence": "Blocked until a compatible public checkpoint exists; intended to use an explicit locomotion command rather than a fabricated upper-body demo.",
         "model_artifact": "models/hover/hover_h1.onnx",
         "required_paths": [
             "models/hover/hover_h1.onnx",
@@ -93,11 +101,13 @@ POLICIES = [
         "title": "WBC-AGILE",
         "config": "configs/showcase/wbc_agile_real.toml",
         "source": "NVIDIA Isaac",
-        "summary": "Real public G1 checkpoint using the published recurrent history tensors and lower-body target mapping. The showcase reuses the public 29-DOF G1 MuJoCo embodiment, so the extra finger joints remain at their default pose in the recorded scene.",
+        "summary": "Real public G1 checkpoint using the published recurrent history tensors and lower-body target mapping, driven by the staged velocity-tracking script rather than a single constant command.",
         "coverage": "Published G1 locomotion checkpoint on the public 29-DOF embodiment",
         "execution_kind": "real",
         "checkpoint_source": "Published NVIDIA Isaac G1 ONNX checkpoint",
-        "command_source": "runtime.velocity",
+        "command_source": "runtime.velocity_schedule",
+        "demo_family": "Velocity tracking",
+        "demo_sequence": "Stand, accelerate from 0.0 to 0.6 m/s over 2 s, command a 90 degree right turn over 1 s, accelerate into a 1.0 m/s run over 3 s, then settle back to stand.",
         "model_artifact": "models/wbc-agile/unitree_g1_velocity_e2e.onnx",
         "required_paths": [
             "models/wbc-agile/unitree_g1_velocity_e2e.onnx",
@@ -114,6 +124,8 @@ POLICIES = [
         "execution_kind": "experimental",
         "checkpoint_source": "Local/private WholeBodyVLA ONNX checkpoint",
         "command_source": "runtime.kinematic_pose",
+        "demo_family": "Reference / pose tracking",
+        "demo_sequence": "Pose-target handoff only. This remains blocked until a runnable upstream model exists; the showcase does not invent a fake upper-body clip.",
         "model_artifact": "models/wholebody_vla/wholebody_vla_x2.onnx",
         "required_paths": [
             "models/wholebody_vla/wholebody_vla_x2.onnx",
@@ -125,7 +137,7 @@ POLICIES = [
 NOT_YET_SHOWCASED = [
     {
         "name": "gear_sonic_tracking",
-        "reason": "The Rust runtime now exposes only a narrow `standing_placeholder_tracking` alias for the encoder+decoder standing-pose path. It is not a separate generic motion-reference showcase card.",
+        "reason": "Official GEAR-Sonic reference clips exist upstream, but this checkout only has Git LFS pointer files for them and the Rust runtime still lacks a full motion-reference encoder path. The showcase keeps this blocked instead of faking an upper-body demo.",
     },
     {
         "name": "wbc_agile_t1",
@@ -146,6 +158,11 @@ DISPLAY_ORDER = {
     "bfm_zero": 3,
     "hover": 4,
     "wholebody_vla": 5,
+}
+
+DEMO_FAMILY_DESCRIPTIONS = {
+    "Velocity tracking": "Policies driven by an explicit locomotion command profile. These cards now use the same staged sequence instead of a single constant velocity.",
+    "Reference / pose tracking": "Policies driven by pose targets, motion references, or latent tracking context. If no verified official clip is wired, the card stays blocked instead of inventing a demo.",
 }
 
 
@@ -297,6 +314,9 @@ def resolve_showcase_context(repo_root: Path, policy: dict[str, object]) -> dict
     app_config = tomllib.loads(config_path.read_text(encoding="utf-8"))
     comm_cfg = app_config.get("comm") or app_config.get("communication") or {}
     frequency_hz = int(comm_cfg.get("frequency_hz", 50) or 50)
+    runtime_cfg = app_config.get("runtime") or {}
+    configured_max_ticks = runtime_cfg.get("max_ticks")
+    report_max_frames = int(policy.get("report_max_frames") or configured_max_ticks or 120)
     existing_sim = app_config.get("sim")
 
     robot_cfg_path = app_config.get("robot", {}).get("config_path")
@@ -316,6 +336,7 @@ def resolve_showcase_context(repo_root: Path, policy: dict[str, object]) -> dict
             "substeps": substeps,
             "robot_config_path": str(robot_cfg_path) if robot_cfg_path else None,
             "config_has_sim_section": True,
+            "report_max_frames": report_max_frames,
         }
 
     if robot_model_path is None:
@@ -326,6 +347,7 @@ def resolve_showcase_context(repo_root: Path, policy: dict[str, object]) -> dict
             "substeps": None,
             "robot_config_path": str(robot_cfg_path) if robot_cfg_path else None,
             "config_has_sim_section": False,
+            "report_max_frames": report_max_frames,
         }
 
     timestep = float(policy.get("showcase_timestep", 0.002))
@@ -338,6 +360,7 @@ def resolve_showcase_context(repo_root: Path, policy: dict[str, object]) -> dict
         "substeps": substeps,
         "robot_config_path": str(robot_cfg_path) if robot_cfg_path else None,
         "config_has_sim_section": False,
+        "report_max_frames": report_max_frames,
     }
 
 
@@ -373,7 +396,7 @@ def compose_showcase_config(
                 "",
                 "[report]",
                 f'output_path = "{json_path.as_posix()}"',
-                "max_frames = 120",
+                f'max_frames = {int(showcase_context["report_max_frames"])}',
             ]
         )
     )
@@ -421,6 +444,8 @@ def policy_meta(
         "execution_kind": policy["execution_kind"],
         "checkpoint_source": policy["checkpoint_source"],
         "command_source": policy["command_source"],
+        "demo_family": policy["demo_family"],
+        "demo_sequence": policy["demo_sequence"],
         "model_artifact": policy.get("model_artifact", ""),
         "config_path": policy["config"],
         "required_paths": list(policy.get("required_paths", [])),
@@ -640,6 +665,22 @@ def display_sort_key(index: int, entry: dict[str, object]) -> tuple[int, int, in
 
 
 
+def render_demo_section(title: str, cards: list[str]) -> str:
+    if not cards:
+        return ""
+
+    description = DEMO_FAMILY_DESCRIPTIONS.get(title, "")
+    return f'''<section class="demo-section">
+      <div class="section-header">
+        <h2>{html.escape(title)}</h2>
+        <p class="muted">{html.escape(description)}</p>
+      </div>
+      <div class="cards">
+        {''.join(cards)}
+      </div>
+    </section>'''
+
+
 def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: Path) -> None:
     generated_at = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
     sha = os.environ.get("GITHUB_SHA", "")
@@ -651,7 +692,8 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
     viewer_assets = vendor_rerun_web_viewer(repo_root, output_dir)
 
     overview_rows: list[str] = []
-    cards: list[str] = []
+    velocity_cards: list[str] = []
+    tracking_cards: list[str] = []
 
     sorted_entries = [
         entry
@@ -685,6 +727,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
             f"<tr><td><strong>{html.escape(str(meta['title']))}</strong><div class=\"muted\">{html.escape(str(entry['policy_name']))}</div></td>"
             f"<td>{status_html}</td>"
             f"<td>{provenance_html}</td>"
+            f"<td>{html.escape(str(meta['demo_family']))}</td>"
             f"<td>{html.escape(str(meta['coverage']))}</td>"
             f"<td>{ticks}</td>"
             f"<td>{avg_inference}</td>"
@@ -704,8 +747,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
         if status != "ok":
             missing_paths = meta.get("missing_paths", [])
             missing_html = "<br />".join(f"<code>{html.escape(path)}</code>" for path in missing_paths)
-            cards.append(
-                f'''<section class="card blocked-card">
+            card_html = f'''<section class="card blocked-card">
   <div class="card-header">
     <div>
       <h2>{html.escape(str(meta['title']))}</h2>
@@ -736,6 +778,14 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
       <code>{html.escape(str(meta['checkpoint_source']))}</code>
     </div>
     <div>
+      <span>Demo family</span>
+      <strong>{html.escape(str(meta['demo_family']))}</strong>
+    </div>
+    <div>
+      <span>Demo sequence</span>
+      <strong>{html.escape(str(meta['demo_sequence']))}</strong>
+    </div>
+    <div>
       <span>Model artifact</span>
       <code>{html.escape(str(meta['model_artifact']))}</code>
     </div>
@@ -752,7 +802,10 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
     <div>{missing_html or '<span class="muted">None</span>'}</div>
   </div>
 </section>'''
-            )
+            if str(meta["demo_family"]) == "Velocity tracking":
+                velocity_cards.append(card_html)
+            else:
+                tracking_cards.append(card_html)
             continue
 
         frames = entry.get("frames", [])
@@ -794,8 +847,32 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
             }
         ]
 
-        cards.append(
-            f'''<section class="card" id="policy-{html.escape(str(entry["policy_name"]))}">
+        command_kind = str(entry.get("command_kind", ""))
+        if command_kind in {"velocity", "velocity_schedule"}:
+            command_series = [
+                {
+                    "label": "vx_cmd",
+                    "values": series_from_frames(frames, "command_data", 0),
+                    "color": COLORS[2],
+                },
+                {
+                    "label": "yaw_cmd",
+                    "values": series_from_frames(frames, "command_data", 2),
+                    "color": COLORS[3],
+                },
+            ]
+            command_chart_title = "Velocity command profile"
+        else:
+            command_series = [
+                {
+                    "label": f"{joint_names[0]} velocity" if joint_names else "joint0_velocity",
+                    "values": series_from_frames(frames, "actual_velocities", 0),
+                    "color": COLORS[2],
+                }
+            ]
+            command_chart_title = "Observed joint velocity"
+
+        card_html = f'''<section class="card" id="policy-{html.escape(str(entry["policy_name"]))}">
   <div class="card-header">
     <div>
       <h2>{html.escape(str(meta['title']))}</h2>
@@ -822,6 +899,10 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
     <figure>
       <figcaption>Inference latency</figcaption>
       {spark_svg(latency_series)}
+    </figure>
+    <figure>
+      <figcaption>{html.escape(command_chart_title)}</figcaption>
+      {spark_svg(command_series)}
     </figure>
   </div>
   <div class="rerun-block">
@@ -858,6 +939,14 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
       <code>{html.escape(str(meta['checkpoint_source']))}</code>
     </div>
     <div>
+      <span>Demo family</span>
+      <strong>{html.escape(str(meta['demo_family']))}</strong>
+    </div>
+    <div>
+      <span>Demo sequence</span>
+      <strong>{html.escape(str(meta['demo_sequence']))}</strong>
+    </div>
+    <div>
       <span>Model artifact</span>
       <code>{html.escape(str(meta['model_artifact']))}</code>
     </div>
@@ -876,7 +965,10 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
   </div>
   <p class="links"><a href="{html.escape(str(meta['rrd_file']))}">Rerun recording</a> · <a href="{html.escape(str(meta['json_file']))}">JSON summary</a> · <a href="{html.escape(str(meta['log_file']))}">run log</a> · <code>{html.escape(str(meta['config_path']))}</code></p>
 </section>'''
-        )
+        if str(meta["demo_family"]) == "Velocity tracking":
+            velocity_cards.append(card_html)
+        else:
+            tracking_cards.append(card_html)
 
     excluded = "".join(
         f"<li><strong>{html.escape(item['name'])}</strong>: {html.escape(item['reason'])}</li>"
@@ -924,6 +1016,9 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
     .hero p {{ max-width: 80ch; line-height: 1.6; }}
     .meta-row {{ display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: 0.95rem; }}
     .overview, .footer-panel {{ background: var(--panel); border: 1px solid var(--border); border-radius: 24px; box-shadow: var(--shadow); padding: 24px; margin-bottom: 28px; }}
+    .demo-section {{ margin-bottom: 28px; }}
+    .section-header {{ margin-bottom: 16px; }}
+    .section-header p {{ max-width: 80ch; }}
     table {{ width: 100%; border-collapse: collapse; }}
     th, td {{ text-align: left; padding: 12px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }}
     th {{ font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }}
@@ -977,6 +1072,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
     <section class="hero">
       <h1>RoboWBC Policy Showcase</h1>
       <p>This artifact is generated automatically in CI from the set of real policy integrations that are wired today. Successful cards run real checkpoints through the MuJoCo transport and save the resulting 3D Rerun scene; when assets are unavailable, the page degrades to a visible blocked card instead of pretending the integration exists.</p>
+      <p class="muted">The showcase is now split into explicit velocity-tracking demos and reference or pose-tracking demos. Velocity cards use a staged command profile instead of a single constant command, while upper-body or reference demos stay blocked unless a verified official asset and runtime path actually exist.</p>
       <p class="muted">The public G1 cards currently load a meshless MuJoCo MJCF variant because this repository does not redistribute Unitree's upstream STL mesh bundle. The dynamics stay MuJoCo-backed, while the Rerun robot scene is reconstructed from the same open MJCF kinematic tree.</p>
       <p class="muted">Each successful card lazy-loads its saved Rerun recording when visible. The raw <code>.rrd</code> files are still available for download, and serving the folder over HTTP remains the most reliable way to open the interactive viewer locally.</p>
       <div class="meta-row">
@@ -991,7 +1087,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
       <p class="muted">Successful cards use real checkpoints or public asset bundles cached by CI and must activate the requested showcase transport. Blocked cards surface the exact missing files or unavailable upstream artifacts instead of falling back to mock output.</p>
       <table>
         <thead>
-          <tr><th>Policy</th><th>Status</th><th>Run path</th><th>Coverage</th><th>Ticks</th><th>Avg inference</th><th>Achieved rate</th><th>Dropped frames</th></tr>
+          <tr><th>Policy</th><th>Status</th><th>Run path</th><th>Demo family</th><th>Coverage</th><th>Ticks</th><th>Avg inference</th><th>Achieved rate</th><th>Dropped frames</th></tr>
         </thead>
         <tbody>
           {''.join(overview_rows)}
@@ -999,9 +1095,8 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
       </table>
     </section>
 
-    <section class="cards">
-      {''.join(cards)}
-    </section>
+    {render_demo_section("Velocity tracking", velocity_cards)}
+    {render_demo_section("Reference / pose tracking", tracking_cards)}
 
     <section class="footer-panel">
       <h2>Not Yet In This Showcase</h2>
