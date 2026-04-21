@@ -147,6 +147,27 @@ impl MujocoTransport {
     pub fn uses_meshless_public_fallback(&self) -> bool {
         self.model_variant == "meshless-public-mjcf"
     }
+
+    /// Returns the current floating-base pose when the loaded MJCF exposes a
+    /// free joint root.
+    #[must_use]
+    pub fn floating_base_pose(&self) -> Option<([f32; 3], [f32; 4])> {
+        let floating_base = self.floating_base?;
+        let qpos = self.data.qpos();
+        Some((
+            [
+                mj_scalar(qpos[floating_base.qpos_adr]),
+                mj_scalar(qpos[floating_base.qpos_adr + 1]),
+                mj_scalar(qpos[floating_base.qpos_adr + 2]),
+            ],
+            [
+                mj_scalar(qpos[floating_base.qpos_adr + 4]),
+                mj_scalar(qpos[floating_base.qpos_adr + 5]),
+                mj_scalar(qpos[floating_base.qpos_adr + 6]),
+                mj_scalar(qpos[floating_base.qpos_adr + 3]),
+            ],
+        ))
+    }
 }
 
 impl RobotTransport for MujocoTransport {

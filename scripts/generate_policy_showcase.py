@@ -568,6 +568,85 @@ def series_from_frames(frames: list[dict[str, object]], field: str, joint_idx: i
     return values
 
 
+def yaw_from_rotation_xyzw(rotation_xyzw: list[float]) -> float:
+    x, y, z, w = [float(value) for value in rotation_xyzw]
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    return math.atan2(siny_cosp, cosy_cosp)
+
+
+def wrap_angle_rad(angle_rad: float) -> float:
+    wrapped = angle_rad
+    while wrapped > math.pi:
+        wrapped -= 2.0 * math.pi
+    while wrapped < -math.pi:
+        wrapped += 2.0 * math.pi
+    return wrapped
+
+
+def derive_velocity_tracking_series(
+    frames: list[dict[str, object]], control_frequency_hz: int
+) -> dict[str, list[float]] | None:
+    if control_frequency_hz <= 0 or len(frames) < 2:
+        return None
+
+    dt_secs = 1.0 / control_frequency_hz
+    vx_cmd: list[float] = []
+    vx_actual: list[float] = []
+    yaw_cmd: list[float] = []
+    yaw_actual: list[float] = []
+
+    for previous, current in zip(frames, frames[1:]):
+        command_data = previous.get("command_data")
+        previous_pose = previous.get("base_pose")
+        current_pose = current.get("base_pose")
+        if not (
+            isinstance(command_data, list)
+            and len(command_data) >= 3
+            and isinstance(previous_pose, dict)
+            and isinstance(current_pose, dict)
+        ):
+            continue
+
+        previous_position = previous_pose.get("position_world")
+        previous_rotation = previous_pose.get("rotation_xyzw")
+        current_position = current_pose.get("position_world")
+        current_rotation = current_pose.get("rotation_xyzw")
+        if not (
+            isinstance(previous_position, list)
+            and len(previous_position) >= 2
+            and isinstance(previous_rotation, list)
+            and len(previous_rotation) == 4
+            and isinstance(current_position, list)
+            and len(current_position) >= 2
+            and isinstance(current_rotation, list)
+            and len(current_rotation) == 4
+        ):
+            continue
+
+        yaw_prev = yaw_from_rotation_xyzw(previous_rotation)
+        yaw_curr = yaw_from_rotation_xyzw(current_rotation)
+        dx_world = float(current_position[0]) - float(previous_position[0])
+        dy_world = float(current_position[1]) - float(previous_position[1])
+        cos_yaw = math.cos(yaw_prev)
+        sin_yaw = math.sin(yaw_prev)
+        dx_body = cos_yaw * dx_world + sin_yaw * dy_world
+        vx_cmd.append(float(command_data[0]))
+        vx_actual.append(dx_body / dt_secs)
+        yaw_cmd.append(float(command_data[2]))
+        yaw_actual.append(wrap_angle_rad(yaw_curr - yaw_prev) / dt_secs)
+
+    if not vx_cmd:
+        return None
+
+    return {
+        "vx_cmd": vx_cmd,
+        "vx_actual": vx_actual,
+        "yaw_cmd": yaw_cmd,
+        "yaw_actual": yaw_actual,
+    }
+
+
 def spark_svg(series_list: list[dict[str, object]], width: int = 360, height: int = 140) -> str:
     if not series_list:
         return '<svg class="chart" viewBox="0 0 360 140" role="img"></svg>'
@@ -811,6 +890,9 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
         frames = entry.get("frames", [])
         metrics = entry["metrics"]
         joint_names = entry.get("joint_names", [])
+        velocity_tracking_metrics = None
+        if isinstance(metrics, dict):
+            velocity_tracking_metrics = metrics.get("velocity_tracking")
 
         target_series = []
         for idx, joint_name in enumerate(joint_names[:4]):
@@ -848,7 +930,12 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
         ]
 
         command_kind = str(entry.get("command_kind", ""))
+        velocity_tracking_series = None
         if command_kind in {"velocity", "velocity_schedule"}:
+            velocity_tracking_series = derive_velocity_tracking_series(
+                frames,
+                int(entry.get("control_frequency_hz", 0) or 0),
+            )
             command_series = [
                 {
                     "label": "vx_cmd",
@@ -872,6 +959,62 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
             ]
             command_chart_title = "Observed joint velocity"
 
+        if velocity_tracking_series is not None:
+            second_chart_title = "Body vx command vs actual"
+            second_chart_series = [
+                {
+                    "label": "vx_cmd",
+                    "values": velocity_tracking_series["vx_cmd"],
+                    "color": COLORS[2],
+                },
+                {
+                    "label": "vx_actual",
+                    "values": velocity_tracking_series["vx_actual"],
+                    "color": COLORS[0],
+                    "dashed": True,
+                },
+            ]
+            third_chart_title = "Yaw rate command vs actual"
+            third_chart_series = [
+                {
+                    "label": "yaw_cmd",
+                    "values": velocity_tracking_series["yaw_cmd"],
+                    "color": COLORS[3],
+                },
+                {
+                    "label": "yaw_actual",
+                    "values": velocity_tracking_series["yaw_actual"],
+                    "color": COLORS[1],
+                    "dashed": True,
+                },
+            ]
+        else:
+            second_chart_title = "Joint 0 actual vs target"
+            second_chart_series = actual_vs_target
+            third_chart_title = command_chart_title
+            third_chart_series = command_series
+
+        if isinstance(velocity_tracking_metrics, dict):
+            velocity_tracking_details = f'''
+    <div>
+      <span>VX RMSE</span>
+      <strong>{float(velocity_tracking_metrics["vx_rmse_mps"]):.3f} m/s</strong>
+    </div>
+    <div>
+      <span>Yaw RMSE</span>
+      <strong>{float(velocity_tracking_metrics["yaw_rate_rmse_rad_s"]):.3f} rad/s</strong>
+    </div>
+    <div>
+      <span>Heading change</span>
+      <strong>{float(velocity_tracking_metrics["heading_change_deg"]):.1f} deg</strong>
+    </div>
+    <div>
+      <span>Forward distance</span>
+      <strong>{float(velocity_tracking_metrics["forward_distance_m"]):.3f} m</strong>
+    </div>'''
+        else:
+            velocity_tracking_details = ""
+
         card_html = f'''<section class="card" id="policy-{html.escape(str(entry["policy_name"]))}">
   <div class="card-header">
     <div>
@@ -893,16 +1036,16 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
       {spark_svg(target_series)}
     </figure>
     <figure>
-      <figcaption>Joint 0 actual vs target</figcaption>
-      {spark_svg(actual_vs_target)}
+      <figcaption>{html.escape(second_chart_title)}</figcaption>
+      {spark_svg(second_chart_series)}
+    </figure>
+    <figure>
+      <figcaption>{html.escape(third_chart_title)}</figcaption>
+      {spark_svg(third_chart_series)}
     </figure>
     <figure>
       <figcaption>Inference latency</figcaption>
       {spark_svg(latency_series)}
-    </figure>
-    <figure>
-      <figcaption>{html.escape(command_chart_title)}</figcaption>
-      {spark_svg(command_series)}
     </figure>
   </div>
   <div class="rerun-block">
@@ -962,6 +1105,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
       <span>Last target frame</span>
       <code>{html.escape(format_vector(frames[-1]['target_positions'] if frames else []))}</code>
     </div>
+    {velocity_tracking_details}
   </div>
   <p class="links"><a href="{html.escape(str(meta['rrd_file']))}">Rerun recording</a> · <a href="{html.escape(str(meta['json_file']))}">JSON summary</a> · <a href="{html.escape(str(meta['log_file']))}">run log</a> · <code>{html.escape(str(meta['config_path']))}</code></p>
 </section>'''
