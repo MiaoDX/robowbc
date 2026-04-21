@@ -101,6 +101,7 @@ Exactly one user-facing runtime command selector may be set under `[runtime]`:
 
 - `motion_tokens = [...]`
 - `velocity = [vx, vy, yaw_rate]`
+- `[[runtime.velocity_schedule.segments]]`
 - `[[runtime.kinematic_pose.links]]`
 - `standing_placeholder_tracking = true` for the Gear-Sonic-only standing placeholder path
 
@@ -112,6 +113,7 @@ standing-placeholder alias instead of an empty-array magic value.
 ### `gear_sonic`
 
 - Default public path: `velocity = [vx, vy, yaw_rate]`
+- Optional staged locomotion path: `[[runtime.velocity_schedule.segments]]`
 - Optional narrow alias: `standing_placeholder_tracking = true`
 - Non-empty `motion_tokens` are for the older fixture-style mock pipeline, not
   the published `planner_sonic.onnx` path
@@ -132,7 +134,7 @@ standing-placeholder alias instead of an empty-array magic value.
 - `comm.frequency_hz` / `communication.frequency_hz` must be greater than zero
 - `inference.backend` currently supports only `ort`
 - `inference.device` must be non-empty
-- Runtime command fields are mutually exclusive; set exactly one of `motion_tokens`, `velocity`, `kinematic_pose`, or `standing_placeholder_tracking`
+- Runtime command fields are mutually exclusive; set exactly one of `motion_tokens`, `velocity`, `velocity_schedule`, `kinematic_pose`, or `standing_placeholder_tracking`
 - `standing_placeholder_tracking` is only supported when `policy.name = "gear_sonic"`
 
 ## Optional artifact sections

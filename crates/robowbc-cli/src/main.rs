@@ -49,6 +49,79 @@ struct KinematicPoseConfig {
     links: Vec<KinematicPoseLinkConfig>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+struct VelocityScheduleSegmentConfig {
+    duration_secs: f32,
+    start: [f32; 3],
+    end: [f32; 3],
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+struct VelocityScheduleConfig {
+    segments: Vec<VelocityScheduleSegmentConfig>,
+}
+
+impl VelocityScheduleConfig {
+    fn validate(&self) -> Result<(), String> {
+        if self.segments.is_empty() {
+            return Err("runtime.velocity_schedule.segments must not be empty".to_owned());
+        }
+
+        for (index, segment) in self.segments.iter().enumerate() {
+            if !segment.duration_secs.is_finite() || segment.duration_secs <= 0.0 {
+                return Err(format!(
+                    "runtime.velocity_schedule.segments[{index}].duration_secs must be a positive finite number"
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn sample_velocity(&self, elapsed_secs: f32) -> [f32; 3] {
+        let mut remaining = elapsed_secs.max(0.0);
+
+        for segment in &self.segments {
+            if remaining <= segment.duration_secs {
+                let alpha = if segment.duration_secs <= f32::EPSILON {
+                    1.0
+                } else {
+                    (remaining / segment.duration_secs).clamp(0.0, 1.0)
+                };
+                return [
+                    lerp_f32(segment.start[0], segment.end[0], alpha),
+                    lerp_f32(segment.start[1], segment.end[1], alpha),
+                    lerp_f32(segment.start[2], segment.end[2], alpha),
+                ];
+            }
+            remaining -= segment.duration_secs;
+        }
+
+        self.segments
+            .last()
+            .map_or([0.0, 0.0, 0.0], |segment| segment.end)
+    }
+
+    fn flatten_for_report(&self) -> Vec<f32> {
+        let mut flattened = Vec::with_capacity(self.segments.len() * 7);
+        for segment in &self.segments {
+            flattened.push(segment.duration_secs);
+            flattened.extend_from_slice(&segment.start);
+            flattened.extend_from_slice(&segment.end);
+        }
+        flattened
+    }
+}
+
+fn lerp_f32(start: f32, end: f32, alpha: f32) -> f32 {
+    start + alpha * (end - start)
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn elapsed_secs_for_tick(tick: usize, frequency_hz: u32) -> f32 {
+    tick as f32 / frequency_hz as f32
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct RuntimeConfig {
     #[serde(default)]
@@ -57,6 +130,10 @@ struct RuntimeConfig {
     /// `WbcCommand::Velocity` instead of `WbcCommand::MotionTokens`.
     #[serde(default)]
     velocity: Option<[f32; 3]>,
+    /// Piecewise-linear velocity command schedule. Each segment runs for
+    /// `duration_secs`, interpolating from `start` to `end`.
+    #[serde(default)]
+    velocity_schedule: Option<VelocityScheduleConfig>,
     /// Whole-body kinematic pose targets. When set, uses
     /// `WbcCommand::KinematicPose` instead of the velocity or motion-token
     /// command paths.
@@ -80,6 +157,7 @@ impl Default for RuntimeConfig {
         Self {
             motion_tokens: None,
             velocity: None,
+            velocity_schedule: None,
             kinematic_pose: None,
             standing_placeholder_tracking: false,
             max_ticks: Some(200),
@@ -91,6 +169,7 @@ impl Default for RuntimeConfig {
 enum ParsedRuntimeCommand {
     MotionTokens(Vec<f32>),
     Velocity([f32; 3]),
+    VelocitySchedule(VelocityScheduleConfig),
     KinematicPose(KinematicPoseConfig),
     StandingPlaceholderTracking,
 }
@@ -105,6 +184,9 @@ impl ParsedRuntimeCommand {
         if runtime.velocity.is_some() {
             configured_fields.push("runtime.velocity");
         }
+        if runtime.velocity_schedule.is_some() {
+            configured_fields.push("runtime.velocity_schedule");
+        }
         if runtime.kinematic_pose.is_some() {
             configured_fields.push("runtime.kinematic_pose");
         }
@@ -114,7 +196,7 @@ impl ParsedRuntimeCommand {
 
         if configured_fields.len() > 1 {
             return Err(format!(
-                "runtime command fields are mutually exclusive; found {}. Choose exactly one of runtime.motion_tokens, runtime.velocity, runtime.kinematic_pose, or runtime.standing_placeholder_tracking",
+                "runtime command fields are mutually exclusive; found {}. Choose exactly one of runtime.motion_tokens, runtime.velocity, runtime.velocity_schedule, runtime.kinematic_pose, or runtime.standing_placeholder_tracking",
                 configured_fields.join(", ")
             ));
         }
@@ -133,6 +215,11 @@ impl ParsedRuntimeCommand {
 
         if let Some([vx, vy, yaw]) = runtime.velocity {
             return Ok(Self::Velocity([vx, vy, yaw]));
+        }
+
+        if let Some(schedule) = &runtime.velocity_schedule {
+            schedule.validate()?;
+            return Ok(Self::VelocitySchedule(schedule.clone()));
         }
 
         if let Some(tokens) = &runtime.motion_tokens {
@@ -162,6 +249,7 @@ impl ParsedRuntimeCommand {
         match self {
             Self::KinematicPose(_) => "kinematic_pose",
             Self::Velocity(_) => "velocity",
+            Self::VelocitySchedule(_) => "velocity_schedule",
             Self::MotionTokens(_) => "motion_tokens",
             Self::StandingPlaceholderTracking => "standing_placeholder_tracking",
         }
@@ -178,8 +266,48 @@ impl ParsedRuntimeCommand {
                 flattened
             }
             Self::Velocity([vx, vy, yaw]) => vec![*vx, *vy, *yaw],
+            Self::VelocitySchedule(schedule) => schedule.flatten_for_report(),
             Self::MotionTokens(tokens) => tokens.clone(),
             Self::StandingPlaceholderTracking => Vec::new(),
+        }
+    }
+
+    fn command_data_for_tick(&self, tick: usize, frequency_hz: u32) -> Vec<f32> {
+        match self {
+            Self::KinematicPose(_) => self.report_command_data(),
+            Self::Velocity([vx, vy, yaw]) => vec![*vx, *vy, *yaw],
+            Self::VelocitySchedule(schedule) => {
+                let elapsed_secs = elapsed_secs_for_tick(tick, frequency_hz);
+                schedule.sample_velocity(elapsed_secs).to_vec()
+            }
+            Self::MotionTokens(tokens) => tokens.clone(),
+            Self::StandingPlaceholderTracking => Vec::new(),
+        }
+    }
+
+    #[cfg(any(feature = "vis", test))]
+    fn velocity_for_tick(&self, tick: usize, frequency_hz: u32) -> Option<[f32; 3]> {
+        match self {
+            Self::Velocity(velocity) => Some(*velocity),
+            Self::VelocitySchedule(schedule) => {
+                let elapsed_secs = elapsed_secs_for_tick(tick, frequency_hz);
+                Some(schedule.sample_velocity(elapsed_secs))
+            }
+            _ => None,
+        }
+    }
+
+    fn command_for_tick(&self, tick: usize, frequency_hz: u32) -> WbcCommand {
+        match self {
+            Self::VelocitySchedule(schedule) => {
+                let elapsed_secs = elapsed_secs_for_tick(tick, frequency_hz);
+                let [vx, vy, yaw] = schedule.sample_velocity(elapsed_secs);
+                WbcCommand::Velocity(Twist {
+                    linear: [vx, vy, 0.0],
+                    angular: [0.0, 0.0, yaw],
+                })
+            }
+            _ => self.to_wbc_command(),
         }
     }
 
@@ -203,6 +331,13 @@ impl ParsedRuntimeCommand {
                 linear: [*vx, *vy, 0.0],
                 angular: [0.0, 0.0, *yaw],
             }),
+            Self::VelocitySchedule(schedule) => {
+                let [vx, vy, yaw] = schedule.sample_velocity(0.0);
+                WbcCommand::Velocity(Twist {
+                    linear: [vx, vy, 0.0],
+                    angular: [0.0, 0.0, yaw],
+                })
+            }
             Self::MotionTokens(tokens) => WbcCommand::MotionTokens(tokens.clone()),
             Self::StandingPlaceholderTracking => WbcCommand::MotionTokens(Vec::new()),
         }
@@ -341,6 +476,7 @@ struct Metrics {
 #[derive(Debug, Clone, Serialize)]
 struct ReportFrame {
     tick: usize,
+    command_data: Vec<f32>,
     actual_positions: Vec<f32>,
     actual_velocities: Vec<f32>,
     target_positions: Vec<f32>,
@@ -478,11 +614,16 @@ device = "cpu"
 [runtime]
 # Template defaults to the fixture motion-token path because it works with the
 # bundled identity ONNX models. For published planner_sonic.onnx runs, switch
-# to `velocity = [vx, vy, yaw_rate]` instead. For the narrow Gear-Sonic
-# standing-placeholder tracking path, comment out `motion_tokens` and set
-# `standing_placeholder_tracking = true` instead. That alias is Gear-Sonic-only
-# and routes to encoder+decoder tracking without exposing generic
-# motion-reference streaming.
+# to `velocity = [vx, vy, yaw_rate]` or a `velocity_schedule` instead. For the
+# narrow Gear-Sonic standing-placeholder tracking path, comment out
+# `motion_tokens` and set `standing_placeholder_tracking = true` instead. That
+# alias is Gear-Sonic-only and routes to encoder+decoder tracking without
+# exposing generic motion-reference streaming.
+# velocity = [0.3, 0.0, 0.0]
+# [[runtime.velocity_schedule.segments]]
+# duration_secs = 2.0
+# start = [0.0, 0.0, 0.0]
+# end = [0.6, 0.0, 0.0]
 motion_tokens = [0.05, -0.1, 0.2, 0.0]
 # standing_placeholder_tracking = true
 max_ticks = 1
@@ -548,7 +689,6 @@ fn run_control_loop_inner<T: RobotTransport>(
     report_max_frames: Option<usize>,
     #[cfg(feature = "vis")] visualizer: &mut Option<RerunVisualizer>,
 ) -> Result<(usize, usize, Duration), String> {
-    let command = runtime_command.to_wbc_command();
     let period = Duration::from_secs_f64(1.0 / f64::from(comm.frequency_hz));
 
     let mut ticks: usize = 0;
@@ -564,6 +704,7 @@ fn run_control_loop_inner<T: RobotTransport>(
 
         let cycle_start = Instant::now();
         let tick_index = ticks;
+        let command = runtime_command.command_for_tick(tick_index, comm.frequency_hz);
         let mut captured_tick: Option<ReportFrame> = None;
 
         run_control_tick(transport, command.clone(), |obs| {
@@ -574,6 +715,7 @@ fn run_control_loop_inner<T: RobotTransport>(
 
             captured_tick = Some(ReportFrame {
                 tick: tick_index,
+                command_data: runtime_command.command_data_for_tick(tick_index, comm.frequency_hz),
                 actual_positions: obs.joint_positions.clone(),
                 actual_velocities: obs.joint_velocities.clone(),
                 target_positions: output
@@ -600,17 +742,20 @@ fn run_control_loop_inner<T: RobotTransport>(
                 #[allow(clippy::cast_precision_loss)]
                 let freq = 1.0_f64 / cycle_elapsed.as_secs_f64().max(f64::EPSILON);
                 let _ = vis.log_control_frequency(freq);
-                match runtime_command {
-                    ParsedRuntimeCommand::Velocity([vx, vy, yaw]) => {
-                        let _ = vis.log_velocity_command(*vx, *vy, *yaw);
+                if let Some([vx, vy, yaw]) =
+                    runtime_command.velocity_for_tick(tick_index, comm.frequency_hz)
+                {
+                    let _ = vis.log_velocity_command(vx, vy, yaw);
+                } else {
+                    match runtime_command {
+                        ParsedRuntimeCommand::MotionTokens(tokens) => {
+                            let _ = vis.log_motion_tokens(tokens);
+                        }
+                        ParsedRuntimeCommand::StandingPlaceholderTracking => {
+                            let _ = vis.log_motion_tokens(&[]);
+                        }
+                        _ => {}
                     }
-                    ParsedRuntimeCommand::MotionTokens(tokens) => {
-                        let _ = vis.log_motion_tokens(tokens);
-                    }
-                    ParsedRuntimeCommand::StandingPlaceholderTracking => {
-                        let _ = vis.log_motion_tokens(&[]);
-                    }
-                    _ => {}
                 }
             }
 
@@ -917,6 +1062,15 @@ fn main() {
 mod tests {
     use super::*;
 
+    fn assert_vec3_approx_eq(actual: [f32; 3], expected: [f32; 3]) {
+        for (actual, expected) in actual.iter().zip(expected.iter()) {
+            assert!(
+                (actual - expected).abs() <= 1e-5,
+                "expected {expected}, got {actual}"
+            );
+        }
+    }
+
     fn fixture(path: &str) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")
@@ -1049,6 +1203,79 @@ rotation_xyzw = [0.0, 0.0, 0.0, 1.0]
     }
 
     #[test]
+    fn accepts_velocity_schedule_runtime_config() {
+        let config = r#"
+[policy]
+name = "gear_sonic"
+
+[robot]
+config_path = "configs/robots/unitree_g1.toml"
+
+[communication]
+frequency_hz = 50
+
+[inference]
+backend = "ort"
+device = "cpu"
+
+[runtime]
+max_ticks = 200
+
+[[runtime.velocity_schedule.segments]]
+duration_secs = 2.0
+start = [0.0, 0.0, 0.0]
+end = [0.6, 0.0, 0.0]
+
+[[runtime.velocity_schedule.segments]]
+duration_secs = 1.0
+start = [0.6, 0.0, -1.5707964]
+end = [0.6, 0.0, -1.5707964]
+"#;
+
+        let parsed: AppConfig = toml::from_str(config).expect("config should parse");
+        let schedule = parsed
+            .runtime
+            .velocity_schedule
+            .as_ref()
+            .expect("velocity schedule should deserialize");
+        assert_eq!(schedule.segments.len(), 2);
+
+        let runtime_command = validate_config(&parsed).expect("schedule should validate");
+        assert_eq!(runtime_command.report_command_kind(), "velocity_schedule");
+        assert_eq!(
+            runtime_command.report_command_data(),
+            vec![
+                2.0,
+                0.0,
+                0.0,
+                0.0,
+                0.6,
+                0.0,
+                0.0,
+                1.0,
+                0.6,
+                0.0,
+                -1.570_796_4,
+                0.6,
+                0.0,
+                -1.570_796_4,
+            ]
+        );
+        assert_vec3_approx_eq(
+            runtime_command
+                .velocity_for_tick(50, 50)
+                .expect("schedule should yield a velocity"),
+            [0.3, 0.0, 0.0],
+        );
+        assert_vec3_approx_eq(
+            runtime_command
+                .velocity_for_tick(125, 50)
+                .expect("schedule should yield a velocity"),
+            [0.6, 0.0, -1.570_796_4],
+        );
+    }
+
+    #[test]
     fn runtime_defaults_to_motion_tokens_when_no_mode_is_configured() {
         let config = r#"
 [policy]
@@ -1102,6 +1329,39 @@ motion_tokens = [0.1, 0.2]
     }
 
     #[test]
+    fn runtime_rejects_conflicting_velocity_and_velocity_schedule_fields() {
+        let config = r#"
+[policy]
+name = "gear_sonic"
+
+[robot]
+config_path = "configs/robots/unitree_g1_mock.toml"
+
+[communication]
+frequency_hz = 50
+
+[inference]
+backend = "ort"
+device = "cpu"
+
+[runtime]
+velocity = [0.3, 0.0, 0.0]
+
+[[runtime.velocity_schedule.segments]]
+duration_secs = 1.0
+start = [0.0, 0.0, 0.0]
+end = [0.6, 0.0, 0.0]
+"#;
+
+        let parsed: AppConfig = toml::from_str(config).expect("config should parse");
+        let err =
+            validate_config(&parsed).expect_err("velocity and velocity_schedule should conflict");
+        assert!(err.contains("mutually exclusive"));
+        assert!(err.contains("runtime.velocity"));
+        assert!(err.contains("runtime.velocity_schedule"));
+    }
+
+    #[test]
     fn runtime_rejects_empty_motion_tokens_payload() {
         let config = r#"
 [policy]
@@ -1124,6 +1384,38 @@ motion_tokens = []
         let parsed: AppConfig = toml::from_str(config).expect("config should parse");
         let err = validate_config(&parsed).expect_err("empty motion token payload should fail");
         assert!(err.contains("standing_placeholder_tracking"));
+    }
+
+    #[test]
+    fn runtime_rejects_empty_velocity_schedule() {
+        let config = AppConfig {
+            policy: PolicySection {
+                name: "gear_sonic".to_owned(),
+                config: default_policy_table(),
+            },
+            robot: RobotSection {
+                config_path: PathBuf::from("configs/robots/unitree_g1_mock.toml"),
+            },
+            comm: CommConfig::default(),
+            inference: InferenceSection::default(),
+            runtime: RuntimeConfig {
+                motion_tokens: None,
+                velocity: None,
+                velocity_schedule: Some(VelocityScheduleConfig { segments: vec![] }),
+                kinematic_pose: None,
+                standing_placeholder_tracking: false,
+                max_ticks: Some(1),
+            },
+            report: None,
+            hardware: None,
+            #[cfg(feature = "sim")]
+            sim: None,
+            #[cfg(feature = "vis")]
+            vis: None,
+        };
+
+        let err = validate_config(&config).expect_err("empty velocity schedule should fail");
+        assert!(err.contains("segments must not be empty"));
     }
 
     #[test]
@@ -1216,6 +1508,7 @@ standing_placeholder_tracking = true
             },
             frames: vec![ReportFrame {
                 tick: 0,
+                command_data: vec![0.2, 0.0, 0.1],
                 actual_positions: vec![0.1],
                 actual_velocities: vec![0.0],
                 target_positions: vec![0.1],
@@ -1344,6 +1637,7 @@ standing_placeholder_tracking = true
         let runtime = RuntimeConfig {
             motion_tokens: None,
             velocity: Some([0.2, 0.0, 0.1]),
+            velocity_schedule: None,
             kinematic_pose: None,
             standing_placeholder_tracking: false,
             max_ticks: Some(1),
