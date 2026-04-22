@@ -664,6 +664,8 @@ const GEAR_SONIC_PLANNER_REPLAN_INTERVAL_TICKS: usize = 5;
 const GEAR_SONIC_ALLOWED_PRED_NUM_TOKENS: usize = 11;
 #[allow(clippy::cast_possible_wrap)]
 const GEAR_SONIC_ALLOWED_PRED_NUM_TOKENS_I64: i64 = GEAR_SONIC_ALLOWED_PRED_NUM_TOKENS as i64;
+const GEAR_SONIC_ALLOWED_PRED_NUM_TOKENS_MASK: [i64; GEAR_SONIC_ALLOWED_PRED_NUM_TOKENS] =
+    [0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0];
 const GEAR_SONIC_DEFAULT_HEIGHT_METERS: f32 = 0.74;
 const GEAR_SONIC_DEFAULT_MODE_WALK: i64 = 2;
 const GEAR_SONIC_PLANNER_INTERP_STEP: f32 = 30.0 / 50.0;
@@ -998,7 +1000,7 @@ impl GearSonicPolicy {
         let has_specific_target = [0_i64];
         let specific_target_positions = vec![0.0_f32; 4 * 3];
         let specific_target_headings = vec![0.0_f32; 4];
-        let allowed_pred_num_tokens = vec![1_i64; GEAR_SONIC_ALLOWED_PRED_NUM_TOKENS];
+        let allowed_pred_num_tokens = GEAR_SONIC_ALLOWED_PRED_NUM_TOKENS_MASK;
 
         let context_shape = [
             1_i64,
@@ -1845,6 +1847,14 @@ mod tests {
             .predict(&obs)
             .expect_err("fixture planner should reject velocity-mode real contract");
         assert!(matches!(err, robowbc_core::WbcError::UnsupportedCommand(_)));
+    }
+
+    #[test]
+    fn gear_sonic_planner_allowed_pred_mask_matches_upstream_default() {
+        assert_eq!(
+            GEAR_SONIC_ALLOWED_PRED_NUM_TOKENS_MASK,
+            [0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0]
+        );
     }
 
     #[test]

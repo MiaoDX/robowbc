@@ -31,7 +31,7 @@ contract = "groot_g1_history"
 control_frequency_hz = 50
 
 [robot]
-config_path = "configs/robots/unitree_g1.toml"
+config_path = "configs/robots/unitree_g1_decoupled_wbc.toml"
 
 [comm]
 frequency_hz = 50
