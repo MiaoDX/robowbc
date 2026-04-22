@@ -254,6 +254,7 @@ mod tests {
             joint_names: (0..n).map(|i| format!("j{i}")).collect(),
             pd_gains: vec![PdGains { kp: 1.0, kd: 0.1 }; n],
             sim_pd_gains: None,
+            sim_joint_limits: None,
             joint_limits: vec![
                 JointLimit {
                     min: -1.0,

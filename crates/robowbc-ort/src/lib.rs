@@ -2749,14 +2749,17 @@ mod tests {
             delta = [-delta[0], -delta[1], -delta[2], -delta[3]];
         }
         let delta = quat_unit(delta);
-        let sin_half =
-            (delta[1] * delta[1] + delta[2] * delta[2] + delta[3] * delta[3]).sqrt();
+        let sin_half = (delta[1] * delta[1] + delta[2] * delta[2] + delta[3] * delta[3]).sqrt();
         if sin_half <= 1e-6 {
             return [0.0, 0.0, 0.0];
         }
 
         let angle = 2.0 * sin_half.clamp(0.0, 1.0).asin();
-        let axis = [delta[1] / sin_half, delta[2] / sin_half, delta[3] / sin_half];
+        let axis = [
+            delta[1] / sin_half,
+            delta[2] / sin_half,
+            delta[3] / sin_half,
+        ];
         [
             axis[0] * angle / GEAR_SONIC_CONTROL_DT_SECS,
             axis[1] * angle / GEAR_SONIC_CONTROL_DT_SECS,
@@ -2821,6 +2824,7 @@ mod tests {
             joint_names: (0..joint_count).map(|i| format!("j{i}")).collect(),
             pd_gains: vec![robowbc_core::PdGains { kp: 1.0, kd: 0.1 }; joint_count],
             sim_pd_gains: None,
+            sim_joint_limits: None,
             joint_limits: vec![
                 robowbc_core::JointLimit {
                     min: -1.0,
@@ -3955,7 +3959,8 @@ mod tests {
         };
 
         let mut bootstrap_state = GearSonicPlannerState::new(&robot);
-        bootstrap_state.context = GearSonicPolicy::initialize_planner_context(&robot, &standing_obs);
+        bootstrap_state.context =
+            GearSonicPolicy::initialize_planner_context(&robot, &standing_obs);
         bootstrap_state.last_context_frame = bootstrap_state
             .context
             .back()
@@ -3998,12 +4003,8 @@ mod tests {
                 .planner
                 .lock()
                 .expect("planner mutex should not be poisoned");
-            GearSonicPolicy::run_real_planner(
-                &mut planner,
-                &bootstrap_state.context,
-                live_command,
-            )
-            .expect("live planner replan should succeed")
+            GearSonicPolicy::run_real_planner(&mut planner, &bootstrap_state.context, live_command)
+                .expect("live planner replan should succeed")
         };
         let live_planned_50hz =
             GearSonicPolicy::resample_planner_trajectory_to_50hz(&live_planned_30hz);
@@ -4110,22 +4111,37 @@ mod tests {
             &dump_dir.join("current_base_quat_wxyz.json"),
             &GearSonicPolicy::observation_base_quat_wxyz(&probe_obs),
         );
-        write_json_vector(&dump_dir.join("current_gravity.json"), &probe_obs.gravity_vector);
+        write_json_vector(
+            &dump_dir.join("current_gravity.json"),
+            &probe_obs.gravity_vector,
+        );
         write_json_vector(
             &dump_dir.join("current_angular_velocity.json"),
             &probe_obs.angular_velocity,
         );
         write_json_matrix(
             &dump_dir.join("history_joint_positions_isaaclab_offsets.json"),
-            &tracking_state.joint_positions.iter().cloned().collect::<Vec<_>>(),
+            &tracking_state
+                .joint_positions
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>(),
         );
         write_json_matrix(
             &dump_dir.join("history_joint_velocities_isaaclab.json"),
-            &tracking_state.joint_velocities.iter().cloned().collect::<Vec<_>>(),
+            &tracking_state
+                .joint_velocities
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>(),
         );
         write_json_matrix(
             &dump_dir.join("history_last_actions.json"),
-            &tracking_state.last_actions.iter().cloned().collect::<Vec<_>>(),
+            &tracking_state
+                .last_actions
+                .iter()
+                .cloned()
+                .collect::<Vec<_>>(),
         );
         write_json_matrix(
             &dump_dir.join("history_gravity.json"),

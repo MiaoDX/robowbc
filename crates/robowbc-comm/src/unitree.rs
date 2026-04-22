@@ -427,6 +427,7 @@ mod tests {
                 PdGains { kp: 10.0, kd: 1.0 },
             ],
             sim_pd_gains: None,
+            sim_joint_limits: None,
             joint_limits: vec![
                 JointLimit {
                     min: -1.0,

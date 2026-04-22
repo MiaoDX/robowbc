@@ -91,18 +91,21 @@ pd_gains = [
     { kp =  0.5, kd = 0.05 },
 ]
 
+# MuJoCo needs a bit more ankle-pitch authority than the shared G1 defaults to
+# match the public WBC-AGILE long-horizon showcase without softening the rest
+# of the lower body.
 sim_pd_gains = [
     { kp = 150.0, kd = 2.0 },
     { kp = 150.0, kd = 2.0 },
     { kp = 150.0, kd = 2.0 },
     { kp = 200.0, kd = 4.0 },
-    { kp =  40.0, kd = 2.0 },
+    { kp =  80.0, kd = 4.0 },
     { kp =  40.0, kd = 2.0 },
     { kp = 150.0, kd = 2.0 },
     { kp = 150.0, kd = 2.0 },
     { kp = 150.0, kd = 2.0 },
     { kp = 200.0, kd = 4.0 },
-    { kp =  40.0, kd = 2.0 },
+    { kp =  80.0, kd = 4.0 },
     { kp =  40.0, kd = 2.0 },
     { kp = 250.0, kd = 5.0 },
     { kp = 250.0, kd = 5.0 },
@@ -141,6 +144,47 @@ joint_limits = [
     { min = -2.7576, max =  2.7576 },
     { min = -0.0873, max =  2.8798 },
     { min = -0.8727, max =  0.5236 },
+    { min = -0.2618, max =  0.2618 },
+    { min = -2.6180, max =  2.6180 },
+    { min = -0.5200, max =  0.5200 },
+    { min = -0.5200, max =  0.5200 },
+    { min = -3.0892, max =  2.6704 },
+    { min = -1.5882, max =  2.2515 },
+    { min = -2.6180, max =  2.6180 },
+    { min = -1.0472, max =  2.0944 },
+    { min = -1.9722, max =  1.9722 },
+    { min = -1.6144, max =  1.6144 },
+    { min = -1.6144, max =  1.6144 },
+    { min = -3.0892, max =  2.6704 },
+    { min = -2.2515, max =  1.5882 },
+    { min = -2.6180, max =  2.6180 },
+    { min = -1.0472, max =  2.0944 },
+    { min = -1.9722, max =  1.9722 },
+    { min = -1.6144, max =  1.6144 },
+    { min = -1.6144, max =  1.6144 },
+    { min =  0.0, max =  1.57 },
+    { min =  0.0, max =  1.57 },
+    { min =  0.0, max =  1.57 },
+    { min =  0.0, max =  1.57 },
+    { min =  0.0, max =  1.57 },
+    { min =  0.0, max =  1.57 },
+]
+
+# Keep hardware-facing limits conservative, but allow the MuJoCo showcase to
+# command the ankle-pitch targets over the wider envelope the public WBC-AGILE
+# policy actually uses during its sustained run phase.
+sim_joint_limits = [
+    { min = -2.5307, max =  2.8798 },
+    { min = -0.5236, max =  2.9671 },
+    { min = -2.7576, max =  2.7576 },
+    { min = -0.0873, max =  2.8798 },
+    { min = -1.1000, max =  0.7000 },
+    { min = -0.2618, max =  0.2618 },
+    { min = -2.5307, max =  2.8798 },
+    { min = -2.9671, max =  0.5236 },
+    { min = -2.7576, max =  2.7576 },
+    { min = -0.0873, max =  2.8798 },
+    { min = -1.1000, max =  0.7000 },
     { min = -0.2618, max =  0.2618 },
     { min = -2.6180, max =  2.6180 },
     { min = -0.5200, max =  0.5200 },

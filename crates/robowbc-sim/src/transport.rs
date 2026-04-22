@@ -285,7 +285,8 @@ impl RobotTransport for MujocoTransport {
             });
         }
 
-        let after_pos = clamp_position_targets(targets, &self.robot_config.joint_limits);
+        let after_pos =
+            clamp_position_targets(targets, self.robot_config.simulation_joint_limits());
         let control_frequency_hz = control_frequency_hz(&self.config);
         let safe_targets = if let Some(ref vel_limits) = self.robot_config.joint_velocity_limits {
             clamp_velocity_targets(
@@ -454,9 +455,11 @@ fn path_is_git_lfs_pointer(path: &Path) -> Result<bool, SimError> {
         reason: format!("failed to inspect mesh asset {}: {e}", path.display()),
     })?;
     let mut prefix = [0_u8; 128];
-    let read_len = file.read(&mut prefix).map_err(|e| SimError::ModelLoadFailed {
-        reason: format!("failed to read mesh asset {}: {e}", path.display()),
-    })?;
+    let read_len = file
+        .read(&mut prefix)
+        .map_err(|e| SimError::ModelLoadFailed {
+            reason: format!("failed to read mesh asset {}: {e}", path.display()),
+        })?;
     Ok(prefix[..read_len].starts_with(GIT_LFS_POINTER_PREFIX))
 }
 
@@ -1285,6 +1288,35 @@ mod tests {
             .expect("send should succeed");
 
         assert_eq!(transport.prev_positions, expected.positions);
+    }
+
+    #[test]
+    fn send_joint_targets_prefers_simulation_joint_limits_for_mujoco_clamp() {
+        let mut robot = load_robot_config("configs/robots/unitree_g1_35dof_wbc_agile.toml");
+        robot.joint_velocity_limits = None;
+        let mut transport = MujocoTransport::new(
+            MujocoConfig {
+                model_path: g1_model_path(),
+                timestep: 0.002,
+                substeps: 1,
+                ..MujocoConfig::default()
+            },
+            robot.clone(),
+        )
+        .expect("transport should initialize");
+
+        let mut positions = robot.default_pose.clone();
+        positions[4] = 0.7;
+
+        transport
+            .send_joint_targets(&JointPositionTargets {
+                positions,
+                timestamp: Instant::now(),
+            })
+            .expect("send should succeed");
+
+        assert!((transport.prev_positions[4] - 0.7).abs() < 1e-6);
+        assert!(transport.prev_positions[4] > robot.joint_limits[4].max);
     }
 
     #[test]

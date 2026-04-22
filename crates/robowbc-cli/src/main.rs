@@ -1959,6 +1959,7 @@ standing_placeholder_tracking = true
                 robowbc_core::PdGains { kp: 1.0, kd: 0.1 },
             ],
             sim_pd_gains: None,
+            sim_joint_limits: None,
             joint_limits: vec![
                 robowbc_core::JointLimit {
                     min: -1.0,
