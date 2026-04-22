@@ -1,0 +1,204 @@
+# Unitree G1 29-DOF robot configuration tuned for Decoupled WBC locomotion.
+#
+# This keeps the shared joint ordering, gains, and limits from the public G1
+# embodiment, but resets MuJoCo into the shallower locomotion nominal used by
+# the official GR00T Decoupled WBC stack:
+# - lower body from `default_angles` in `g1_gear_wbc.yaml`
+# - upper body from `loco_upper_body_dof_pos` in
+#   `control/main/teleop/configs/g1_29dof_gear_wbc.yaml`
+
+name = "unitree_g1_decoupled_wbc"
+joint_count = 29
+model_path = "assets/robots/unitree_g1/g1_29dof.xml"
+
+joint_names = [
+    "left_hip_pitch_joint",
+    "left_hip_roll_joint",
+    "left_hip_yaw_joint",
+    "left_knee_joint",
+    "left_ankle_pitch_joint",
+    "left_ankle_roll_joint",
+    "right_hip_pitch_joint",
+    "right_hip_roll_joint",
+    "right_hip_yaw_joint",
+    "right_knee_joint",
+    "right_ankle_pitch_joint",
+    "right_ankle_roll_joint",
+    "waist_yaw_joint",
+    "waist_roll_joint",
+    "waist_pitch_joint",
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "left_wrist_roll_joint",
+    "left_wrist_pitch_joint",
+    "left_wrist_yaw_joint",
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint",
+    "right_wrist_pitch_joint",
+    "right_wrist_yaw_joint",
+]
+
+pd_gains = [
+    { kp = 15.826, kd = 6.299 },
+    { kp = 15.826, kd = 6.299 },
+    { kp =  4.439, kd = 1.769 },
+    { kp = 15.826, kd = 6.299 },
+    { kp =  7.238, kd = 5.759 },
+    { kp =  7.238, kd = 5.759 },
+    { kp = 15.826, kd = 6.299 },
+    { kp = 15.826, kd = 6.299 },
+    { kp =  4.439, kd = 1.769 },
+    { kp = 15.826, kd = 6.299 },
+    { kp =  7.238, kd = 5.759 },
+    { kp =  7.238, kd = 5.759 },
+    { kp =  4.439, kd = 1.769 },
+    { kp =  7.238, kd = 5.759 },
+    { kp =  7.238, kd = 5.759 },
+    { kp =  3.619, kd = 2.880 },
+    { kp =  3.619, kd = 2.880 },
+    { kp =  3.619, kd = 2.880 },
+    { kp =  3.619, kd = 2.880 },
+    { kp =  3.619, kd = 2.880 },
+    { kp =  1.069, kd = 0.851 },
+    { kp =  1.069, kd = 0.851 },
+    { kp =  3.619, kd = 2.880 },
+    { kp =  3.619, kd = 2.880 },
+    { kp =  3.619, kd = 2.880 },
+    { kp =  3.619, kd = 2.880 },
+    { kp =  3.619, kd = 2.880 },
+    { kp =  1.069, kd = 0.851 },
+    { kp =  1.069, kd = 0.851 },
+]
+
+sim_pd_gains = [
+    { kp = 150.0, kd = 2.0 },
+    { kp = 150.0, kd = 2.0 },
+    { kp = 150.0, kd = 2.0 },
+    { kp = 200.0, kd = 4.0 },
+    { kp =  40.0, kd = 2.0 },
+    { kp =  40.0, kd = 2.0 },
+    { kp = 150.0, kd = 2.0 },
+    { kp = 150.0, kd = 2.0 },
+    { kp = 150.0, kd = 2.0 },
+    { kp = 200.0, kd = 4.0 },
+    { kp =  40.0, kd = 2.0 },
+    { kp =  40.0, kd = 2.0 },
+    { kp = 250.0, kd = 5.0 },
+    { kp = 250.0, kd = 5.0 },
+    { kp = 250.0, kd = 5.0 },
+    { kp = 100.0, kd = 5.0 },
+    { kp = 100.0, kd = 5.0 },
+    { kp =  40.0, kd = 2.0 },
+    { kp =  40.0, kd = 2.0 },
+    { kp =  20.0, kd = 2.0 },
+    { kp =  20.0, kd = 2.0 },
+    { kp =  20.0, kd = 2.0 },
+    { kp = 100.0, kd = 5.0 },
+    { kp = 100.0, kd = 5.0 },
+    { kp =  40.0, kd = 2.0 },
+    { kp =  40.0, kd = 2.0 },
+    { kp =  20.0, kd = 2.0 },
+    { kp =  20.0, kd = 2.0 },
+    { kp =  20.0, kd = 2.0 },
+]
+
+joint_limits = [
+    { min = -2.5307, max =  2.8798 },
+    { min = -0.5236, max =  2.9671 },
+    { min = -2.7576, max =  2.7576 },
+    { min = -0.0873, max =  2.8798 },
+    { min = -0.8727, max =  0.5236 },
+    { min = -0.2618, max =  0.2618 },
+    { min = -2.5307, max =  2.8798 },
+    { min = -2.9671, max =  0.5236 },
+    { min = -2.7576, max =  2.7576 },
+    { min = -0.0873, max =  2.8798 },
+    { min = -0.8727, max =  0.5236 },
+    { min = -0.2618, max =  0.2618 },
+    { min = -2.6180, max =  2.6180 },
+    { min = -0.5200, max =  0.5200 },
+    { min = -0.5200, max =  0.5200 },
+    { min = -3.0892, max =  2.6704 },
+    { min = -1.5882, max =  2.2515 },
+    { min = -2.6180, max =  2.6180 },
+    { min = -1.0472, max =  2.0944 },
+    { min = -1.9722, max =  1.9722 },
+    { min = -1.6144, max =  1.6144 },
+    { min = -1.6144, max =  1.6144 },
+    { min = -3.0892, max =  2.6704 },
+    { min = -2.2515, max =  1.5882 },
+    { min = -2.6180, max =  2.6180 },
+    { min = -1.0472, max =  2.0944 },
+    { min = -1.9722, max =  1.9722 },
+    { min = -1.6144, max =  1.6144 },
+    { min = -1.6144, max =  1.6144 },
+]
+
+joint_velocity_limits = [
+    10.0,
+    10.0,
+     7.0,
+    10.0,
+     7.0,
+     7.0,
+    10.0,
+    10.0,
+     7.0,
+    10.0,
+     7.0,
+     7.0,
+     7.0,
+     7.0,
+     7.0,
+     7.0,
+     7.0,
+     7.0,
+     7.0,
+     5.0,
+     5.0,
+     5.0,
+     7.0,
+     7.0,
+     7.0,
+     7.0,
+     5.0,
+     5.0,
+     5.0,
+]
+
+default_pose = [
+    -0.1,  # left_hip_pitch
+     0.0,  # left_hip_roll
+     0.0,  # left_hip_yaw
+     0.3,  # left_knee
+    -0.2,  # left_ankle_pitch
+     0.0,  # left_ankle_roll
+    -0.1,  # right_hip_pitch
+     0.0,  # right_hip_roll
+     0.0,  # right_hip_yaw
+     0.3,  # right_knee
+    -0.2,  # right_ankle_pitch
+     0.0,  # right_ankle_roll
+     0.0,  # waist_yaw
+     0.0,  # waist_roll
+     0.0,  # waist_pitch
+     0.0,  # left_shoulder_pitch
+     0.3,  # left_shoulder_roll
+     0.0,  # left_shoulder_yaw
+     1.0,  # left_elbow
+     0.0,  # left_wrist_roll
+     0.0,  # left_wrist_pitch
+     0.0,  # left_wrist_yaw
+     0.0,  # right_shoulder_pitch
+    -0.3,  # right_shoulder_roll
+     0.0,  # right_shoulder_yaw
+     1.0,  # right_elbow
+     0.0,  # right_wrist_roll
+     0.0,  # right_wrist_pitch
+     0.0,  # right_wrist_yaw
+]

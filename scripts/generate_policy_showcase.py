@@ -22,6 +22,7 @@ from typing import Iterable
 POLICIES = [
     {
         "id": "gear_sonic",
+        "policy_family": "gear_sonic",
         "title": "GEAR-SONIC",
         "config": "configs/showcase/gear_sonic_real.toml",
         "source": "NVIDIA GR00T",
@@ -32,6 +33,7 @@ POLICIES = [
         "command_source": "runtime.velocity_schedule",
         "demo_family": "Velocity tracking",
         "demo_sequence": "Stand, accelerate from 0.0 to 0.6 m/s over 2 s, command a 90 degree right turn over 1 s, accelerate into a 1.0 m/s run over 3 s, then settle back to stand.",
+        "showcase_gain_profile": "default_pd",
         "model_artifact": "models/gear-sonic/planner_sonic.onnx",
         "required_paths": [
             "models/gear-sonic/model_encoder.onnx",
@@ -39,6 +41,31 @@ POLICIES = [
             "models/gear-sonic/planner_sonic.onnx",
         ],
         "blocked_reason": "Requires downloaded GEAR-SONIC checkpoints. Run scripts/download_gear_sonic_models.sh or let CI warm the cache first.",
+    },
+    {
+        "id": "gear_sonic_tracking",
+        "policy_family": "gear_sonic",
+        "title": "GEAR-SONIC Reference Motion",
+        "config": "configs/showcase/gear_sonic_tracking_real.toml",
+        "source": "NVIDIA GR00T",
+        "summary": "Real published GEAR-Sonic encoder+decoder tracking on the official `macarena_001__A545` clip, running inside the MuJoCo-backed G1 showcase with the upstream heading-corrected reference orientation contract.",
+        "coverage": "Published G1 reference-motion tracking with explicit upper-body motion from the official example clip",
+        "execution_kind": "real",
+        "checkpoint_source": "Published GEAR-Sonic ONNX checkpoints plus pinned official reference-motion CSVs",
+        "command_source": "runtime.reference_motion_tracking",
+        "demo_family": "Reference / pose tracking",
+        "demo_sequence": "Autoplays the official `macarena_001__A545` reference clip to showcase clip-backed upper-body tracking instead of a standing placeholder.",
+        "showcase_gain_profile": "simulation_pd",
+        "model_artifact": "models/gear-sonic/reference/example/macarena_001__A545",
+        "required_paths": [
+            "models/gear-sonic/model_encoder.onnx",
+            "models/gear-sonic/model_decoder.onnx",
+            "models/gear-sonic/planner_sonic.onnx",
+            "models/gear-sonic/reference/example/macarena_001__A545/joint_pos.csv",
+            "models/gear-sonic/reference/example/macarena_001__A545/joint_vel.csv",
+            "models/gear-sonic/reference/example/macarena_001__A545/body_quat.csv",
+        ],
+        "blocked_reason": "Requires the published GEAR-Sonic checkpoints and the official reference clip payloads. Run scripts/download_gear_sonic_models.sh and scripts/download_gear_sonic_reference_motions.sh first.",
     },
     {
         "id": "decoupled_wbc",
@@ -52,6 +79,7 @@ POLICIES = [
         "command_source": "runtime.velocity_schedule",
         "demo_family": "Velocity tracking",
         "demo_sequence": "Stand, accelerate from 0.0 to 0.6 m/s over 2 s, command a 90 degree right turn over 1 s, accelerate into a 1.0 m/s run over 3 s, then settle back to stand.",
+        "showcase_gain_profile": "simulation_pd",
         "model_artifact": "models/decoupled-wbc/GR00T-WholeBodyControl-Walk.onnx",
         "required_paths": [
             "models/decoupled-wbc/GR00T-WholeBodyControl-Balance.onnx",
@@ -71,6 +99,7 @@ POLICIES = [
         "command_source": "runtime.motion_tokens",
         "demo_family": "Reference / pose tracking",
         "demo_sequence": "Replays the shipped `zs_walking.npy` latent walking context. No verified public waving or upper-body mocap clip is bundled in this repo today.",
+        "showcase_gain_profile": "simulation_pd",
         "model_artifact": "models/bfm_zero/bfm_zero_g1.onnx",
         "required_paths": [
             "models/bfm_zero/bfm_zero_g1.onnx",
@@ -108,6 +137,7 @@ POLICIES = [
         "command_source": "runtime.velocity_schedule",
         "demo_family": "Velocity tracking",
         "demo_sequence": "Stand, accelerate from 0.0 to 0.6 m/s over 2 s, command a 90 degree right turn over 1 s, accelerate into a 1.0 m/s run over 3 s, then settle back to stand.",
+        "showcase_gain_profile": "default_pd",
         "model_artifact": "models/wbc-agile/unitree_g1_velocity_e2e.onnx",
         "required_paths": [
             "models/wbc-agile/unitree_g1_velocity_e2e.onnx",
@@ -136,10 +166,6 @@ POLICIES = [
 
 NOT_YET_SHOWCASED = [
     {
-        "name": "gear_sonic_tracking",
-        "reason": "Official GEAR-Sonic reference clips exist upstream, but this checkout only has Git LFS pointer files for them and the Rust runtime still lacks a full motion-reference encoder path. The showcase keeps this blocked instead of faking an upper-body demo.",
-    },
-    {
         "name": "wbc_agile_t1",
         "reason": "The Booster T1 path exists, but the public upstream release still does not match the ONNX contract used by the Rust CLI today.",
     },
@@ -153,11 +179,12 @@ COLORS = ["#0f766e", "#dc2626", "#2563eb", "#d97706", "#7c3aed", "#0891b2"]
 RERUN_WEB_VIEWER_DIR = "_rerun_web_viewer"
 DISPLAY_ORDER = {
     "gear_sonic": 0,
-    "decoupled_wbc": 1,
-    "wbc_agile": 2,
-    "bfm_zero": 3,
-    "hover": 4,
-    "wholebody_vla": 5,
+    "gear_sonic_tracking": 1,
+    "decoupled_wbc": 2,
+    "wbc_agile": 3,
+    "bfm_zero": 4,
+    "hover": 5,
+    "wholebody_vla": 6,
 }
 
 DEMO_FAMILY_DESCRIPTIONS = {
@@ -325,15 +352,22 @@ def resolve_showcase_context(repo_root: Path, policy: dict[str, object]) -> dict
         robot_cfg = tomllib.loads((repo_root / str(robot_cfg_path)).read_text(encoding="utf-8"))
         robot_model_path = robot_cfg.get("model_path")
 
+    timestep = float(policy.get("showcase_timestep", 0.002))
+    derived_substeps = round(1.0 / (max(frequency_hz, 1) * timestep))
+    default_substeps = int(policy.get("showcase_substeps", max(derived_substeps, 1)))
+    default_gain_profile = str(policy.get("showcase_gain_profile", "simulation_pd"))
+
     if isinstance(existing_sim, dict):
         model_path = str(existing_sim.get("model_path") or robot_model_path or "")
-        timestep = float(existing_sim.get("timestep", 0.002))
-        substeps = int(existing_sim.get("substeps", 10))
+        timestep = float(existing_sim.get("timestep", timestep))
+        substeps = int(existing_sim.get("substeps", default_substeps))
+        gain_profile = str(existing_sim.get("gain_profile") or default_gain_profile)
         return {
             "transport": "mujoco" if model_path else "synthetic",
             "model_path": model_path or None,
             "timestep": timestep,
             "substeps": substeps,
+            "gain_profile": gain_profile if model_path else None,
             "robot_config_path": str(robot_cfg_path) if robot_cfg_path else None,
             "config_has_sim_section": True,
             "report_max_frames": report_max_frames,
@@ -345,23 +379,49 @@ def resolve_showcase_context(repo_root: Path, policy: dict[str, object]) -> dict
             "model_path": None,
             "timestep": None,
             "substeps": None,
+            "gain_profile": None,
             "robot_config_path": str(robot_cfg_path) if robot_cfg_path else None,
             "config_has_sim_section": False,
             "report_max_frames": report_max_frames,
         }
 
-    timestep = float(policy.get("showcase_timestep", 0.002))
-    derived_substeps = round(1.0 / (max(frequency_hz, 1) * timestep))
-    substeps = int(policy.get("showcase_substeps", max(derived_substeps, 1)))
     return {
         "transport": "mujoco",
         "model_path": str(robot_model_path),
         "timestep": timestep,
-        "substeps": substeps,
+        "substeps": default_substeps,
+        "gain_profile": default_gain_profile,
         "robot_config_path": str(robot_cfg_path) if robot_cfg_path else None,
         "config_has_sim_section": False,
         "report_max_frames": report_max_frames,
     }
+
+
+def ensure_showcase_sim_section(base_toml: str, showcase_context: dict[str, object]) -> str:
+    if showcase_context["transport"] != "mujoco":
+        return base_toml.rstrip()
+
+    required_lines = [
+        (r"^model_path\s*=", f'model_path = "{showcase_context["model_path"]}"'),
+        (r"^timestep\s*=", f'timestep = {showcase_context["timestep"]:g}'),
+        (r"^substeps\s*=", f'substeps = {showcase_context["substeps"]}'),
+        (
+            r"^gain_profile\s*=",
+            f'gain_profile = "{showcase_context["gain_profile"]}"',
+        ),
+    ]
+    sim_section_pattern = re.compile(r"^(\[sim\].*?)(?=^\[|\Z)", re.MULTILINE | re.DOTALL)
+    match = sim_section_pattern.search(base_toml)
+    if match is None:
+        sim_lines = ["[sim]"]
+        sim_lines.extend(line for _, line in required_lines)
+        return "\n\n".join([base_toml.rstrip(), "\n".join(sim_lines)])
+
+    sim_section = match.group(1).rstrip()
+    for pattern, line in required_lines:
+        if re.search(pattern, sim_section, re.MULTILINE) is None:
+            sim_section += "\n" + line
+    return base_toml[: match.start()] + sim_section + base_toml[match.end() :]
 
 
 def compose_showcase_config(
@@ -371,21 +431,7 @@ def compose_showcase_config(
     rrd_path: Path,
     showcase_context: dict[str, object],
 ) -> str:
-    sections = [base_toml.rstrip()]
-    if (
-        showcase_context["transport"] == "mujoco"
-        and not showcase_context["config_has_sim_section"]
-    ):
-        sections.append(
-            "\n".join(
-                [
-                    "[sim]",
-                    f'model_path = "{showcase_context["model_path"]}"',
-                    f'timestep = {showcase_context["timestep"]:g}',
-                    f'substeps = {showcase_context["substeps"]}',
-                ]
-            )
-        )
+    sections = [ensure_showcase_sim_section(base_toml, showcase_context).rstrip()]
     sections.append(
         "\n".join(
             [
@@ -437,6 +483,8 @@ def policy_meta(
     log_path: Path | None = None,
 ) -> dict[str, object]:
     meta = {
+        "card_id": policy["id"],
+        "policy_family": policy.get("policy_family", policy["id"]),
         "title": policy["title"],
         "source": policy["source"],
         "summary": policy["summary"],
@@ -452,6 +500,7 @@ def policy_meta(
         "blocked_reason": policy.get("blocked_reason"),
         "showcase_transport": actual_transport or str(showcase_context["transport"]),
         "showcase_model_path": showcase_context.get("model_path"),
+        "showcase_gain_profile": showcase_context.get("gain_profile"),
         "showcase_model_variant": actual_model_variant,
         "robot_config_path": showcase_context.get("robot_config_path"),
     }
@@ -469,7 +518,8 @@ def blocked_entry(repo_root: Path, policy: dict[str, object]) -> dict[str, objec
     missing = missing_required_paths(repo_root, policy)
     showcase_context = resolve_showcase_context(repo_root, policy)
     return {
-        "policy_name": policy["id"],
+        "card_id": policy["id"],
+        "policy_name": policy.get("policy_family", policy["id"]),
         "status": "blocked",
         "metrics": None,
         "frames": [],
@@ -546,6 +596,8 @@ def run_policy(
         )
 
     report = json.loads(json_path.read_text(encoding="utf-8"))
+    report["card_id"] = policy_id
+    report.setdefault("policy_name", str(policy.get("policy_family", policy_id)))
     report["status"] = "ok"
     report["_meta"] = policy_meta(
         policy,
@@ -735,12 +787,47 @@ def display_sort_key(index: int, entry: dict[str, object]) -> tuple[int, int, in
     meta = entry["_meta"]
     status = entry.get("status", "ok")
     execution_kind = str(meta["execution_kind"])
-    policy_name = str(entry.get("policy_name", ""))
+    card_id = entry_card_id(entry)
     return (
         0 if status == "ok" else 1,
         0 if execution_kind == "real" else 1,
-        DISPLAY_ORDER.get(policy_name, index),
+        DISPLAY_ORDER.get(card_id, index),
     )
+
+
+def entry_card_id(entry: dict[str, object]) -> str:
+    explicit = entry.get("card_id")
+    if explicit:
+        return str(explicit)
+
+    meta = entry.get("_meta")
+    if isinstance(meta, dict):
+        for key in ("card_id", "json_file", "rrd_file"):
+            value = meta.get(key)
+            if value:
+                return Path(str(value)).stem
+
+    return str(entry.get("policy_name") or "")
+
+
+def entry_policy_family(entry: dict[str, object]) -> str:
+    explicit = entry.get("policy_name")
+    if explicit:
+        return str(explicit)
+
+    meta = entry.get("_meta")
+    if isinstance(meta, dict) and meta.get("policy_family"):
+        return str(meta["policy_family"])
+
+    return entry_card_id(entry)
+
+
+def entry_identity_label(entry: dict[str, object]) -> str:
+    card_id = entry_card_id(entry)
+    policy_family = entry_policy_family(entry)
+    if policy_family == card_id:
+        return card_id
+    return f"{card_id} · family {policy_family}"
 
 
 
@@ -773,6 +860,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
     overview_rows: list[str] = []
     velocity_cards: list[str] = []
     tracking_cards: list[str] = []
+    normalized_entries: list[dict[str, object]] = []
 
     sorted_entries = [
         entry
@@ -783,16 +871,28 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
     ]
 
     for entry in sorted_entries:
-        meta = entry["_meta"]
-        status = entry.get("status", "ok")
+        card_id = entry_card_id(entry)
+        policy_family = entry_policy_family(entry)
+        meta = dict(entry["_meta"])
+        meta.setdefault("card_id", card_id)
+        meta.setdefault("policy_family", policy_family)
+        normalized_entry = dict(entry)
+        normalized_entry["card_id"] = card_id
+        normalized_entry["policy_name"] = policy_family
+        normalized_entry["_meta"] = meta
+        normalized_entries.append(normalized_entry)
+
+        status = normalized_entry.get("status", "ok")
         execution_kind = str(meta["execution_kind"])
+        identity_label = entry_identity_label(entry)
+        command_kind = str(normalized_entry.get("command_kind", ""))
         transport = str(meta.get("showcase_transport", "synthetic"))
         model_variant = showcase_model_variant_text(meta.get("showcase_model_variant"))
         transport_html = pill(showcase_transport_badge_label(transport), "transport")
         status_html = pill("OK" if status == "ok" else "BLOCKED", "ok" if status == "ok" else "blocked")
         provenance_html = " ".join([pill(execution_kind.upper(), execution_kind), transport_html])
 
-        metrics = entry.get("metrics") or {}
+        metrics = normalized_entry.get("metrics") or {}
         ticks = metrics.get("ticks", "-")
         avg_inference = (
             f"{metrics['average_inference_ms']:.3f} ms" if metrics else "-"
@@ -803,7 +903,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
         dropped_frames = metrics.get("dropped_frames", "-")
 
         overview_rows.append(
-            f"<tr><td><strong>{html.escape(str(meta['title']))}</strong><div class=\"muted\">{html.escape(str(entry['policy_name']))}</div></td>"
+            f"<tr><td><strong>{html.escape(str(meta['title']))}</strong><div class=\"muted\">{html.escape(identity_label)}</div></td>"
             f"<td>{status_html}</td>"
             f"<td>{provenance_html}</td>"
             f"<td>{html.escape(str(meta['demo_family']))}</td>"
@@ -818,7 +918,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
             [
                 pill(execution_kind.upper(), execution_kind),
                 transport_html,
-                pill(str(entry.get("command_kind", "")).upper(), "command"),
+                pill(command_kind.upper(), "command"),
                 pill(str(meta["command_source"]), "meta"),
             ]
         )
@@ -826,16 +926,33 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
         if status != "ok":
             missing_paths = meta.get("missing_paths", [])
             missing_html = "<br />".join(f"<code>{html.escape(path)}</code>" for path in missing_paths)
-            card_html = f'''<section class="card blocked-card">
+            card_html = f'''<section class="card blocked-card" id="policy-{html.escape(card_id)}">
   <div class="card-header">
     <div>
       <h2>{html.escape(str(meta['title']))}</h2>
       <p class="muted">{html.escape(str(meta['source']))} · {html.escape(str(meta['coverage']))}</p>
+      <p class="muted">{html.escape(identity_label)}</p>
     </div>
     <div class="badge-row">{badge_row}</div>
   </div>
   <p>{html.escape(str(meta['summary']))}</p>
   <div class="details-grid">
+    <div>
+      <span>Case key</span>
+      <code>{html.escape(card_id)}</code>
+    </div>
+    <div>
+      <span>Policy family</span>
+      <code>{html.escape(policy_family)}</code>
+    </div>
+    <div>
+      <span>Command kind</span>
+      <strong>{html.escape(command_kind)}</strong>
+    </div>
+    <div>
+      <span>Expected behavior</span>
+      <strong>{html.escape(str(meta['coverage']))}</strong>
+    </div>
     <div>
       <span>Status</span>
       <strong>Blocked</strong>
@@ -887,9 +1004,9 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
                 tracking_cards.append(card_html)
             continue
 
-        frames = entry.get("frames", [])
-        metrics = entry["metrics"]
-        joint_names = entry.get("joint_names", [])
+        frames = normalized_entry.get("frames", [])
+        metrics = normalized_entry["metrics"]
+        joint_names = normalized_entry.get("joint_names", [])
         velocity_tracking_metrics = None
         if isinstance(metrics, dict):
             velocity_tracking_metrics = metrics.get("velocity_tracking")
@@ -929,12 +1046,11 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
             }
         ]
 
-        command_kind = str(entry.get("command_kind", ""))
         velocity_tracking_series = None
         if command_kind in {"velocity", "velocity_schedule"}:
             velocity_tracking_series = derive_velocity_tracking_series(
                 frames,
-                int(entry.get("control_frequency_hz", 0) or 0),
+                int(normalized_entry.get("control_frequency_hz", 0) or 0),
             )
             command_series = [
                 {
@@ -1015,17 +1131,18 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
         else:
             velocity_tracking_details = ""
 
-        card_html = f'''<section class="card" id="policy-{html.escape(str(entry["policy_name"]))}">
+        card_html = f'''<section class="card" id="policy-{html.escape(card_id)}">
   <div class="card-header">
     <div>
       <h2>{html.escape(str(meta['title']))}</h2>
       <p class="muted">{html.escape(str(meta['source']))} · {html.escape(str(meta['coverage']))}</p>
+      <p class="muted">{html.escape(identity_label)}</p>
     </div>
     <div class="badge-row">{badge_row}</div>
   </div>
   <p>{html.escape(str(meta['summary']))}</p>
   <div class="stats">
-    <div><span>Robot</span><strong>{html.escape(str(entry['robot_name']))}</strong></div>
+    <div><span>Robot</span><strong>{html.escape(str(normalized_entry['robot_name']))}</strong></div>
     <div><span>Ticks</span><strong>{metrics['ticks']}</strong></div>
     <div><span>Avg inference</span><strong>{metrics['average_inference_ms']:.3f} ms</strong></div>
     <div><span>Achieved rate</span><strong>{metrics['achieved_frequency_hz']:.2f} Hz</strong></div>
@@ -1053,7 +1170,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
       <strong>Embedded Rerun viewer</strong>
       <span class="muted">Fetches <code>{html.escape(str(meta['rrd_file']))}</code> lazily when the card enters the viewport.</span>
     </div>
-    <div class="rerun-stage" data-rerun-policy="{html.escape(str(entry['policy_name']))}" data-rrd-file="{html.escape(str(meta['rrd_file']))}">
+    <div class="rerun-stage" data-rerun-policy="{html.escape(card_id)}" data-rrd-file="{html.escape(str(meta['rrd_file']))}">
       <div class="rerun-stage-placeholder">
         <strong>Preparing interactive view</strong>
         <span>Loads the viewer runtime and recording on demand when visible.</span>
@@ -1061,6 +1178,22 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
     </div>
   </div>
   <div class="details-grid">
+    <div>
+      <span>Case key</span>
+      <code>{html.escape(card_id)}</code>
+    </div>
+    <div>
+      <span>Policy family</span>
+      <code>{html.escape(policy_family)}</code>
+    </div>
+    <div>
+      <span>Command kind</span>
+      <strong>{html.escape(command_kind)}</strong>
+    </div>
+    <div>
+      <span>Expected behavior</span>
+      <strong>{html.escape(str(meta['coverage']))}</strong>
+    </div>
     <div>
       <span>Showcase transport</span>
       <strong>{html.escape(showcase_transport_text(transport))}</strong>
@@ -1075,7 +1208,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
     </div>
     <div>
       <span>Command data</span>
-      <code>{html.escape(format_vector(entry.get('command_data', [])))}</code>
+      <code>{html.escape(format_vector(normalized_entry.get('command_data', [])))}</code>
     </div>
     <div>
       <span>Checkpoint source</span>
@@ -1341,7 +1474,10 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
 </html>'''
 
     (output_dir / "index.html").write_text(html_doc, encoding="utf-8")
-    (output_dir / "manifest.json").write_text(json.dumps(sorted_entries, indent=2), encoding="utf-8")
+    (output_dir / "manifest.json").write_text(
+        json.dumps(normalized_entries, indent=2),
+        encoding="utf-8",
+    )
 
 
 def main() -> int:

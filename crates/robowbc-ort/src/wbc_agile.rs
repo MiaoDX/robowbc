@@ -118,6 +118,8 @@ struct WbcAgileHistoryRuntime {
     backend: OrtBackend,
     input_joint_indices: Vec<usize>,
     output_joint_indices: Vec<usize>,
+    input_default_pose: Vec<f32>,
+    output_default_pose: Vec<f32>,
     last_actions: Vec<f32>,
     base_ang_vel_history: Vec<f32>,
     projected_gravity_history: Vec<f32>,
@@ -129,13 +131,15 @@ struct WbcAgileHistoryRuntime {
 
 impl WbcAgileHistoryRuntime {
     fn new(backend: OrtBackend, robot: &RobotConfig) -> CoreResult<Self> {
+        let input_joint_indices = joint_indices_from_names(robot, &WBC_AGILE_G1_INPUT_JOINT_NAMES)?;
+        let output_joint_indices =
+            joint_indices_from_names(robot, &WBC_AGILE_G1_OUTPUT_JOINT_NAMES)?;
         Ok(Self {
             backend,
-            input_joint_indices: joint_indices_from_names(robot, &WBC_AGILE_G1_INPUT_JOINT_NAMES)?,
-            output_joint_indices: joint_indices_from_names(
-                robot,
-                &WBC_AGILE_G1_OUTPUT_JOINT_NAMES,
-            )?,
+            input_default_pose: gather_joint_values(&robot.default_pose, &input_joint_indices),
+            output_default_pose: gather_joint_values(&robot.default_pose, &output_joint_indices),
+            input_joint_indices,
+            output_joint_indices,
             last_actions: vec![0.0; WBC_AGILE_G1_OUTPUT_JOINT_COUNT],
             base_ang_vel_history: vec![0.0; WBC_AGILE_G1_HISTORY_LEN * 3],
             projected_gravity_history: vec![0.0; WBC_AGILE_G1_HISTORY_LEN * 3],
@@ -248,13 +252,20 @@ impl WbcAgilePolicy {
         obs: &Observation,
         twist: &Twist,
     ) -> CoreResult<JointPositionTargets> {
-        let root_link_quat_w = gravity_to_root_quaternion_wxyz(obs.gravity_vector);
-        let root_ang_vel_b = [0.0_f32; 3];
+        let root_link_quat_w = root_quaternion_wxyz_from_observation(obs);
+        let root_ang_vel_b = obs.angular_velocity;
         let velocity_commands = [twist.linear[0], twist.linear[1], twist.angular[2]];
-        let joint_pos = gather_joint_values(&obs.joint_positions, &runtime.input_joint_indices);
+        let joint_pos = gather_relative_joint_values(
+            &obs.joint_positions,
+            &runtime.input_joint_indices,
+            &runtime.input_default_pose,
+        );
         let joint_vel = gather_joint_values(&obs.joint_velocities, &runtime.input_joint_indices);
-        let controlled_joint_pos =
-            gather_joint_values(&obs.joint_positions, &runtime.output_joint_indices);
+        let controlled_joint_pos = gather_relative_joint_values(
+            &obs.joint_positions,
+            &runtime.output_joint_indices,
+            &runtime.output_default_pose,
+        );
         let controlled_joint_vel =
             gather_joint_values(&obs.joint_velocities, &runtime.output_joint_indices);
 
@@ -473,6 +484,14 @@ fn gather_joint_values(values: &[f32], indices: &[usize]) -> Vec<f32> {
     indices.iter().map(|&idx| values[idx]).collect()
 }
 
+fn gather_relative_joint_values(values: &[f32], indices: &[usize], offsets: &[f32]) -> Vec<f32> {
+    indices
+        .iter()
+        .zip(offsets.iter())
+        .map(|(&idx, &offset)| values[idx] - offset)
+        .collect()
+}
+
 fn required_f32_output(outputs: &[OrtTensorOutput], name: &str) -> CoreResult<Vec<f32>> {
     outputs
         .iter()
@@ -557,6 +576,19 @@ fn gravity_to_root_quaternion_wxyz(gravity: [f32; 3]) -> [f32; 4] {
     normalize_quaternion(quaternion)
 }
 
+fn root_quaternion_wxyz_from_observation(obs: &Observation) -> [f32; 4] {
+    if let Some(base_pose) = obs.base_pose {
+        return normalize_quaternion([
+            base_pose.rotation_xyzw[3],
+            base_pose.rotation_xyzw[0],
+            base_pose.rotation_xyzw[1],
+            base_pose.rotation_xyzw[2],
+        ]);
+    }
+
+    gravity_to_root_quaternion_wxyz(obs.gravity_vector)
+}
+
 fn normalize_quaternion(quaternion: [f32; 4]) -> [f32; 4] {
     let norm = quaternion
         .iter()
@@ -612,6 +644,7 @@ mod tests {
             joint_count,
             joint_names: (0..joint_count).map(|i| format!("j{i}")).collect(),
             pd_gains: vec![PdGains { kp: 1.0, kd: 0.1 }; joint_count],
+            sim_pd_gains: None,
             joint_limits: vec![
                 JointLimit {
                     min: -1.0,
@@ -628,7 +661,7 @@ mod tests {
     fn g1_35_robot_config() -> RobotConfig {
         RobotConfig::from_toml_file(
             &Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../configs/robots/unitree_g1_35dof.toml"),
+                .join("../../configs/robots/unitree_g1_35dof_wbc_agile.toml"),
         )
         .expect("robot config should load")
     }
@@ -671,6 +704,7 @@ mod tests {
             joint_velocities: vec![0.0; 4],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::MotionTokens(vec![1.0]),
             timestamp: Instant::now(),
         };
@@ -701,6 +735,7 @@ mod tests {
             joint_velocities: vec![0.0; 4],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::Velocity(Twist {
                 linear: [0.0; 3],
                 angular: [0.0; 3],
@@ -735,6 +770,7 @@ mod tests {
             joint_velocities: vec![0.0; 4],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::Velocity(Twist {
                 linear: [0.3, 0.0, 0.0],
                 angular: [0.0, 0.0, 0.1],
@@ -775,6 +811,7 @@ mod tests {
             joint_velocities: vec![0.0; N],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::Velocity(Twist {
                 linear: [0.3, 0.0, 0.0],
                 angular: [0.0, 0.0, 0.0],
@@ -812,6 +849,7 @@ mod tests {
             joint_velocities: vec![0.0; N],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::Velocity(Twist {
                 linear: [0.5, 0.0, 0.0],
                 angular: [0.0, 0.0, 0.0],
@@ -881,6 +919,44 @@ mod tests {
         assert!(quaternion[3].abs() < 1e-6);
     }
 
+    #[test]
+    fn root_quaternion_prefers_base_pose_when_available() {
+        let obs = Observation {
+            joint_positions: vec![],
+            joint_velocities: vec![],
+            gravity_vector: [0.4, 0.0, -0.9165151],
+            angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: Some(robowbc_core::BasePose {
+                position_world: [0.0, 0.0, 0.8],
+                rotation_xyzw: [0.0, 0.0, 0.70710677, 0.70710677],
+            }),
+            command: WbcCommand::Velocity(Twist {
+                linear: [0.0; 3],
+                angular: [0.0; 3],
+            }),
+            timestamp: Instant::now(),
+        };
+
+        let quaternion = root_quaternion_wxyz_from_observation(&obs);
+        assert!((quaternion[0] - 0.70710677).abs() < 1e-6);
+        assert!(quaternion[1].abs() < 1e-6);
+        assert!(quaternion[2].abs() < 1e-6);
+        assert!((quaternion[3] - 0.70710677).abs() < 1e-6);
+    }
+
+    #[test]
+    fn gather_relative_joint_values_subtracts_offsets() {
+        let values = [0.4, -0.2, 1.2, 0.5];
+        let indices = [0_usize, 2, 3];
+        let offsets = [0.1, 1.0, -0.5];
+
+        let relative = gather_relative_joint_values(&values, &indices, &offsets);
+
+        assert!((relative[0] - 0.3).abs() < 1e-6);
+        assert!((relative[1] - 0.2).abs() < 1e-6);
+        assert!((relative[2] - 1.0).abs() < 1e-6);
+    }
+
     /// Integration test requiring the published WBC-AGILE G1 ONNX checkpoint.
     ///
     /// To run once weights are available:
@@ -909,6 +985,7 @@ mod tests {
             joint_velocities: vec![0.0; robot.joint_count],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::Velocity(Twist {
                 linear: [0.3, 0.0, 0.0],
                 angular: [0.0, 0.0, 0.0],
