@@ -691,6 +691,7 @@ const GEAR_SONIC_DEFAULT_MODE_SLOW_WALK: i64 = 1;
 const GEAR_SONIC_DEFAULT_MODE_WALK: i64 = 2;
 const GEAR_SONIC_DEFAULT_MODE_RUN: i64 = 3;
 const GEAR_SONIC_CONTROL_DT_SECS: f32 = 1.0 / 50.0;
+const GEAR_SONIC_PLANNER_THREAD_INTERVAL_TICKS: usize = 5;
 const GEAR_SONIC_PLANNER_LOOK_AHEAD_STEPS: usize = 2;
 const GEAR_SONIC_PLANNER_BLEND_FRAMES: usize = 8;
 const GEAR_SONIC_ENCODER_DIM: usize = 64;
@@ -753,6 +754,7 @@ const GEAR_SONIC_G1_ACTION_SCALE: [f32; 29] = [
 struct GearSonicPlannerState {
     context: VecDeque<Vec<f32>>,
     steps_since_plan: usize,
+    steps_since_planner_tick: usize,
     last_context_frame: Vec<f32>,
     facing_yaw_rad: f32,
     motion_qpos_50hz: Vec<Vec<f32>>,
@@ -782,6 +784,7 @@ impl GearSonicPlannerState {
         Self {
             context,
             steps_since_plan: GEAR_SONIC_PLANNER_REPLAN_INTERVAL_TICKS_DEFAULT,
+            steps_since_planner_tick: GEAR_SONIC_PLANNER_THREAD_INTERVAL_TICKS,
             last_context_frame: standing,
             facing_yaw_rad: 0.0,
             motion_qpos_50hz: Vec::new(),
@@ -1356,31 +1359,6 @@ impl GearSonicPolicy {
         wrapped
     }
 
-    fn bin_angle_to_8_directions(angle: f32) -> (f32, f32) {
-        let bin_size = std::f32::consts::FRAC_PI_4;
-        let mut normalized = Self::wrap_angle_rad(angle);
-        if normalized == -std::f32::consts::PI {
-            normalized = std::f32::consts::PI;
-        }
-
-        let mut bin_index = (normalized / bin_size).round() as i32;
-        if bin_index > 4 {
-            bin_index -= 8;
-        }
-        if bin_index < -4 {
-            bin_index += 8;
-        }
-
-        let slow_walk_speed = match bin_index {
-            0 | 1 | -1 => 0.3,
-            2 | -2 => 0.35,
-            3 | -3 => 0.25,
-            4 | -4 => 0.2,
-            _ => 0.2,
-        };
-        (bin_index as f32 * bin_size, slow_walk_speed)
-    }
-
     fn vec3_distance(a: [f32; 3], b: [f32; 3]) -> f32 {
         let dx = a[0] - b[0];
         let dy = a[1] - b[1];
@@ -1416,11 +1394,9 @@ impl GearSonicPolicy {
         let local_movement_angle = twist.linear[1].atan2(twist.linear[0]);
         let movement_angle =
             Self::wrap_angle_rad(planner_state.facing_yaw_rad + local_movement_angle);
-        let (binned_movement_angle, slow_walk_speed) =
-            Self::bin_angle_to_8_directions(movement_angle);
-        let (mode, target_vel) = if cmd_norm <= 0.45 {
-            (GEAR_SONIC_DEFAULT_MODE_SLOW_WALK, slow_walk_speed)
-        } else if cmd_norm <= 1.25 {
+        let (mode, target_vel) = if cmd_norm < 0.8 {
+            (GEAR_SONIC_DEFAULT_MODE_SLOW_WALK, cmd_norm.clamp(0.2, 0.8))
+        } else if cmd_norm < 2.5 {
             (GEAR_SONIC_DEFAULT_MODE_WALK, -1.0)
         } else {
             (GEAR_SONIC_DEFAULT_MODE_RUN, -1.0)
@@ -1429,11 +1405,7 @@ impl GearSonicPolicy {
             mode,
             target_vel,
             height: GEAR_SONIC_DEFAULT_HEIGHT_SENTINEL,
-            movement_direction: [
-                binned_movement_angle.cos(),
-                binned_movement_angle.sin(),
-                0.0,
-            ],
+            movement_direction: [movement_angle.cos(), movement_angle.sin(), 0.0],
             facing_direction,
         }
     }
@@ -2061,9 +2033,12 @@ impl GearSonicPolicy {
 
         let command = Self::derive_planner_command(&mut planner_state, twist);
         let replan_interval_ticks = Self::planner_replan_interval_ticks(command);
+        let planner_tick_due = planner_state.motion_qpos_50hz.is_empty()
+            || planner_state.steps_since_planner_tick >= GEAR_SONIC_PLANNER_THREAD_INTERVAL_TICKS;
         let needs_replan = planner_state.motion_qpos_50hz.is_empty()
-            || Self::planner_command_changed(planner_state.last_command, command)
-            || planner_state.steps_since_plan >= replan_interval_ticks;
+            || (planner_tick_due
+                && (Self::planner_command_changed(planner_state.last_command, command)
+                    || planner_state.steps_since_plan >= replan_interval_ticks));
 
         if needs_replan {
             if !planner_state.motion_qpos_50hz.is_empty() {
@@ -2099,9 +2074,14 @@ impl GearSonicPolicy {
             }
             planner_state.last_command = Some(command);
             planner_state.steps_since_plan = 0;
+            planner_state.steps_since_planner_tick = 0;
+        } else if planner_tick_due {
+            planner_state.steps_since_planner_tick = 0;
         }
 
         planner_state.steps_since_plan = planner_state.steps_since_plan.saturating_add(1);
+        planner_state.steps_since_planner_tick =
+            planner_state.steps_since_planner_tick.saturating_add(1);
         if planner_state.init_base_quat_wxyz.is_none() {
             planner_state.init_base_quat_wxyz = Some(Self::observation_base_quat_wxyz(obs));
         }
@@ -2930,7 +2910,22 @@ mod tests {
     }
 
     #[test]
-    fn gear_sonic_planner_command_accumulates_heading_and_rotates_forward_motion() {
+    fn gear_sonic_planner_command_uses_slow_walk_speed_for_low_velocity() {
+        let mut planner_state = GearSonicPlannerState::new(&test_robot_config(29));
+        let forward = robowbc_core::Twist {
+            linear: [0.6, 0.0, 0.0],
+            angular: [0.0, 0.0, 0.0],
+        };
+        let command = GearSonicPolicy::derive_planner_command(&mut planner_state, &forward);
+
+        assert_eq!(command.mode, GEAR_SONIC_DEFAULT_MODE_SLOW_WALK);
+        assert!((command.target_vel - 0.6).abs() < 1e-6);
+        assert_vec3_approx_eq(command.movement_direction, [1.0, 0.0, 0.0]);
+        assert_vec3_approx_eq(command.facing_direction, [1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn gear_sonic_planner_command_rotates_movement_with_facing_heading() {
         let mut planner_state = GearSonicPlannerState::new(&test_robot_config(29));
         let turning = robowbc_core::Twist {
             linear: [0.0, 0.0, 0.0],
@@ -2940,7 +2935,6 @@ mod tests {
             let command = GearSonicPolicy::derive_planner_command(&mut planner_state, &turning);
             assert_eq!(command.mode, GEAR_SONIC_DEFAULT_MODE_IDLE);
             assert_eq!(command.target_vel, -1.0);
-            assert_vec3_approx_eq(command.movement_direction, [0.0, 0.0, 0.0]);
         }
 
         let forward = robowbc_core::Twist {
@@ -2950,9 +2944,28 @@ mod tests {
         let command = GearSonicPolicy::derive_planner_command(&mut planner_state, &forward);
 
         assert_eq!(command.mode, GEAR_SONIC_DEFAULT_MODE_WALK);
-        assert!((command.target_vel - (-1.0)).abs() < 1e-6);
-        assert_vec3_approx_eq(command.facing_direction, [0.0, -1.0, 0.0]);
+        assert_eq!(command.target_vel, -1.0);
         assert_vec3_approx_eq(command.movement_direction, [0.0, -1.0, 0.0]);
+        assert_vec3_approx_eq(command.facing_direction, [0.0, -1.0, 0.0]);
+    }
+
+    #[test]
+    fn gear_sonic_planner_command_keeps_idle_mode_without_linear_speed() {
+        let mut planner_state = GearSonicPlannerState::new(&test_robot_config(29));
+        let turning = robowbc_core::Twist {
+            linear: [0.0, 0.0, 0.0],
+            angular: [0.0, 0.0, -std::f32::consts::FRAC_PI_2],
+        };
+        let command = GearSonicPolicy::derive_planner_command(&mut planner_state, &turning);
+
+        assert_eq!(command.mode, GEAR_SONIC_DEFAULT_MODE_IDLE);
+        assert_eq!(command.target_vel, -1.0);
+        assert_vec3_approx_eq(command.movement_direction, [0.0, 0.0, 0.0]);
+        let expected_yaw = -std::f32::consts::FRAC_PI_2 * GEAR_SONIC_CONTROL_DT_SECS;
+        assert_vec3_approx_eq(
+            command.facing_direction,
+            [expected_yaw.cos(), expected_yaw.sin(), 0.0],
+        );
     }
 
     #[test]
