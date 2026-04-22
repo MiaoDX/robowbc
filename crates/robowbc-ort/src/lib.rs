@@ -701,11 +701,8 @@ const GEAR_SONIC_ENCODER_MOTION_ANCHOR_ORIENTATION_OFFSET: usize = 601;
 
 /// `IsaacLab` to `MuJoCo` joint index remapping for G1 29-DOF.
 ///
-/// Despite the upstream name, this table is used as the effective
-/// `MuJoCo -> IsaacLab` remap throughout the published GEAR-SONIC runtime.
-/// Planner outputs and live observations arrive in `MuJoCo` order, and
-/// decoder outputs are consumed by looking up the `IsaacLab` index for each
-/// `MuJoCo` joint.
+/// Decoder outputs are in `IsaacLab` order; this table maps each `MuJoCo` index
+/// to the corresponding `IsaacLab` index so we can read the correct value.
 const GEAR_SONIC_ISAACLAB_TO_MUJOCO: [usize; 29] = [
     0, 3, 6, 9, 13, 17, 1, 4, 7, 10, 14, 18, 2, 5, 8, 11, 15, 19, 21, 23, 25, 27, 12, 16, 20, 22,
     24, 26, 28,
@@ -1320,18 +1317,6 @@ impl GearSonicPolicy {
             Self::idle_planner_command()
         } else {
             live_command
-        }
-    }
-
-    fn planner_command_for_velocity_bootstrap(
-        planner_state: &GearSonicPlannerState,
-        live_command: GearSonicPlannerCommand,
-        command_speed: f32,
-    ) -> GearSonicPlannerCommand {
-        if planner_state.motion_qpos_50hz.is_empty() && command_speed > 0.01 {
-            live_command
-        } else {
-            Self::planner_command_for_replan(planner_state, live_command)
         }
     }
 
@@ -2185,13 +2170,6 @@ impl GearSonicPolicy {
         let mut planner_state = self.planner_state.lock().map_err(|_| {
             robowbc_core::WbcError::InferenceFailed("planner state mutex poisoned".to_owned())
         })?;
-        let command_speed =
-            (twist.linear[0] * twist.linear[0] + twist.linear[1] * twist.linear[1]).sqrt();
-        if planner_state.motion_qpos_50hz.is_empty() && command_speed <= 0.01 {
-            drop(planner_state);
-            let encoder_obs = Self::build_placeholder_encoder_obs_dict(&self.robot);
-            return self.run_tracking_contract_from_encoder_obs(obs, &encoder_obs);
-        }
         if planner_state.motion_qpos_50hz.is_empty() {
             planner_state.context = Self::initialize_planner_context(&self.robot, obs);
             planner_state.last_context_frame = planner_state
@@ -2204,8 +2182,7 @@ impl GearSonicPolicy {
 
         let command = Self::derive_planner_command(&mut planner_state, twist);
         let initializing_planner = planner_state.motion_qpos_50hz.is_empty();
-        let planner_command =
-            Self::planner_command_for_velocity_bootstrap(&planner_state, command, command_speed);
+        let planner_command = Self::planner_command_for_replan(&planner_state, command);
         let replan_interval_ticks = Self::planner_replan_interval_ticks(command);
         let planner_tick_due = initializing_planner
             || planner_state.steps_since_planner_tick >= GEAR_SONIC_PLANNER_THREAD_INTERVAL_TICKS;
@@ -2679,31 +2656,6 @@ mod tests {
         for (index, value) in values.iter().enumerate() {
             let separator = if index + 1 == values.len() { "" } else { "," };
             let _ = writeln!(json, "  {value}{separator}");
-        }
-        json.push_str("]\n");
-        fs::write(path, json).expect("tensor dump should be written");
-    }
-
-    fn write_json_matrix(path: &std::path::Path, rows: &[Vec<f32>]) {
-        use std::fmt::Write as _;
-
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).expect("tensor dump directory should be created");
-        }
-
-        let mut json = String::from("[\n");
-        for (row_index, row) in rows.iter().enumerate() {
-            let row_separator = if row_index + 1 == rows.len() { "" } else { "," };
-            json.push_str("  [\n");
-            for (value_index, value) in row.iter().enumerate() {
-                let value_separator = if value_index + 1 == row.len() {
-                    ""
-                } else {
-                    ","
-                };
-                let _ = writeln!(json, "    {value}{value_separator}");
-            }
-            let _ = writeln!(json, "  ]{row_separator}");
         }
         json.push_str("]\n");
         fs::write(path, json).expect("tensor dump should be written");
@@ -3185,46 +3137,6 @@ mod tests {
     }
 
     #[test]
-    fn gear_sonic_velocity_bootstrap_uses_live_command_after_standing_hold() {
-        let mut planner_state = GearSonicPlannerState::new(&test_robot_config(29));
-        let live_command = GearSonicPolicy::derive_planner_command(
-            &mut planner_state,
-            &robowbc_core::Twist {
-                linear: [0.6, 0.0, 0.0],
-                angular: [0.0, 0.0, 0.0],
-            },
-        );
-
-        let planner_command = GearSonicPolicy::planner_command_for_velocity_bootstrap(
-            &planner_state,
-            live_command,
-            0.6,
-        );
-
-        assert_eq!(planner_command, live_command);
-    }
-
-    #[test]
-    fn gear_sonic_velocity_bootstrap_keeps_idle_command_when_still_stationary() {
-        let mut planner_state = GearSonicPlannerState::new(&test_robot_config(29));
-        let live_command = GearSonicPolicy::derive_planner_command(
-            &mut planner_state,
-            &robowbc_core::Twist {
-                linear: [0.0, 0.0, 0.0],
-                angular: [0.0, 0.0, 0.0],
-            },
-        );
-
-        let planner_command = GearSonicPolicy::planner_command_for_velocity_bootstrap(
-            &planner_state,
-            live_command,
-            0.0,
-        );
-
-        assert_eq!(planner_command, GearSonicPolicy::idle_planner_command());
-    }
-
-    #[test]
     fn gear_sonic_planner_allowed_pred_mask_matches_upstream_default() {
         assert_eq!(
             GEAR_SONIC_ALLOWED_PRED_NUM_TOKENS_MASK,
@@ -3578,223 +3490,6 @@ mod tests {
         write_json_vector(&dump_dir.join("tracking_raw_actions.json"), &raw_actions);
 
         eprintln!("wrote tracking tensor dump to {}", dump_dir.display());
-    }
-
-    #[test]
-    #[ignore = "requires real GEAR-Sonic ONNX models; run scripts/download_gear_sonic_models.sh first"]
-    #[allow(clippy::too_many_lines)]
-    fn gear_sonic_dump_velocity_first_live_replan_tensors() {
-        let model_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../models/gear-sonic");
-        let encoder_path = model_dir.join("model_encoder.onnx");
-        let decoder_path = model_dir.join("model_decoder.onnx");
-        let planner_path = model_dir.join("planner_sonic.onnx");
-        let robot_config_path =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs/robots/unitree_g1.toml");
-
-        for path in [&encoder_path, &decoder_path, &planner_path] {
-            assert!(
-                path.exists(),
-                "model not found: {path:?} — run scripts/download_gear_sonic_models.sh"
-            );
-        }
-
-        let robot = robowbc_core::RobotConfig::from_toml_file(&robot_config_path)
-            .expect("robot config should load");
-        let policy = GearSonicPolicy::new(GearSonicConfig {
-            encoder: OrtConfig {
-                model_path: encoder_path,
-                execution_provider: ExecutionProvider::Cpu,
-                optimization_level: OptimizationLevel::Extended,
-                num_threads: 1,
-            },
-            decoder: OrtConfig {
-                model_path: decoder_path,
-                execution_provider: ExecutionProvider::Cpu,
-                optimization_level: OptimizationLevel::Extended,
-                num_threads: 1,
-            },
-            planner: OrtConfig {
-                model_path: planner_path,
-                execution_provider: ExecutionProvider::Cpu,
-                optimization_level: OptimizationLevel::Extended,
-                num_threads: 1,
-            },
-            reference_motion: None,
-            robot: robot.clone(),
-        })
-        .expect("policy should build from real models");
-
-        let twist = robowbc_core::Twist {
-            linear: [0.6, 0.0, 0.0],
-            angular: [0.0, 0.0, 0.0],
-        };
-        let obs = Observation {
-            joint_positions: robot.default_pose.clone(),
-            joint_velocities: vec![0.0; robot.joint_count],
-            gravity_vector: [0.0, 0.0, -1.0],
-            angular_velocity: [0.0, 0.0, 0.0],
-            base_pose: Some(BasePose {
-                position_world: [0.0, 0.0, GEAR_SONIC_DEFAULT_HEIGHT_METERS],
-                rotation_xyzw: [0.0, 0.0, 0.0, 1.0],
-            }),
-            command: WbcCommand::Velocity(twist),
-            timestamp: Instant::now(),
-        };
-
-        let mut bootstrap_state = GearSonicPlannerState::new(&robot);
-        bootstrap_state.context = GearSonicPolicy::initialize_planner_context(&robot, &obs);
-        bootstrap_state.last_context_frame = bootstrap_state
-            .context
-            .back()
-            .cloned()
-            .expect("bootstrap context should contain a standing frame");
-        bootstrap_state.init_base_quat_wxyz =
-            Some(GearSonicPolicy::observation_base_quat_wxyz(&obs));
-
-        let idle_planned_30hz = {
-            let mut planner = policy
-                .planner
-                .lock()
-                .expect("planner mutex should not be poisoned");
-            GearSonicPolicy::run_real_planner(
-                &mut planner,
-                &bootstrap_state.context,
-                GearSonicPolicy::idle_planner_command(),
-            )
-            .expect("idle planner bootstrap should succeed")
-        };
-        let idle_planned_50hz =
-            GearSonicPolicy::resample_planner_trajectory_to_50hz(&idle_planned_30hz);
-        GearSonicPolicy::commit_planner_motion(
-            &mut bootstrap_state,
-            &obs,
-            0,
-            GearSonicPolicy::idle_planner_command(),
-            idle_planned_50hz.clone(),
-        )
-        .expect("idle planner bootstrap should commit");
-
-        for _ in 0..GEAR_SONIC_PLANNER_THREAD_INTERVAL_TICKS {
-            GearSonicPolicy::advance_planner_motion_frame(&mut bootstrap_state);
-        }
-        GearSonicPolicy::rebuild_planner_context_from_motion(&mut bootstrap_state);
-
-        let live_command = GearSonicPolicy::derive_planner_command(&mut bootstrap_state, &twist);
-        let planner_context = bootstrap_state.context.iter().cloned().collect::<Vec<_>>();
-        let live_planned_30hz = {
-            let mut planner = policy
-                .planner
-                .lock()
-                .expect("planner mutex should not be poisoned");
-            GearSonicPolicy::run_real_planner(&mut planner, &bootstrap_state.context, live_command)
-                .expect("live planner replan should succeed")
-        };
-        let live_planned_50hz =
-            GearSonicPolicy::resample_planner_trajectory_to_50hz(&live_planned_30hz);
-
-        let mut replanned_state = GearSonicPlannerState::new(&robot);
-        replanned_state.context = bootstrap_state.context.clone();
-        replanned_state.steps_since_plan = bootstrap_state.steps_since_plan;
-        replanned_state.steps_since_planner_tick = bootstrap_state.steps_since_planner_tick;
-        replanned_state.last_context_frame = bootstrap_state.last_context_frame.clone();
-        replanned_state.facing_yaw_rad = bootstrap_state.facing_yaw_rad;
-        replanned_state.motion_qpos_50hz = bootstrap_state.motion_qpos_50hz.clone();
-        replanned_state.motion_joint_velocities_isaaclab =
-            bootstrap_state.motion_joint_velocities_isaaclab.clone();
-        replanned_state.current_motion_frame = bootstrap_state.current_motion_frame;
-        replanned_state.init_base_quat_wxyz = bootstrap_state.init_base_quat_wxyz;
-        replanned_state.init_ref_root_quat_wxyz = bootstrap_state.init_ref_root_quat_wxyz;
-        replanned_state.last_command = bootstrap_state.last_command;
-        GearSonicPolicy::commit_planner_motion(
-            &mut replanned_state,
-            &obs,
-            bootstrap_state.current_motion_frame,
-            live_command,
-            live_planned_50hz.clone(),
-        )
-        .expect("live planner replan should commit");
-
-        let encoder_obs = GearSonicPolicy::build_velocity_encoder_obs_dict(&obs, &replanned_state)
-            .expect("velocity encoder obs should build from replanned motion");
-        assert_eq!(encoder_obs.len(), GEAR_SONIC_ENCODER_OBS_DICT_DIM);
-
-        let tokens = {
-            let mut encoder = policy
-                .encoder
-                .lock()
-                .expect("encoder mutex should not be poisoned");
-            GearSonicPolicy::run_single_input_model(&mut encoder, &encoder_obs)
-                .expect("encoder should produce velocity tokens")
-        };
-        assert_eq!(tokens.len(), GEAR_SONIC_ENCODER_DIM);
-
-        let mut tracking_state = GearSonicTrackingState::new(&robot);
-        let current_joint_positions =
-            GearSonicPolicy::observation_joint_positions_isaaclab_offsets(&robot, &obs);
-        let current_joint_velocities = GearSonicPolicy::observation_joint_velocities_isaaclab(&obs);
-        let current_actions = tracking_state.latest_action.clone();
-        tracking_state.push(
-            obs.gravity_vector,
-            obs.angular_velocity,
-            &current_joint_positions,
-            &current_joint_velocities,
-            &current_actions,
-        );
-        let decoder_obs = GearSonicPolicy::build_decoder_obs_dict(&tokens, &tracking_state);
-        assert_eq!(decoder_obs.len(), GEAR_SONIC_DECODER_OBS_DICT_DIM);
-
-        let raw_actions = {
-            let mut decoder = policy
-                .decoder
-                .lock()
-                .expect("decoder mutex should not be poisoned");
-            GearSonicPolicy::run_single_input_model(&mut decoder, &decoder_obs)
-                .expect("decoder should produce velocity actions")
-        };
-        assert_eq!(raw_actions.len(), robot.joint_count);
-
-        let planner_command = vec![
-            live_command.mode as f32,
-            live_command.target_vel,
-            live_command.height,
-            live_command.movement_direction[0],
-            live_command.movement_direction[1],
-            live_command.movement_direction[2],
-            live_command.facing_direction[0],
-            live_command.facing_direction[1],
-            live_command.facing_direction[2],
-        ];
-
-        let dump_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../.tmp/gear_sonic_rust_velocity_dump");
-        write_json_matrix(
-            &dump_dir.join("bootstrap_motion_50hz.json"),
-            &bootstrap_state.motion_qpos_50hz,
-        );
-        write_json_matrix(&dump_dir.join("planner_context.json"), &planner_context);
-        write_json_vector(&dump_dir.join("planner_command.json"), &planner_command);
-        write_json_matrix(
-            &dump_dir.join("planner_motion_30hz.json"),
-            &live_planned_30hz,
-        );
-        write_json_matrix(
-            &dump_dir.join("planner_motion_50hz.json"),
-            &live_planned_50hz,
-        );
-        write_json_matrix(
-            &dump_dir.join("planner_motion_50hz_committed.json"),
-            &replanned_state.motion_qpos_50hz,
-        );
-        write_json_matrix(
-            &dump_dir.join("planner_joint_velocities_50hz.json"),
-            &replanned_state.motion_joint_velocities_isaaclab,
-        );
-        write_json_vector(&dump_dir.join("velocity_encoder_obs.json"), &encoder_obs);
-        write_json_vector(&dump_dir.join("velocity_tokens.json"), &tokens);
-        write_json_vector(&dump_dir.join("velocity_decoder_obs.json"), &decoder_obs);
-        write_json_vector(&dump_dir.join("velocity_raw_actions.json"), &raw_actions);
-
-        eprintln!("wrote velocity tensor dump to {}", dump_dir.display());
     }
 
     /// Integration test against the published GEAR-SONIC planner checkpoint.
