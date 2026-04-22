@@ -20,7 +20,7 @@ optimization_level = "extended"
 num_threads = 1
 
 [robot]
-config_path = "configs/robots/unitree_g1.toml"
+config_path = "configs/robots/unitree_g1_gear_sonic.toml"
 
 [comm]
 frequency_hz = 50

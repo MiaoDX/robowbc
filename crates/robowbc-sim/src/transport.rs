@@ -9,6 +9,7 @@ use robowbc_comm::{
 use robowbc_core::{BasePose, JointPositionTargets, RobotConfig};
 use std::collections::BTreeSet;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -39,6 +40,7 @@ struct LoadedModel {
 
 const PRIMARY_GYRO_SENSOR_NAMES: &[&str] = &["imu_gyro", "imu-angular-velocity"];
 const PRIMARY_ACCEL_SENSOR_NAMES: &[&str] = &["imu_acc", "imu-linear-acceleration"];
+const GIT_LFS_POINTER_PREFIX: &[u8] = b"version https://git-lfs.github.com/spec/v1\n";
 
 /// A [`RobotTransport`] that steps a `MuJoCo` physics simulation.
 ///
@@ -439,12 +441,23 @@ fn collect_missing_mesh_assets(model_path: &Path, mjcf: &str) -> Result<Vec<Path
             continue;
         };
         let candidate = mesh_dir.join(file);
-        if !candidate.exists() {
+        if !candidate.exists() || path_is_git_lfs_pointer(&candidate)? {
             missing.insert(candidate);
         }
     }
 
     Ok(missing.into_iter().collect())
+}
+
+fn path_is_git_lfs_pointer(path: &Path) -> Result<bool, SimError> {
+    let mut file = fs::File::open(path).map_err(|e| SimError::ModelLoadFailed {
+        reason: format!("failed to inspect mesh asset {}: {e}", path.display()),
+    })?;
+    let mut prefix = [0_u8; 128];
+    let read_len = file.read(&mut prefix).map_err(|e| SimError::ModelLoadFailed {
+        reason: format!("failed to read mesh asset {}: {e}", path.display()),
+    })?;
+    Ok(prefix[..read_len].starts_with(GIT_LFS_POINTER_PREFIX))
 }
 
 fn mjcf_has_plane_geom(mjcf: &str) -> bool {
@@ -1288,5 +1301,42 @@ mod tests {
             patched, repatched,
             "ground-plane injection must be idempotent"
         );
+    }
+
+    #[test]
+    fn collect_missing_mesh_assets_treats_git_lfs_pointer_meshes_as_missing() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "robowbc-sim-git-lfs-pointer-{unique}-{}",
+            std::process::id()
+        ));
+        let mesh_dir = root.join("meshes");
+        fs::create_dir_all(&mesh_dir).expect("mesh dir should be creatable");
+        let model_path = root.join("model.xml");
+        let mesh_path = mesh_dir.join("pelvis.STL");
+        fs::write(
+            &mesh_path,
+            b"version https://git-lfs.github.com/spec/v1\noid sha256:deadbeef\nsize 123\n",
+        )
+        .expect("pointer mesh should be writable");
+        let mjcf = r#"
+<mujoco model="test">
+  <compiler meshdir="meshes"/>
+  <asset>
+    <mesh name="pelvis" file="pelvis.STL"/>
+  </asset>
+</mujoco>
+"#;
+        fs::write(&model_path, mjcf).expect("model xml should be writable");
+
+        let missing = collect_missing_mesh_assets(&model_path, mjcf)
+            .expect("git-lfs placeholder meshes should be treated as missing");
+
+        assert_eq!(missing, vec![mesh_path]);
+
+        let _ = fs::remove_dir_all(root);
     }
 }

@@ -400,6 +400,36 @@ mod tests {
     }
 
     #[test]
+    fn unitree_g1_gear_sonic_config_loads_from_toml_file() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../configs/robots/unitree_g1_gear_sonic.toml");
+        let config = RobotConfig::from_toml_file(&path).expect("GEAR-Sonic G1 config should load");
+
+        assert_eq!(config.name, "unitree_g1_gear_sonic");
+        assert_eq!(config.joint_count, 29);
+        assert_eq!(config.joint_names.len(), 29);
+        assert_eq!(config.pd_gains.len(), 29);
+        assert_eq!(
+            config
+                .sim_pd_gains
+                .as_ref()
+                .expect("GEAR-Sonic G1 config should carry MuJoCo gains")
+                .len(),
+            29
+        );
+        assert_eq!(config.joint_limits.len(), 29);
+        assert_eq!(config.default_pose.len(), 29);
+        assert_eq!(config.joint_names[0], "left_hip_pitch_joint");
+        assert!((config.pd_gains[0].kp - 99.098).abs() < 1e-3);
+        assert!((config.pd_gains[0].kd - 6.309).abs() < 1e-3);
+        assert!((config.simulation_pd_gains()[0].kp - 123.873).abs() < 1e-3);
+        assert!((config.simulation_pd_gains()[0].kd - 7.886).abs() < 1e-3);
+        assert!((config.simulation_pd_gains()[15].kp - 14.251).abs() < 1e-3);
+        assert!((config.simulation_pd_gains()[15].kd - 0.907).abs() < 1e-3);
+        assert!((config.default_pose[0] - (-0.312)).abs() < 1e-3);
+    }
+
+    #[test]
     fn unitree_h1_config_loads_from_toml_file() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../configs/robots/unitree_h1.toml");

@@ -25,7 +25,7 @@ auto_play = true
 loop_playback = false
 
 [robot]
-config_path = "configs/robots/unitree_g1.toml"
+config_path = "configs/robots/unitree_g1_gear_sonic.toml"
 
 [comm]
 frequency_hz = 50
