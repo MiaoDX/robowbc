@@ -19,6 +19,9 @@ running them through the same Rust CLI, and exporting the same JSON + Rerun
 report pipeline across smoke tests, MuJoCo runs, and hardware-oriented
 transports.
 
+RoboWBC is a Linux-only project. The runtime backends fail fast on non-Linux
+targets instead of carrying partial or unverified platform fallbacks.
+
 ![RoboWBC architecture](docs/assets/architecture.svg)
 
 ## What ships today

@@ -53,6 +53,9 @@
 //! let policy = PyModelPolicy::new(config).unwrap();
 //! ```
 
+#[cfg(not(target_os = "linux"))]
+compile_error!("robowbc-pyo3 only supports Linux targets");
+
 use numpy::{IntoPyArray, PyReadonlyArray1};
 use pyo3::prelude::{
     Py, PyAny, PyAnyMethods, PyDictMethods, PyErr, PyListMethods, PyResult, Python,

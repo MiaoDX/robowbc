@@ -18,6 +18,9 @@
 //! let outputs = backend.run(&[("input", &[1.0_f32; 4], &[1, 4])]).unwrap();
 //! ```
 
+#[cfg(not(target_os = "linux"))]
+compile_error!("robowbc-ort only supports Linux targets");
+
 pub mod bfm_zero;
 pub mod decoupled;
 pub mod wholebody_vla;
@@ -42,9 +45,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::OnceLock;
+use std::sync::{mpsc, Arc, Mutex};
 
 /// Errors produced by the ONNX Runtime backend.
 #[derive(Debug, thiserror::Error)]
@@ -158,13 +161,10 @@ fn default_num_threads() -> usize {
     1
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 const ROBOWBC_ORT_DYLIB_ENV: &str = "ROBOWBC_ORT_DYLIB_PATH";
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 static ORT_RUNTIME_INIT: OnceLock<Result<(), String>> = OnceLock::new();
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn ensure_onnxruntime_loaded() -> Result<(), OrtError> {
     ORT_RUNTIME_INIT
         .get_or_init(|| {
@@ -189,12 +189,6 @@ fn ensure_onnxruntime_loaded() -> Result<(), OrtError> {
         .map_err(|reason| OrtError::SessionCreation { reason })
 }
 
-#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-fn ensure_onnxruntime_loaded() -> Result<(), OrtError> {
-    Ok(())
-}
-
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn resolved_onnxruntime_dylib_path() -> Option<PathBuf> {
     std::env::var_os("ORT_DYLIB_PATH")
         .or_else(|| std::env::var_os(ROBOWBC_ORT_DYLIB_ENV))
@@ -763,6 +757,7 @@ struct GearSonicPlannerState {
     init_base_quat_wxyz: Option<[f32; 4]>,
     init_ref_root_quat_wxyz: Option<[f32; 4]>,
     last_command: Option<GearSonicPlannerCommand>,
+    pending_replan: Option<GearSonicPendingPlannerReplan>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -772,6 +767,13 @@ struct GearSonicPlannerCommand {
     height: f32,
     movement_direction: [f32; 3],
     facing_direction: [f32; 3],
+}
+
+#[derive(Debug)]
+struct GearSonicPendingPlannerReplan {
+    request_motion_frame: usize,
+    command: GearSonicPlannerCommand,
+    rx: Receiver<CoreResult<Vec<Vec<f32>>>>,
 }
 
 impl GearSonicPlannerState {
@@ -793,6 +795,7 @@ impl GearSonicPlannerState {
             init_base_quat_wxyz: None,
             init_ref_root_quat_wxyz: None,
             last_command: None,
+            pending_replan: None,
         }
     }
 }
@@ -1204,13 +1207,15 @@ fn quat_to_rotation_matrix(quat: [f32; 4]) -> [[f32; 3]; 3] {
 pub struct GearSonicPolicy {
     encoder: Mutex<OrtBackend>,
     decoder: Mutex<OrtBackend>,
-    planner: Mutex<OrtBackend>,
+    planner: Arc<Mutex<OrtBackend>>,
     planner_state: Mutex<GearSonicPlannerState>,
     tracking_state: Mutex<GearSonicTrackingState>,
     reference_motion: Option<GearSonicReferenceMotion>,
     reference_motion_state: Mutex<GearSonicReferenceMotionState>,
     reference_motion_auto_play: bool,
     reference_motion_loop_playback: bool,
+    supports_real_tracking_contract: bool,
+    supports_real_planner_contract: bool,
     robot: RobotConfig,
 }
 
@@ -1228,6 +1233,8 @@ impl GearSonicPolicy {
             .map_err(|e| robowbc_core::WbcError::InferenceFailed(e.to_string()))?;
         let planner = OrtBackend::new(&config.planner)
             .map_err(|e| robowbc_core::WbcError::InferenceFailed(e.to_string()))?;
+        let supports_real_tracking_contract = Self::supports_real_tracking_contract(&encoder);
+        let supports_real_planner_contract = Self::supports_real_planner_contract(&planner);
         let reference_motion = config
             .reference_motion
             .as_ref()
@@ -1253,13 +1260,15 @@ impl GearSonicPolicy {
         Ok(Self {
             encoder: Mutex::new(encoder),
             decoder: Mutex::new(decoder),
-            planner: Mutex::new(planner),
+            planner: Arc::new(Mutex::new(planner)),
             planner_state: Mutex::new(planner_state),
             tracking_state: Mutex::new(tracking_state),
             reference_motion,
             reference_motion_state: Mutex::new(reference_motion_state),
             reference_motion_auto_play,
             reference_motion_loop_playback,
+            supports_real_tracking_contract,
+            supports_real_planner_contract,
             robot: config.robot,
         })
     }
@@ -1288,6 +1297,27 @@ impl GearSonicPolicy {
             .ok_or(robowbc_core::WbcError::InferenceFailed(
                 "model returned no outputs".to_owned(),
             ))
+    }
+
+    fn idle_planner_command() -> GearSonicPlannerCommand {
+        GearSonicPlannerCommand {
+            mode: GEAR_SONIC_DEFAULT_MODE_IDLE,
+            target_vel: -1.0,
+            height: GEAR_SONIC_DEFAULT_HEIGHT_SENTINEL,
+            movement_direction: [0.0, 0.0, 0.0],
+            facing_direction: [1.0, 0.0, 0.0],
+        }
+    }
+
+    fn planner_command_for_replan(
+        planner_state: &GearSonicPlannerState,
+        live_command: GearSonicPlannerCommand,
+    ) -> GearSonicPlannerCommand {
+        if planner_state.motion_qpos_50hz.is_empty() {
+            Self::idle_planner_command()
+        } else {
+            live_command
+        }
     }
 
     fn make_standing_qpos(robot: &RobotConfig) -> Vec<f32> {
@@ -1424,6 +1454,18 @@ impl GearSonicPolicy {
         let mut positions = vec![0.0_f32; GEAR_SONIC_ISAACLAB_TO_MUJOCO.len()];
         for (mujoco_idx, &isaaclab_idx) in GEAR_SONIC_ISAACLAB_TO_MUJOCO.iter().enumerate() {
             positions[isaaclab_idx] = frame[GEAR_SONIC_PLANNER_JOINT_OFFSET + mujoco_idx];
+        }
+        positions
+    }
+
+    fn joint_positions_mujoco_to_isaaclab(joint_positions: &[f32]) -> Vec<f32> {
+        if joint_positions.len() != GEAR_SONIC_ISAACLAB_TO_MUJOCO.len() {
+            return joint_positions.to_vec();
+        }
+
+        let mut positions = vec![0.0_f32; joint_positions.len()];
+        for (mujoco_idx, &isaaclab_idx) in GEAR_SONIC_ISAACLAB_TO_MUJOCO.iter().enumerate() {
+            positions[isaaclab_idx] = joint_positions[mujoco_idx];
         }
         positions
     }
@@ -1616,13 +1658,14 @@ impl GearSonicPolicy {
     fn blend_planner_motion(
         existing_motion_qpos: &[Vec<f32>],
         current_motion_frame: usize,
+        request_motion_frame: usize,
         new_motion_qpos: &[Vec<f32>],
     ) -> Vec<Vec<f32>> {
         if existing_motion_qpos.is_empty() {
             return new_motion_qpos.to_vec();
         }
 
-        let gen_frame = current_motion_frame + GEAR_SONIC_PLANNER_LOOK_AHEAD_STEPS;
+        let gen_frame = request_motion_frame + GEAR_SONIC_PLANNER_LOOK_AHEAD_STEPS;
         let new_anim_length = gen_frame
             .saturating_sub(current_motion_frame)
             .saturating_add(new_motion_qpos.len());
@@ -1770,15 +1813,10 @@ impl GearSonicPolicy {
         obs: &Observation,
         motion_tokens: &[f32],
     ) -> CoreResult<JointPositionTargets> {
-        {
-            let encoder = self.encoder.lock().map_err(|_| {
-                robowbc_core::WbcError::InferenceFailed("encoder mutex poisoned".to_owned())
-            })?;
-            if Self::supports_real_tracking_contract(&encoder) {
-                return Err(robowbc_core::WbcError::UnsupportedCommand(
-                    "GearSonicPolicy motion-token mode is only wired for the fixture-style single-input pipeline; use WbcCommand::Velocity for published planner_sonic.onnx checkpoints",
-                ));
-            }
+        if self.supports_real_tracking_contract {
+            return Err(robowbc_core::WbcError::UnsupportedCommand(
+                "GearSonicPolicy motion-token mode is only wired for the fixture-style single-input pipeline; use WbcCommand::Velocity for published planner_sonic.onnx checkpoints",
+            ));
         }
 
         let mut proprio_state =
@@ -1988,27 +2026,112 @@ impl GearSonicPolicy {
             .collect())
     }
 
+    fn commit_planner_motion(
+        planner_state: &mut GearSonicPlannerState,
+        obs: &Observation,
+        request_motion_frame: usize,
+        planner_command: GearSonicPlannerCommand,
+        planned_50hz: Vec<Vec<f32>>,
+    ) -> CoreResult<()> {
+        if planned_50hz.is_empty() {
+            return Err(robowbc_core::WbcError::InferenceFailed(
+                "planner produced an empty 50Hz motion sequence".to_owned(),
+            ));
+        }
+
+        planner_state.motion_qpos_50hz = if planner_state.motion_qpos_50hz.is_empty() {
+            planned_50hz
+        } else {
+            Self::blend_planner_motion(
+                &planner_state.motion_qpos_50hz,
+                planner_state.current_motion_frame,
+                request_motion_frame,
+                &planned_50hz,
+            )
+        };
+        planner_state.motion_joint_velocities_isaaclab =
+            Self::compute_motion_joint_velocities_isaaclab(&planner_state.motion_qpos_50hz);
+        planner_state.current_motion_frame = 0;
+        planner_state.init_ref_root_quat_wxyz = planner_state
+            .motion_qpos_50hz
+            .first()
+            .map(|frame| Self::planner_frame_root_quaternion(frame));
+        if planner_state.init_base_quat_wxyz.is_none() {
+            planner_state.init_base_quat_wxyz = Some(Self::observation_base_quat_wxyz(obs));
+        }
+        planner_state.last_command = Some(planner_command);
+        Ok(())
+    }
+
+    fn maybe_apply_pending_planner_replan(
+        planner_state: &mut GearSonicPlannerState,
+        obs: &Observation,
+    ) -> CoreResult<()> {
+        let Some(pending_replan) = planner_state.pending_replan.take() else {
+            return Ok(());
+        };
+
+        match pending_replan.rx.try_recv() {
+            Ok(result) => {
+                let planned_50hz = result?;
+                Self::commit_planner_motion(
+                    planner_state,
+                    obs,
+                    pending_replan.request_motion_frame,
+                    pending_replan.command,
+                    planned_50hz,
+                )
+            }
+            Err(TryRecvError::Empty) => {
+                planner_state.pending_replan = Some(pending_replan);
+                Ok(())
+            }
+            Err(TryRecvError::Disconnected) => Err(robowbc_core::WbcError::InferenceFailed(
+                "planner worker disconnected before delivering a trajectory".to_owned(),
+            )),
+        }
+    }
+
+    fn start_async_planner_replan(
+        &self,
+        planner_state: &mut GearSonicPlannerState,
+        planner_command: GearSonicPlannerCommand,
+    ) {
+        let planner = Arc::clone(&self.planner);
+        let context = planner_state.context.clone();
+        let request_motion_frame = planner_state.current_motion_frame;
+        let (tx, rx) = mpsc::channel();
+
+        std::thread::spawn(move || {
+            let result = (|| {
+                let mut planner = planner.lock().map_err(|_| {
+                    robowbc_core::WbcError::InferenceFailed("planner mutex poisoned".to_owned())
+                })?;
+                let planned_30hz = Self::run_real_planner(&mut planner, &context, planner_command)?;
+                Ok(Self::resample_planner_trajectory_to_50hz(&planned_30hz))
+            })();
+            let _ = tx.send(result);
+        });
+
+        planner_state.pending_replan = Some(GearSonicPendingPlannerReplan {
+            request_motion_frame,
+            command: planner_command,
+            rx,
+        });
+    }
+
     #[allow(clippy::too_many_lines)]
     fn run_velocity_planner(
         &self,
         obs: &Observation,
         twist: &robowbc_core::Twist,
     ) -> CoreResult<JointPositionTargets> {
-        {
-            let encoder = self.encoder.lock().map_err(|_| {
-                robowbc_core::WbcError::InferenceFailed("encoder mutex poisoned".to_owned())
-            })?;
-            if !Self::supports_real_tracking_contract(&encoder) {
-                return Err(robowbc_core::WbcError::UnsupportedCommand(
-                    "GearSonicPolicy velocity mode requires the published planner_sonic.onnx contract together with the real encoder/decoder obs_dict checkpoints",
-                ));
-            }
+        if !self.supports_real_tracking_contract {
+            return Err(robowbc_core::WbcError::UnsupportedCommand(
+                "GearSonicPolicy velocity mode requires the published planner_sonic.onnx contract together with the real encoder/decoder obs_dict checkpoints",
+            ));
         }
-
-        let mut planner = self.planner.lock().map_err(|_| {
-            robowbc_core::WbcError::InferenceFailed("planner mutex poisoned".to_owned())
-        })?;
-        if !Self::supports_real_planner_contract(&planner) {
+        if !self.supports_real_planner_contract {
             return Err(robowbc_core::WbcError::UnsupportedCommand(
                 "GearSonicPolicy velocity mode requires the published planner_sonic.onnx contract",
             ));
@@ -2030,12 +2153,15 @@ impl GearSonicPolicy {
                 .cloned()
                 .unwrap_or_else(|| Self::make_standing_qpos(&self.robot));
         }
+        Self::maybe_apply_pending_planner_replan(&mut planner_state, obs)?;
 
         let command = Self::derive_planner_command(&mut planner_state, twist);
+        let initializing_planner = planner_state.motion_qpos_50hz.is_empty();
+        let planner_command = Self::planner_command_for_replan(&planner_state, command);
         let replan_interval_ticks = Self::planner_replan_interval_ticks(command);
-        let planner_tick_due = planner_state.motion_qpos_50hz.is_empty()
+        let planner_tick_due = initializing_planner
             || planner_state.steps_since_planner_tick >= GEAR_SONIC_PLANNER_THREAD_INTERVAL_TICKS;
-        let needs_replan = planner_state.motion_qpos_50hz.is_empty()
+        let needs_replan = initializing_planner
             || (planner_tick_due
                 && (Self::planner_command_changed(planner_state.last_command, command)
                     || planner_state.steps_since_plan >= replan_interval_ticks));
@@ -2044,35 +2170,27 @@ impl GearSonicPolicy {
             if !planner_state.motion_qpos_50hz.is_empty() {
                 Self::rebuild_planner_context_from_motion(&mut planner_state);
             }
-            let planned_30hz =
-                Self::run_real_planner(&mut planner, &planner_state.context, command)?;
-            let planned_50hz = Self::resample_planner_trajectory_to_50hz(&planned_30hz);
-            if planned_50hz.is_empty() {
-                return Err(robowbc_core::WbcError::InferenceFailed(
-                    "planner produced an empty 50Hz motion sequence".to_owned(),
-                ));
-            }
-
-            planner_state.motion_qpos_50hz = if planner_state.motion_qpos_50hz.is_empty() {
-                planned_50hz
+            if initializing_planner {
+                let mut planner = self.planner.lock().map_err(|_| {
+                    robowbc_core::WbcError::InferenceFailed("planner mutex poisoned".to_owned())
+                })?;
+                let planned_30hz =
+                    Self::run_real_planner(&mut planner, &planner_state.context, planner_command)?;
+                let planned_50hz = Self::resample_planner_trajectory_to_50hz(&planned_30hz);
+                let request_motion_frame = planner_state.current_motion_frame;
+                Self::commit_planner_motion(
+                    &mut planner_state,
+                    obs,
+                    request_motion_frame,
+                    planner_command,
+                    planned_50hz,
+                )?;
             } else {
-                Self::blend_planner_motion(
-                    &planner_state.motion_qpos_50hz,
-                    planner_state.current_motion_frame,
-                    &planned_50hz,
-                )
-            };
-            planner_state.motion_joint_velocities_isaaclab =
-                Self::compute_motion_joint_velocities_isaaclab(&planner_state.motion_qpos_50hz);
-            planner_state.current_motion_frame = 0;
-            planner_state.init_ref_root_quat_wxyz = planner_state
-                .motion_qpos_50hz
-                .first()
-                .map(|frame| Self::planner_frame_root_quaternion(frame));
-            if planner_state.init_base_quat_wxyz.is_none() {
-                planner_state.init_base_quat_wxyz = Some(Self::observation_base_quat_wxyz(obs));
+                if planner_state.pending_replan.is_none() {
+                    self.start_async_planner_replan(&mut planner_state, planner_command);
+                    planner_state.last_command = Some(planner_command);
+                }
             }
-            planner_state.last_command = Some(command);
             planner_state.steps_since_plan = 0;
             planner_state.steps_since_planner_tick = 0;
         } else if planner_tick_due {
@@ -2099,7 +2217,6 @@ impl GearSonicPolicy {
 
         let encoder_obs = Self::build_velocity_encoder_obs_dict(obs, &planner_state)?;
         drop(planner_state);
-        drop(planner);
 
         let targets = self.run_tracking_contract_from_encoder_obs(obs, &encoder_obs)?;
 
@@ -2129,6 +2246,7 @@ impl GearSonicPolicy {
     /// the current robot state as a motion reference.
     fn build_placeholder_encoder_obs_dict(robot: &RobotConfig) -> Vec<f32> {
         let mut buf = vec![0.0_f32; GEAR_SONIC_ENCODER_OBS_DICT_DIM];
+        let standing_pose_isaaclab = Self::joint_positions_mujoco_to_isaaclab(&robot.default_pose);
 
         // encoder_mode_4: mode 0 (g1) + 3 zeros
         buf[GEAR_SONIC_ENCODER_MODE_OFFSET] = 0.0;
@@ -2136,7 +2254,7 @@ impl GearSonicPolicy {
         for frame in 0..GEAR_SONIC_REFERENCE_FUTURE_FRAMES {
             let p = GEAR_SONIC_ENCODER_MOTION_JOINT_POSITIONS_OFFSET + frame * robot.joint_count;
             let v = GEAR_SONIC_ENCODER_MOTION_JOINT_VELOCITIES_OFFSET + frame * robot.joint_count;
-            buf[p..p + robot.joint_count].copy_from_slice(&robot.default_pose);
+            buf[p..p + robot.joint_count].copy_from_slice(&standing_pose_isaaclab);
             buf[v..v + robot.joint_count].fill(0.0);
         }
 
@@ -2359,15 +2477,10 @@ impl GearSonicPolicy {
 
     /// Real encoder → decoder tracking contract.
     fn run_tracking_contract(&self, obs: &Observation) -> CoreResult<JointPositionTargets> {
-        {
-            let encoder = self.encoder.lock().map_err(|_| {
-                robowbc_core::WbcError::InferenceFailed("encoder mutex poisoned".to_owned())
-            })?;
-            if !Self::supports_real_tracking_contract(&encoder) {
-                return Err(robowbc_core::WbcError::UnsupportedCommand(
-                    "GearSonicPolicy tracking mode requires encoder/decoder checkpoints with the obs_dict contract",
-                ));
-            }
+        if !self.supports_real_tracking_contract {
+            return Err(robowbc_core::WbcError::UnsupportedCommand(
+                "GearSonicPolicy tracking mode requires encoder/decoder checkpoints with the obs_dict contract",
+            ));
         }
         let expected_joint_count = GEAR_SONIC_PLANNER_QPOS_DIM - GEAR_SONIC_PLANNER_JOINT_OFFSET;
         if self.robot.joint_count != expected_joint_count {
@@ -2969,6 +3082,24 @@ mod tests {
     }
 
     #[test]
+    fn gear_sonic_planner_cold_start_initializes_with_idle_motion() {
+        let mut planner_state = GearSonicPlannerState::new(&test_robot_config(29));
+        let live_command = GearSonicPolicy::derive_planner_command(
+            &mut planner_state,
+            &robowbc_core::Twist {
+                linear: [1.2, 0.0, 0.0],
+                angular: [0.0, 0.0, 0.0],
+            },
+        );
+        assert_eq!(live_command.mode, GEAR_SONIC_DEFAULT_MODE_WALK);
+
+        let planner_command =
+            GearSonicPolicy::planner_command_for_replan(&planner_state, live_command);
+
+        assert_eq!(planner_command, GearSonicPolicy::idle_planner_command());
+    }
+
+    #[test]
     fn gear_sonic_planner_allowed_pred_mask_matches_upstream_default() {
         assert_eq!(
             GEAR_SONIC_ALLOWED_PRED_NUM_TOKENS_MASK,
@@ -3063,6 +3194,20 @@ mod tests {
                 "velocity mismatch at Mujoco index {mujoco_idx} / IsaacLab index {isaaclab_idx}"
             );
         }
+    }
+
+    #[test]
+    fn gear_sonic_placeholder_encoder_uses_isaaclab_joint_order() {
+        let mut robot = test_robot_config(29);
+        robot.default_pose = (0..29).map(|idx| idx as f32).collect();
+
+        let encoder_obs = GearSonicPolicy::build_placeholder_encoder_obs_dict(&robot);
+        let expected_pose =
+            GearSonicPolicy::joint_positions_mujoco_to_isaaclab(&robot.default_pose);
+        let pose_slice = &encoder_obs[GEAR_SONIC_ENCODER_MOTION_JOINT_POSITIONS_OFFSET
+            ..GEAR_SONIC_ENCODER_MOTION_JOINT_POSITIONS_OFFSET + robot.joint_count];
+
+        assert_eq!(pose_slice, expected_pose.as_slice());
     }
 
     #[test]
