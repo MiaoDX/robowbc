@@ -249,6 +249,7 @@ impl RobotTransport for UnitreeG1Transport {
         Ok(ImuSample {
             gravity_vector: self.cached_gravity,
             angular_velocity: self.cached_angular_velocity,
+            base_pose: None,
             timestamp: self.cached_imu_timestamp,
         })
     }
@@ -425,6 +426,7 @@ mod tests {
                 PdGains { kp: 10.0, kd: 1.0 },
                 PdGains { kp: 10.0, kd: 1.0 },
             ],
+            sim_pd_gains: None,
             joint_limits: vec![
                 JointLimit {
                     min: -1.0,

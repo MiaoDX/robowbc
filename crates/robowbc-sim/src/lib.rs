@@ -25,6 +25,27 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Per-policy PD gain family selection for the `MuJoCo` transport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MujocoGainProfile {
+    /// Use the robot's default/hardware-facing PD gains.
+    DefaultPd,
+    /// Use the robot's simulator-specific raw-torque PD gains.
+    SimulationPd,
+}
+
+impl MujocoGainProfile {
+    /// Returns the serialized config value for logs and reports.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::DefaultPd => "default_pd",
+            Self::SimulationPd => "simulation_pd",
+        }
+    }
+}
+
 /// Configuration for a `MuJoCo` simulation transport.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MujocoConfig {
@@ -39,6 +60,13 @@ pub struct MujocoConfig {
     /// frequency is 50 Hz (one policy call every 0.02 s).
     #[serde(default = "default_substeps")]
     pub substeps: usize,
+    /// PD gain family used when converting joint targets into raw torques.
+    ///
+    /// The default preserves the historical showcase behavior by using the
+    /// simulator-specific gains from [`robowbc_core::RobotConfig::sim_pd_gains`]
+    /// when present.
+    #[serde(default = "default_gain_profile")]
+    pub gain_profile: MujocoGainProfile,
 }
 
 fn default_timestep() -> f64 {
@@ -49,12 +77,17 @@ fn default_substeps() -> usize {
     10
 }
 
+const fn default_gain_profile() -> MujocoGainProfile {
+    MujocoGainProfile::SimulationPd
+}
+
 impl Default for MujocoConfig {
     fn default() -> Self {
         Self {
             model_path: PathBuf::from("assets/robots/unitree_g1/g1_29dof.xml"),
             timestep: default_timestep(),
             substeps: default_substeps(),
+            gain_profile: default_gain_profile(),
         }
     }
 }
@@ -132,6 +165,7 @@ mod tests {
         let cfg = MujocoConfig::default();
         assert!((cfg.timestep - 0.002).abs() < f64::EPSILON);
         assert_eq!(cfg.substeps, 10);
+        assert_eq!(cfg.gain_profile, MujocoGainProfile::SimulationPd);
     }
 
     #[test]
@@ -140,6 +174,7 @@ mod tests {
             model_path: PathBuf::from("test_model.xml"),
             timestep: 0.001,
             substeps: 20,
+            gain_profile: MujocoGainProfile::DefaultPd,
         };
         let toml_str = toml::to_string(&cfg).expect("serialization should succeed");
         let loaded: MujocoConfig =

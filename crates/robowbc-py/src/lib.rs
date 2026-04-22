@@ -204,6 +204,7 @@ fn into_observation(obs: &PyObservation) -> PyResult<Observation> {
         joint_velocities: obs.joint_velocities.clone(),
         gravity_vector: obs.gravity_vector,
         angular_velocity: obs.angular_velocity,
+        base_pose: None,
         command,
         timestamp: Instant::now(),
     })

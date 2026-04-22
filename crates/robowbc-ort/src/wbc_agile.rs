@@ -73,6 +73,8 @@ const WBC_AGILE_G1_HISTORY_LEN: usize = 5;
 const WBC_AGILE_G1_INPUT_JOINT_COUNT_I64: i64 = 29;
 const WBC_AGILE_G1_OUTPUT_JOINT_COUNT_I64: i64 = 14;
 const WBC_AGILE_G1_HISTORY_LEN_I64: i64 = 5;
+const WBC_AGILE_BASE_ANG_VEL_SCALE: f32 = 0.2;
+const WBC_AGILE_JOINT_VEL_SCALE: f32 = 0.05;
 const ROOT_QUAT_SHAPE: [i64; 2] = [1, 4];
 const VEC3_SHAPE: [i64; 2] = [1, 3];
 const INPUT_JOINT_SHAPE: [i64; 2] = [1, WBC_AGILE_G1_INPUT_JOINT_COUNT_I64];
@@ -118,7 +120,6 @@ struct WbcAgileHistoryRuntime {
     backend: OrtBackend,
     input_joint_indices: Vec<usize>,
     output_joint_indices: Vec<usize>,
-    input_default_pose: Vec<f32>,
     output_default_pose: Vec<f32>,
     last_actions: Vec<f32>,
     base_ang_vel_history: Vec<f32>,
@@ -136,7 +137,6 @@ impl WbcAgileHistoryRuntime {
             joint_indices_from_names(robot, &WBC_AGILE_G1_OUTPUT_JOINT_NAMES)?;
         Ok(Self {
             backend,
-            input_default_pose: gather_joint_values(&robot.default_pose, &input_joint_indices),
             output_default_pose: gather_joint_values(&robot.default_pose, &output_joint_indices),
             input_joint_indices,
             output_joint_indices,
@@ -255,19 +255,18 @@ impl WbcAgilePolicy {
         let root_link_quat_w = root_quaternion_wxyz_from_observation(obs);
         let root_ang_vel_b = obs.angular_velocity;
         let velocity_commands = [twist.linear[0], twist.linear[1], twist.angular[2]];
-        let joint_pos = gather_relative_joint_values(
-            &obs.joint_positions,
-            &runtime.input_joint_indices,
-            &runtime.input_default_pose,
-        );
+        let joint_pos = gather_joint_values(&obs.joint_positions, &runtime.input_joint_indices);
         let joint_vel = gather_joint_values(&obs.joint_velocities, &runtime.input_joint_indices);
         let controlled_joint_pos = gather_relative_joint_values(
             &obs.joint_positions,
             &runtime.output_joint_indices,
             &runtime.output_default_pose,
         );
-        let controlled_joint_vel =
-            gather_joint_values(&obs.joint_velocities, &runtime.output_joint_indices);
+        let controlled_joint_vel = scale_values(
+            &gather_joint_values(&obs.joint_velocities, &runtime.output_joint_indices),
+            WBC_AGILE_JOINT_VEL_SCALE,
+        );
+        let scaled_root_ang_vel_b = scale_values(&root_ang_vel_b, WBC_AGILE_BASE_ANG_VEL_SCALE);
 
         let last_actions = runtime.last_actions.clone();
         let base_ang_vel_history = runtime.base_ang_vel_history.clone();
@@ -355,7 +354,7 @@ impl WbcAgilePolicy {
             &outputs,
             "base_ang_vel_history_out",
             &runtime.base_ang_vel_history,
-            &root_ang_vel_b,
+            &scaled_root_ang_vel_b,
         )?;
         runtime.projected_gravity_history = output_or_shift(
             &outputs,
@@ -490,6 +489,10 @@ fn gather_relative_joint_values(values: &[f32], indices: &[usize], offsets: &[f3
         .zip(offsets.iter())
         .map(|(&idx, &offset)| values[idx] - offset)
         .collect()
+}
+
+fn scale_values(values: &[f32], scale: f32) -> Vec<f32> {
+    values.iter().map(|value| value * scale).collect()
 }
 
 fn required_f32_output(outputs: &[OrtTensorOutput], name: &str) -> CoreResult<Vec<f32>> {
@@ -955,6 +958,14 @@ mod tests {
         assert!((relative[0] - 0.3).abs() < 1e-6);
         assert!((relative[1] - 0.2).abs() < 1e-6);
         assert!((relative[2] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn scale_values_multiplies_each_entry() {
+        let values = [1.0, -2.0, 0.5];
+        let scaled = scale_values(&values, 0.2);
+
+        assert_eq!(scaled, vec![0.2, -0.4, 0.1]);
     }
 
     /// Integration test requiring the published WBC-AGILE G1 ONNX checkpoint.

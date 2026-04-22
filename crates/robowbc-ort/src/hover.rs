@@ -307,6 +307,7 @@ mod tests {
             joint_count,
             joint_names: (0..joint_count).map(|i| format!("j{i}")).collect(),
             pd_gains: vec![PdGains { kp: 100.0, kd: 2.0 }; joint_count],
+            sim_pd_gains: None,
             joint_limits: vec![
                 JointLimit {
                     min: -2.0,
@@ -350,6 +351,7 @@ mod tests {
             joint_velocities: vec![0.0; joint_count],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::Velocity(Twist {
                 linear: [0.3, 0.0, 0.0],
                 angular: [0.0, 0.0, 0.2],
@@ -364,6 +366,7 @@ mod tests {
             joint_velocities: vec![0.0; joint_count],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::KinematicPose(BodyPose {
                 links: vec![LinkPose {
                     link_name: "pelvis".to_owned(),
@@ -491,6 +494,7 @@ default_pose = [0.0, 0.0]
             joint_velocities: vec![0.0; n],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::Velocity(Twist {
                 linear: [0.5, 0.8, 0.0],
                 angular: [0.0, 0.0, 0.3],
@@ -547,6 +551,7 @@ default_pose = [0.0, 0.0]
             joint_velocities: vec![0.0; 4],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::MotionTokens(vec![1.0]),
             timestamp: Instant::now(),
         };
@@ -578,6 +583,7 @@ default_pose = [0.0, 0.0]
             joint_velocities: vec![0.0; 3],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::Velocity(Twist {
                 linear: [0.0; 3],
                 angular: [0.0; 3],
@@ -727,6 +733,7 @@ default_pose = [0.0, 0.0]
             joint_velocities: vec![0.0; 4],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::KinematicPose(BodyPose {
                 links: vec![LinkPose {
                     link_name: "wrist".to_owned(), // no "pelvis"
@@ -768,6 +775,7 @@ default_pose = [0.0, 0.0]
             joint_velocities: vec![0.0; 19],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::Velocity(Twist {
                 linear: [0.3, 0.0, 0.0],
                 angular: [0.0, 0.0, 0.1],

@@ -137,7 +137,7 @@ POLICIES = [
         "command_source": "runtime.velocity_schedule",
         "demo_family": "Velocity tracking",
         "demo_sequence": "Stand, accelerate from 0.0 to 0.6 m/s over 2 s, command a 90 degree right turn over 1 s, accelerate into a 1.0 m/s run over 3 s, then settle back to stand.",
-        "showcase_gain_profile": "default_pd",
+        "showcase_gain_profile": "simulation_pd",
         "model_artifact": "models/wbc-agile/unitree_g1_velocity_e2e.onnx",
         "required_paths": [
             "models/wbc-agile/unitree_g1_velocity_e2e.onnx",

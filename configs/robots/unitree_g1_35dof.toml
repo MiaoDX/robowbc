@@ -111,6 +111,55 @@ pd_gains = [
     { kp =  0.5, kd = 0.05 },    # right_hand_ring
 ]
 
+# MuJoCo/raw-torque gains for the shared 29-DOF G1 embodiment come from the
+# official GEAR-Sonic / GR00T sim configs. The extra finger joints are not
+# present in the public showcase MJCF and therefore keep their conservative
+# placeholders.
+sim_pd_gains = [
+    # Left leg
+    { kp = 150.0, kd = 2.0 },  # left_hip_pitch
+    { kp = 150.0, kd = 2.0 },  # left_hip_roll
+    { kp = 150.0, kd = 2.0 },  # left_hip_yaw
+    { kp = 200.0, kd = 4.0 },  # left_knee
+    { kp =  40.0, kd = 2.0 },  # left_ankle_pitch
+    { kp =  40.0, kd = 2.0 },  # left_ankle_roll
+    # Right leg
+    { kp = 150.0, kd = 2.0 },  # right_hip_pitch
+    { kp = 150.0, kd = 2.0 },  # right_hip_roll
+    { kp = 150.0, kd = 2.0 },  # right_hip_yaw
+    { kp = 200.0, kd = 4.0 },  # right_knee
+    { kp =  40.0, kd = 2.0 },  # right_ankle_pitch
+    { kp =  40.0, kd = 2.0 },  # right_ankle_roll
+    # Waist
+    { kp = 250.0, kd = 5.0 },  # waist_yaw
+    { kp = 250.0, kd = 5.0 },  # waist_roll
+    { kp = 250.0, kd = 5.0 },  # waist_pitch
+    # Left arm
+    { kp = 100.0, kd = 5.0 },  # left_shoulder_pitch
+    { kp = 100.0, kd = 5.0 },  # left_shoulder_roll
+    { kp =  40.0, kd = 2.0 },  # left_shoulder_yaw
+    { kp =  40.0, kd = 2.0 },  # left_elbow
+    { kp =  20.0, kd = 2.0 },  # left_wrist_roll
+    { kp =  20.0, kd = 2.0 },  # left_wrist_pitch
+    { kp =  20.0, kd = 2.0 },  # left_wrist_yaw
+    # Right arm
+    { kp = 100.0, kd = 5.0 },  # right_shoulder_pitch
+    { kp = 100.0, kd = 5.0 },  # right_shoulder_roll
+    { kp =  40.0, kd = 2.0 },  # right_shoulder_yaw
+    { kp =  40.0, kd = 2.0 },  # right_elbow
+    { kp =  20.0, kd = 2.0 },  # right_wrist_roll
+    { kp =  20.0, kd = 2.0 },  # right_wrist_pitch
+    { kp =  20.0, kd = 2.0 },  # right_wrist_yaw
+    # Left hand fingers (unmapped in public MJCF)
+    { kp =  0.5, kd = 0.05 },  # left_hand_index
+    { kp =  0.5, kd = 0.05 },  # left_hand_middle
+    { kp =  0.5, kd = 0.05 },  # left_hand_ring
+    # Right hand fingers (unmapped in public MJCF)
+    { kp =  0.5, kd = 0.05 },  # right_hand_index
+    { kp =  0.5, kd = 0.05 },  # right_hand_middle
+    { kp =  0.5, kd = 0.05 },  # right_hand_ring
+]
+
 # Joint limits: joints 0–28 from g1_29dof.xml MuJoCo model (radians);
 # hand joints 29–34 are conservative ±1.57 rad placeholders.
 joint_limits = [

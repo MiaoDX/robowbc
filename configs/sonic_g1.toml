@@ -19,6 +19,14 @@ execution_provider = { type = "cpu" }
 optimization_level = "extended"
 num_threads = 1
 
+# Uncomment to use an official upper-body/reference clip with the real
+# encoder+decoder tracking contract.
+#
+# [policy.config.reference_motion]
+# clip_dir = "models/gear-sonic/reference/example/macarena_001__A545"
+# auto_play = true
+# loop_playback = false
+
 [robot]
 config_path = "configs/robots/unitree_g1.toml"
 
@@ -31,10 +39,14 @@ velocity = [0.30, 0.0, 0.0]
 max_ticks = 200
 
 # The default CLI path uses the published planner_sonic.onnx velocity contract.
-# To exercise the narrower encoder+decoder standing-placeholder tracking path,
-# comment out `velocity` and set `standing_placeholder_tracking = true`.
-# This alias is Gear-Sonic-specific and does not expose generic
-# motion-reference streaming.
+# To exercise the real encoder+decoder reference-motion path, configure
+# `[policy.config.reference_motion]`, comment out `velocity`, and set
+# `reference_motion_tracking = true`.
+#
+# To exercise the narrower standing-placeholder tracking path instead, comment
+# out `velocity` and set `standing_placeholder_tracking = true`. Both aliases
+# are Gear-Sonic-specific and do not expose generic motion-reference streaming.
+# reference_motion_tracking = true
 # standing_placeholder_tracking = true
 #
 # Non-empty motion_tokens remain the older fixture-style mock pipeline, not the

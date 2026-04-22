@@ -40,6 +40,7 @@
 //!     joint_count: 4,
 //!     joint_names: vec!["j0".into(), "j1".into(), "j2".into(), "j3".into()],
 //!     pd_gains: vec![robowbc_core::PdGains { kp: 1.0, kd: 0.1 }; 4],
+//!     sim_pd_gains: None,
 //!     joint_limits: vec![robowbc_core::JointLimit { min: -1.0, max: 1.0 }; 4],
 //!     default_pose: vec![0.0; 4],
 //!     model_path: None,
@@ -342,6 +343,7 @@ mod tests {
             joint_count,
             joint_names: (0..joint_count).map(|i| format!("j{i}")).collect(),
             pd_gains: vec![PdGains { kp: 1.0, kd: 0.1 }; joint_count],
+            sim_pd_gains: None,
             joint_limits: vec![
                 JointLimit {
                     min: -1.0,
@@ -364,6 +366,7 @@ mod tests {
             joint_velocities: vec![0.0; n],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::MotionTokens(vec![0.5; 4]),
             timestamp: Instant::now(),
         }
@@ -514,6 +517,7 @@ mod tests {
             joint_velocities: vec![0.0; 4],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::Velocity(Twist {
                 linear: [0.5, 0.0, 0.0],
                 angular: [0.0, 0.0, 0.3],

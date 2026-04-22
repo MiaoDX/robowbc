@@ -498,6 +498,7 @@ mod tests {
             joint_count,
             joint_names: (0..joint_count).map(|i| format!("j{i}")).collect(),
             pd_gains: vec![PdGains { kp: 1.0, kd: 0.1 }; joint_count],
+            sim_pd_gains: None,
             joint_limits: vec![
                 JointLimit {
                     min: -1.0,
@@ -607,6 +608,7 @@ mod tests {
             joint_velocities: vec![0.0; 4],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::MotionTokens(vec![1.0]),
             timestamp: Instant::now(),
         };
@@ -641,6 +643,7 @@ mod tests {
             joint_velocities: vec![0.01, -0.02, 0.0, 0.0],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::Velocity(Twist {
                 linear: [0.2, 0.0, 0.0],
                 angular: [0.0, 0.0, 0.1],
@@ -682,6 +685,7 @@ mod tests {
             joint_velocities: vec![0.0; 4],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::Velocity(Twist {
                 linear: [0.5, 0.0, 0.0],
                 angular: [0.0, 0.0, 0.0],
@@ -751,6 +755,7 @@ mod tests {
             joint_count: N,
             joint_names: (0..N).map(|i| format!("h1_joint_{i}")).collect(),
             pd_gains: vec![PdGains { kp: 150.0, kd: 2.0 }; N],
+            sim_pd_gains: None,
             joint_limits: vec![
                 JointLimit {
                     min: -1.57,
@@ -779,6 +784,7 @@ mod tests {
             joint_velocities: vec![0.0; N],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::Velocity(Twist {
                 linear: [0.2, 0.0, 0.0],
                 angular: [0.0, 0.0, 0.0],
@@ -824,6 +830,7 @@ mod tests {
             joint_velocities,
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.2, -0.4, 0.6],
+            base_pose: None,
             command: WbcCommand::Velocity(Twist {
                 linear: [0.5, 0.1, 0.0],
                 angular: [0.0, 0.0, 0.2],
@@ -881,6 +888,7 @@ mod tests {
             joint_velocities: vec![0.0; robot.joint_count],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::Velocity(Twist {
                 linear: [0.0, 0.0, 0.0],
                 angular: [0.0, 0.0, 0.0],
@@ -948,6 +956,7 @@ mod tests {
             joint_velocities: vec![0.0; robot.joint_count],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::Velocity(Twist {
                 linear: [0.3, 0.0, 0.0],
                 angular: [0.0, 0.0, 0.0],

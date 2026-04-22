@@ -59,6 +59,15 @@ pub trait WbcPolicy: Send + Sync {
     fn supported_robots(&self) -> &[RobotConfig];
 }
 
+/// Floating-base pose expressed in the world frame.
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct BasePose {
+    /// Base position in meters.
+    pub position_world: [f32; 3],
+    /// Unit quaternion in `[x, y, z, w]` order.
+    pub rotation_xyzw: [f32; 4],
+}
+
 /// Standardized sensor input consumed by a [`WbcPolicy`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct Observation {
@@ -70,6 +79,8 @@ pub struct Observation {
     pub gravity_vector: [f32; 3],
     /// Body-frame angular velocity from the IMU gyro in rad/s.
     pub angular_velocity: [f32; 3],
+    /// Optional floating-base pose when the transport exposes one.
+    pub base_pose: Option<BasePose>,
     /// High-level command payload.
     pub command: WbcCommand,
     /// Sample timestamp.
@@ -111,6 +122,11 @@ pub struct RobotConfig {
     pub joint_names: Vec<String>,
     /// Per-joint proportional/derivative gains.
     pub pd_gains: Vec<PdGains>,
+    /// Optional per-joint gains used specifically by raw-torque simulators.
+    ///
+    /// When absent, simulation falls back to [`RobotConfig::pd_gains`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sim_pd_gains: Option<Vec<PdGains>>,
     /// Per-joint min/max position limits in radians.
     pub joint_limits: Vec<JointLimit>,
     /// Default standing pose in radians.
@@ -165,6 +181,15 @@ impl RobotConfig {
                 format!("pd_gains length {} != joint_count {n}", self.pd_gains.len()).into(),
             );
         }
+        if let Some(ref sim_pd_gains) = self.sim_pd_gains {
+            if sim_pd_gains.len() != n {
+                return Err(format!(
+                    "sim_pd_gains length {} != joint_count {n}",
+                    sim_pd_gains.len()
+                )
+                .into());
+            }
+        }
         if self.joint_limits.len() != n {
             return Err(format!(
                 "joint_limits length {} != joint_count {n}",
@@ -189,6 +214,13 @@ impl RobotConfig {
             }
         }
         Ok(())
+    }
+
+    /// Returns the gains that should be used by the MuJoCo/raw-torque
+    /// simulation path.
+    #[must_use]
+    pub fn simulation_pd_gains(&self) -> &[PdGains] {
+        self.sim_pd_gains.as_deref().unwrap_or(&self.pd_gains)
     }
 }
 
@@ -281,6 +313,7 @@ mod tests {
             joint_count: 2,
             joint_names: vec!["hip".to_owned(), "knee".to_owned()],
             pd_gains: vec![PdGains { kp: 20.0, kd: 0.5 }, PdGains { kp: 30.0, kd: 0.8 }],
+            sim_pd_gains: None,
             joint_limits: vec![
                 JointLimit {
                     min: -1.0,
@@ -305,6 +338,7 @@ mod tests {
             joint_velocities: vec![0.0, 0.1],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::Velocity(Twist {
                 linear: [0.2, 0.0, 0.0],
                 angular: [0.0, 0.0, 0.3],
@@ -322,6 +356,7 @@ mod tests {
 
         assert_eq!(robot.joint_count, robot.joint_names.len());
         assert_eq!(robot.joint_count, robot.pd_gains.len());
+        assert_eq!(robot.simulation_pd_gains().len(), robot.joint_count);
         assert_eq!(robot.joint_count, robot.joint_limits.len());
         assert_eq!(robot.joint_count, robot.default_pose.len());
     }
@@ -344,6 +379,14 @@ mod tests {
         assert_eq!(config.joint_count, 29);
         assert_eq!(config.joint_names.len(), 29);
         assert_eq!(config.pd_gains.len(), 29);
+        assert_eq!(
+            config
+                .sim_pd_gains
+                .as_ref()
+                .expect("G1 config should carry MuJoCo gains")
+                .len(),
+            29
+        );
         assert_eq!(config.joint_limits.len(), 29);
         assert_eq!(config.default_pose.len(), 29);
 
@@ -351,6 +394,8 @@ mod tests {
         assert_eq!(config.joint_names[0], "left_hip_pitch_joint");
         assert!((config.pd_gains[0].kp - 15.826).abs() < 1e-3);
         assert!((config.pd_gains[0].kd - 6.299).abs() < 1e-3);
+        assert!((config.simulation_pd_gains()[0].kp - 150.0).abs() < 1e-3);
+        assert!((config.simulation_pd_gains()[0].kd - 2.0).abs() < 1e-3);
         assert!((config.default_pose[0] - (-0.312)).abs() < 1e-3);
     }
 
@@ -387,11 +432,20 @@ mod tests {
         assert_eq!(config.joint_count, 35);
         assert_eq!(config.joint_names.len(), 35);
         assert_eq!(config.pd_gains.len(), 35);
+        assert_eq!(
+            config
+                .sim_pd_gains
+                .as_ref()
+                .expect("G1-35 config should carry MuJoCo gains")
+                .len(),
+            35
+        );
         assert_eq!(config.joint_limits.len(), 35);
         assert_eq!(config.default_pose.len(), 35);
 
         // First joint matches GEAR-SONIC G1 ordering.
         assert_eq!(config.joint_names[0], "left_hip_pitch_joint");
+        assert!((config.simulation_pd_gains()[0].kp - 150.0).abs() < 1e-3);
         // Hand joints at indices 29–34.
         assert_eq!(config.joint_names[29], "left_hand_index_joint");
         assert_eq!(config.joint_names[32], "right_hand_index_joint");
@@ -450,6 +504,7 @@ mod tests {
             joint_velocities: vec![0.1, -0.1],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::MotionTokens(vec![1.0, 2.0]),
             timestamp: now,
         };
