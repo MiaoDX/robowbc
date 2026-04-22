@@ -44,6 +44,7 @@ struct Options {
     std::string case_id;
     fs::path model_dir;
     fs::path output;
+    std::optional<fs::path> dump_dir;
     int samples = 100;
     int ticks = 200;
     int control_frequency_hz = 50;
@@ -70,9 +71,31 @@ std::vector<float> default_pose() {
     return pose;
 }
 
-Observation zero_observation() {
+std::vector<float> mujoco_to_isaaclab_positions(const std::vector<float>& joint_positions) {
+    if (joint_positions.size() != G1_NUM_MOTOR) {
+        throw std::runtime_error("joint_positions must match G1_NUM_MOTOR");
+    }
+
+    std::vector<float> remapped(G1_NUM_MOTOR, 0.0f);
+    for (std::size_t mujoco_index = 0; mujoco_index < G1_NUM_MOTOR; ++mujoco_index) {
+        remapped[static_cast<std::size_t>(isaaclab_to_mujoco[mujoco_index])] =
+            joint_positions[mujoco_index];
+    }
+    return remapped;
+}
+
+Observation zero_tracking_observation() {
     Observation obs;
     obs.joint_positions.assign(G1_NUM_MOTOR, 0.0f);
+    obs.joint_velocities.assign(G1_NUM_MOTOR, 0.0f);
+    obs.gravity_vector = {0.0f, 0.0f, -1.0f};
+    obs.angular_velocity = {0.0f, 0.0f, 0.0f};
+    return obs;
+}
+
+Observation standing_velocity_observation() {
+    Observation obs;
+    obs.joint_positions = default_pose();
     obs.joint_velocities.assign(G1_NUM_MOTOR, 0.0f);
     obs.gravity_vector = {0.0f, 0.0f, -1.0f};
     obs.angular_velocity = {0.0f, 0.0f, 0.0f};
@@ -190,12 +213,10 @@ struct TrackingState {
         joint_positions.clear();
         joint_velocities.clear();
         last_actions.clear();
-
-        const auto pose = default_pose();
         for (std::size_t index = 0; index < kDecoderHistoryLen; ++index) {
-            gravity.push_back({0.0f, 0.0f, -1.0f});
+            gravity.push_back({0.0f, 0.0f, 1.0f});
             angular_velocity.push_back({0.0f, 0.0f, 0.0f});
-            joint_positions.push_back(pose);
+            joint_positions.emplace_back(G1_NUM_MOTOR, 0.0f);
             joint_velocities.emplace_back(G1_NUM_MOTOR, 0.0f);
             last_actions.emplace_back(G1_NUM_MOTOR, 0.0f);
         }
@@ -219,7 +240,10 @@ struct TrackingState {
 
 class GearSonicOfficialHarness {
 public:
-    explicit GearSonicOfficialHarness(const fs::path& model_dir)
+    explicit GearSonicOfficialHarness(
+        const fs::path& model_dir,
+        std::optional<fs::path> dump_dir = std::nullopt
+    )
         : env_(ORT_LOGGING_LEVEL_WARNING, "gear_sonic_official"),
           memory_info_(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault)),
           encoder_(make_session(env_, model_dir / "model_encoder.onnx")),
@@ -227,8 +251,10 @@ public:
           planner_(make_session(env_, model_dir / "planner_sonic.onnx")),
           planner_state_(),
           tracking_state_(),
-          velocity_obs_(zero_observation()),
-          tracking_obs_(zero_observation())
+          velocity_obs_(standing_velocity_observation()),
+          tracking_obs_(zero_tracking_observation()),
+          latest_action_(G1_NUM_MOTOR, 0.0f),
+          dump_dir_(std::move(dump_dir))
     {
         validate_contracts();
     }
@@ -236,6 +262,10 @@ public:
     void reset() {
         planner_state_.reset();
         tracking_state_.reset();
+        velocity_obs_ = standing_velocity_observation();
+        tracking_obs_ = zero_tracking_observation();
+        latest_action_.assign(G1_NUM_MOTOR, 0.0f);
+        dumped_tracking_tensors_ = false;
     }
 
     std::vector<float> velocity_tick() {
@@ -272,8 +302,8 @@ public:
             );
         }
 
-        const std::vector<float> current_actions(G1_NUM_MOTOR, 0.0f);
-        const auto decoder_obs = build_decoder_obs_dict(tokens, current_actions);
+        tracking_state_.push(tracking_obs_, latest_action_);
+        const auto decoder_obs = build_decoder_obs_dict(tokens);
         const auto raw_actions = run_single_f32(decoder_, "obs_dict", "action", decoder_obs, kDecoderObsDictDim);
         if (raw_actions.size() != G1_NUM_MOTOR) {
             throw std::runtime_error(
@@ -281,6 +311,7 @@ public:
                 ", got " + std::to_string(raw_actions.size())
             );
         }
+        maybe_dump_tracking_tensors(encoder_obs, tokens, decoder_obs, raw_actions);
 
         std::vector<float> positions(G1_NUM_MOTOR, 0.0f);
         for (int mujoco_index = 0; mujoco_index < G1_NUM_MOTOR; ++mujoco_index) {
@@ -291,7 +322,7 @@ public:
                 static_cast<float>(default_angles[static_cast<std::size_t>(mujoco_index)]) + scaled;
         }
 
-        tracking_state_.push(tracking_obs_, raw_actions);
+        latest_action_ = raw_actions;
         return positions;
     }
 
@@ -305,6 +336,9 @@ private:
     TrackingState tracking_state_;
     Observation velocity_obs_;
     Observation tracking_obs_;
+    std::vector<float> latest_action_;
+    std::optional<fs::path> dump_dir_;
+    bool dumped_tracking_tensors_ = false;
 
     void validate_contracts() {
         const auto planner_inputs = session_names(planner_, true);
@@ -566,10 +600,10 @@ private:
     std::vector<float> build_encoder_obs_dict() const {
         std::vector<float> buf(kEncoderObsDictDim, 0.0f);
 
-        const auto pose = default_pose();
+        const auto pose = mujoco_to_isaaclab_positions(default_pose());
         const std::size_t pos_offset = 4;
         const std::size_t vel_offset = 294;
-        const std::size_t orn_offset = 584;
+        const std::size_t orn_offset = 601;
 
         for (std::size_t frame = 0; frame < kDecoderHistoryLen; ++frame) {
             const std::size_t pose_index = pos_offset + frame * G1_NUM_MOTOR;
@@ -587,32 +621,20 @@ private:
         return buf;
     }
 
-    std::vector<float> build_decoder_obs_dict(
-        const std::vector<float>& tokens,
-        const std::vector<float>& current_actions
-    ) const {
+    std::vector<float> build_decoder_obs_dict(const std::vector<float>& tokens) const {
         std::vector<float> buf;
         buf.reserve(kDecoderObsDictDim);
         buf.insert(buf.end(), tokens.begin(), tokens.end());
 
-        const std::size_t history_skip = tracking_state_.gravity.size() > (kDecoderHistoryLen - 1)
-            ? tracking_state_.gravity.size() - (kDecoderHistoryLen - 1)
+        const std::size_t history_skip = tracking_state_.gravity.size() > kDecoderHistoryLen
+            ? tracking_state_.gravity.size() - kDecoderHistoryLen
             : 0;
 
-        append_history_vectors(buf, tracking_state_.gravity, history_skip);
-        buf.insert(buf.end(), tracking_obs_.gravity_vector.begin(), tracking_obs_.gravity_vector.end());
-
         append_history_vectors(buf, tracking_state_.angular_velocity, history_skip);
-        buf.insert(buf.end(), tracking_obs_.angular_velocity.begin(), tracking_obs_.angular_velocity.end());
-
         append_history_vectors(buf, tracking_state_.joint_positions, history_skip);
-        buf.insert(buf.end(), tracking_obs_.joint_positions.begin(), tracking_obs_.joint_positions.end());
-
         append_history_vectors(buf, tracking_state_.joint_velocities, history_skip);
-        buf.insert(buf.end(), tracking_obs_.joint_velocities.begin(), tracking_obs_.joint_velocities.end());
-
         append_history_vectors(buf, tracking_state_.last_actions, history_skip);
-        buf.insert(buf.end(), current_actions.begin(), current_actions.end());
+        append_history_vectors(buf, tracking_state_.gravity, history_skip);
 
         return buf;
     }
@@ -668,6 +690,41 @@ private:
         const std::size_t count = info.GetElementCount();
         const float* data = output.GetTensorData<float>();
         return std::vector<float>(data, data + static_cast<std::ptrdiff_t>(count));
+    }
+
+    static void write_vector_json(const fs::path& path, const std::vector<float>& values) {
+        fs::create_directories(path.parent_path());
+        std::ofstream out(path);
+        if (!out) {
+            throw std::runtime_error("failed to open tensor dump file: " + path.string());
+        }
+
+        out << "[\n";
+        for (std::size_t index = 0; index < values.size(); ++index) {
+            out << "  " << values[index];
+            if (index + 1 < values.size()) {
+                out << ",";
+            }
+            out << "\n";
+        }
+        out << "]\n";
+    }
+
+    void maybe_dump_tracking_tensors(
+        const std::vector<float>& encoder_obs,
+        const std::vector<float>& tokens,
+        const std::vector<float>& decoder_obs,
+        const std::vector<float>& raw_actions
+    ) {
+        if (!dump_dir_.has_value() || dumped_tracking_tensors_) {
+            return;
+        }
+
+        write_vector_json(*dump_dir_ / "tracking_encoder_obs.json", encoder_obs);
+        write_vector_json(*dump_dir_ / "tracking_tokens.json", tokens);
+        write_vector_json(*dump_dir_ / "tracking_decoder_obs.json", decoder_obs);
+        write_vector_json(*dump_dir_ / "tracking_raw_actions.json", raw_actions);
+        dumped_tracking_tensors_ = true;
     }
 };
 
@@ -774,6 +831,8 @@ Options parse_args(int argc, char** argv) {
             options.model_dir = require_value(arg);
         } else if (arg == "--output") {
             options.output = require_value(arg);
+        } else if (arg == "--dump-dir") {
+            options.dump_dir = fs::path(require_value(arg));
         } else if (arg == "--samples") {
             options.samples = std::stoi(require_value(arg));
         } else if (arg == "--ticks") {
@@ -849,7 +908,7 @@ int main(int argc, char** argv) {
     try {
         const Options options = parse_args(argc, argv);
         const CaseKind case_kind = parse_case_kind(options.case_id);
-        GearSonicOfficialHarness harness(options.model_dir);
+        GearSonicOfficialHarness harness(options.model_dir, options.dump_dir);
 
         std::vector<std::uint64_t> samples_ns;
         std::optional<double> hz;

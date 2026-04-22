@@ -1389,6 +1389,29 @@ impl GearSonicPolicy {
         wrapped
     }
 
+    fn bin_planner_angle_to_8_directions(angle: f32) -> (f32, f32) {
+        const BIN_SIZE: f32 = std::f32::consts::FRAC_PI_4;
+
+        let normalized = Self::wrap_angle_rad(angle);
+        let mut bin_index = (normalized / BIN_SIZE).round() as i32;
+        if bin_index > 4 {
+            bin_index -= 8;
+        }
+        if bin_index < -4 {
+            bin_index += 8;
+        }
+
+        let slow_walk_speed = match bin_index {
+            0 | 1 | -1 => 0.3,
+            2 | -2 => 0.35,
+            3 | -3 => 0.25,
+            4 | -4 => 0.2,
+            _ => 0.2,
+        };
+
+        (bin_index as f32 * BIN_SIZE, slow_walk_speed)
+    }
+
     fn vec3_distance(a: [f32; 3], b: [f32; 3]) -> f32 {
         let dx = a[0] - b[0];
         let dy = a[1] - b[1];
@@ -1424,8 +1447,10 @@ impl GearSonicPolicy {
         let local_movement_angle = twist.linear[1].atan2(twist.linear[0]);
         let movement_angle =
             Self::wrap_angle_rad(planner_state.facing_yaw_rad + local_movement_angle);
+        let (movement_angle, slow_walk_speed) =
+            Self::bin_planner_angle_to_8_directions(movement_angle);
         let (mode, target_vel) = if cmd_norm < 0.8 {
-            (GEAR_SONIC_DEFAULT_MODE_SLOW_WALK, cmd_norm.clamp(0.2, 0.8))
+            (GEAR_SONIC_DEFAULT_MODE_SLOW_WALK, slow_walk_speed)
         } else if cmd_norm < 2.5 {
             (GEAR_SONIC_DEFAULT_MODE_WALK, -1.0)
         } else {
@@ -2345,58 +2370,47 @@ impl GearSonicPolicy {
         Ok(buf)
     }
 
-    /// Builds the decoder `obs_dict` from encoder tokens + 10-frame history.
+    /// Builds the decoder `obs_dict` from encoder tokens + 10 logged frames.
     ///
-    /// Layout (994D): `token_state` (64) + `gravity_dir` (30) + `base_ang_vel` (30)
-    /// + `body_joint_positions` (290) + `body_joint_velocities` (290)
-    /// + `last_actions` (290).
+    /// The published release `observation_config.yaml` orders the decoder input as:
     ///
-    /// The current frame is appended explicitly so we can pass the live
-    /// `Observation` in the official decoder space: IsaacLab-order joint
-    /// offsets from default pose plus IsaacLab-order joint velocities. The
-    /// 9 newest historical frames are used from `history`, which avoids
-    /// mutating persistent state before successful inference.
-    fn build_decoder_obs_dict(
-        tokens: &[f32],
-        history: &GearSonicTrackingState,
-        current_gravity: [f32; 3],
-        current_angular_velocity: [f32; 3],
-        current_joint_positions: &[f32],
-        current_joint_velocities: &[f32],
-        current_actions: &[f32],
-    ) -> Vec<f32> {
+    /// `token_state` (64) + `his_base_angular_velocity_10frame_step1` (30)
+    /// + `his_body_joint_positions_10frame_step1` (290)
+    /// + `his_body_joint_velocities_10frame_step1` (290)
+    /// + `his_last_actions_10frame_step1` (290)
+    /// + `his_gravity_dir_10frame_step1` (30).
+    ///
+    /// Official GEAR-Sonic logs the current robot state before assembling the
+    /// observation tensor, so `history` must already contain the live frame
+    /// paired with the previous policy action.
+    fn build_decoder_obs_dict(tokens: &[f32], history: &GearSonicTrackingState) -> Vec<f32> {
         let mut buf = Vec::with_capacity(GEAR_SONIC_DECODER_OBS_DICT_DIM);
         buf.extend_from_slice(tokens);
 
         let skip = history
             .gravity
             .len()
-            .saturating_sub(GEAR_SONIC_DECODER_HISTORY_LEN - 1);
-
-        for g in history.gravity.iter().skip(skip) {
-            buf.extend_from_slice(g);
-        }
-        buf.extend_from_slice(&current_gravity);
+            .saturating_sub(GEAR_SONIC_DECODER_HISTORY_LEN);
 
         for av in history.angular_velocity.iter().skip(skip) {
             buf.extend_from_slice(av);
         }
-        buf.extend_from_slice(&current_angular_velocity);
 
         for p in history.joint_positions.iter().skip(skip) {
             buf.extend_from_slice(p);
         }
-        buf.extend_from_slice(current_joint_positions);
 
         for v in history.joint_velocities.iter().skip(skip) {
             buf.extend_from_slice(v);
         }
-        buf.extend_from_slice(current_joint_velocities);
 
         for a in history.last_actions.iter().skip(skip) {
             buf.extend_from_slice(a);
         }
-        buf.extend_from_slice(current_actions);
+
+        for g in history.gravity.iter().skip(skip) {
+            buf.extend_from_slice(g);
+        }
 
         buf
     }
@@ -2427,19 +2441,18 @@ impl GearSonicPolicy {
             Self::observation_joint_positions_isaaclab_offsets(&self.robot, obs);
         let current_joint_velocities = Self::observation_joint_velocities_isaaclab(obs);
         // The decoder consumes the previous policy action aligned with the
-        // current proprioceptive state. Upstream logs `last_action` before
-        // the new action is inferred, so we must not associate `raw_actions`
-        // from this tick with this tick's state entry.
+        // current proprioceptive state. Upstream logs the live state before
+        // inference, so this tick's history entry must contain the previous
+        // action rather than the raw action we are about to infer.
         let current_actions = tracking_state.latest_action.clone();
-        let decoder_obs = Self::build_decoder_obs_dict(
-            &tokens,
-            &tracking_state,
+        tracking_state.push(
             obs.gravity_vector,
             obs.angular_velocity,
             &current_joint_positions,
             &current_joint_velocities,
             &current_actions,
         );
+        let decoder_obs = Self::build_decoder_obs_dict(&tokens, &tracking_state);
         let mut decoder = self.decoder.lock().map_err(|_| {
             robowbc_core::WbcError::InferenceFailed("decoder mutex poisoned".to_owned())
         })?;
@@ -2459,13 +2472,6 @@ impl GearSonicPolicy {
             positions[mujoco_idx] = self.robot.default_pose[mujoco_idx] + scaled;
         }
 
-        tracking_state.push(
-            obs.gravity_vector,
-            obs.angular_velocity,
-            &current_joint_positions,
-            &current_joint_velocities,
-            &current_actions,
-        );
         tracking_state.latest_action = raw_actions;
         drop(tracking_state);
 
@@ -3032,9 +3038,23 @@ mod tests {
         let command = GearSonicPolicy::derive_planner_command(&mut planner_state, &forward);
 
         assert_eq!(command.mode, GEAR_SONIC_DEFAULT_MODE_SLOW_WALK);
-        assert!((command.target_vel - 0.6).abs() < 1e-6);
+        assert!((command.target_vel - 0.3).abs() < 1e-6);
         assert_vec3_approx_eq(command.movement_direction, [1.0, 0.0, 0.0]);
         assert_vec3_approx_eq(command.facing_direction, [1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn gear_sonic_planner_command_uses_lateral_slow_walk_speed_bin() {
+        let mut planner_state = GearSonicPlannerState::new(&test_robot_config(29));
+        let left = robowbc_core::Twist {
+            linear: [0.0, 0.4, 0.0],
+            angular: [0.0, 0.0, 0.0],
+        };
+        let command = GearSonicPolicy::derive_planner_command(&mut planner_state, &left);
+
+        assert_eq!(command.mode, GEAR_SONIC_DEFAULT_MODE_SLOW_WALK);
+        assert!((command.target_vel - 0.35).abs() < 1e-6);
+        assert_vec3_approx_eq(command.movement_direction, [0.0, 1.0, 0.0]);
     }
 
     #[test]
@@ -3247,7 +3267,65 @@ mod tests {
             historical_actions.next().unwrap(),
             &vec![0.0, 0.0, 0.0, 0.0]
         );
+        let mut historical_positions = tracking_state.joint_positions.iter().rev();
+        assert_eq!(historical_positions.next().unwrap(), &state1_positions);
+        assert_eq!(historical_positions.next().unwrap(), &state0_positions);
         assert_eq!(tracking_state.latest_action, action1);
+    }
+
+    #[test]
+    fn gear_sonic_decoder_obs_matches_release_observation_order() {
+        let robot = test_robot_config(29);
+        let mut history = GearSonicTrackingState::new(&robot);
+        history.gravity.clear();
+        history.angular_velocity.clear();
+        history.joint_positions.clear();
+        history.joint_velocities.clear();
+        history.last_actions.clear();
+
+        for frame in 0..GEAR_SONIC_DECODER_HISTORY_LEN {
+            let frame = frame as f32;
+            history
+                .gravity
+                .push_back([500.0 + frame, 501.0 + frame, 502.0 + frame]);
+            history
+                .angular_velocity
+                .push_back([10.0 + frame, 20.0 + frame, 30.0 + frame]);
+            history
+                .joint_positions
+                .push_back(vec![100.0 + frame; robot.joint_count]);
+            history
+                .joint_velocities
+                .push_back(vec![200.0 + frame; robot.joint_count]);
+            history
+                .last_actions
+                .push_back(vec![300.0 + frame; robot.joint_count]);
+        }
+
+        let tokens: Vec<f32> = (0..GEAR_SONIC_ENCODER_DIM)
+            .map(|idx| idx as f32 + 0.5)
+            .collect();
+        let decoder_obs = GearSonicPolicy::build_decoder_obs_dict(&tokens, &history);
+
+        let mut expected = tokens.clone();
+        for angular_velocity in &history.angular_velocity {
+            expected.extend_from_slice(angular_velocity);
+        }
+        for joint_positions in &history.joint_positions {
+            expected.extend_from_slice(joint_positions);
+        }
+        for joint_velocities in &history.joint_velocities {
+            expected.extend_from_slice(joint_velocities);
+        }
+        for last_actions in &history.last_actions {
+            expected.extend_from_slice(last_actions);
+        }
+        for gravity in &history.gravity {
+            expected.extend_from_slice(gravity);
+        }
+
+        assert_eq!(decoder_obs.len(), GEAR_SONIC_DECODER_OBS_DICT_DIM);
+        assert_eq!(decoder_obs, expected);
     }
 
     #[test]
