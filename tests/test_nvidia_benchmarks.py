@@ -553,6 +553,7 @@ class NvidiaBenchmarkTests(unittest.TestCase):
             "model_path": "models/unitree_g1.xml",
             "timestep": 0.002,
             "substeps": 10,
+            "gain_profile": "default_pd",
             "robot_config_path": "configs/robots/unitree_g1.toml",
             "config_has_sim_section": False,
         }
@@ -567,6 +568,7 @@ class NvidiaBenchmarkTests(unittest.TestCase):
 
         self.assertIn("[sim]", composed)
         self.assertIn('model_path = "models/unitree_g1.xml"', composed)
+        self.assertIn('gain_profile = "default_pd"', composed)
         self.assertIn("[vis]", composed)
         self.assertIn("[report]", composed)
         self.assertIn('output_path = "/tmp/report.json"', composed)
@@ -602,7 +604,44 @@ class NvidiaBenchmarkTests(unittest.TestCase):
             self.assertEqual(context["transport"], "mujoco")
             self.assertEqual(context["model_path"], "models/unitree_g1.xml")
             self.assertEqual(context["substeps"], 10)
+            self.assertEqual(context["gain_profile"], "simulation_pd")
             self.assertFalse(context["config_has_sim_section"])
+
+    def test_roboharness_compose_run_config_preserves_existing_sim_section_and_fills_missing_fields(
+        self,
+    ) -> None:
+        base_toml = textwrap.dedent(
+            """
+            [policy]
+            name = "gear_sonic"
+
+            [sim]
+            gain_profile = "default_pd"
+            """
+        ).strip()
+        showcase_context = {
+            "transport": "mujoco",
+            "model_path": "models/unitree_g1.xml",
+            "timestep": 0.002,
+            "substeps": 10,
+            "gain_profile": "simulation_pd",
+            "robot_config_path": "configs/robots/unitree_g1.toml",
+            "config_has_sim_section": True,
+        }
+
+        composed = ROBOHARNESS.compose_run_config(
+            base_toml,
+            Path("/tmp/report.json"),
+            Path("/tmp/run.rrd"),
+            showcase_context,
+            max_ticks=7,
+        )
+
+        self.assertEqual(composed.count("[sim]"), 1)
+        self.assertIn('model_path = "models/unitree_g1.xml"', composed)
+        self.assertIn("timestep = 0.002", composed)
+        self.assertIn("substeps = 10", composed)
+        self.assertIn('gain_profile = "default_pd"', composed)
 
     def test_roboharness_run_robowbc_records_meta_and_report_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -627,6 +666,7 @@ class NvidiaBenchmarkTests(unittest.TestCase):
                     model_path = "models/unitree_g1.xml"
                     timestep = 0.002
                     substeps = 10
+                    gain_profile = "default_pd"
                     """
                 ).strip()
                 + "\n",
@@ -650,6 +690,7 @@ class NvidiaBenchmarkTests(unittest.TestCase):
             temp_config_text = Path(report["_meta"]["temp_config"]).read_text(encoding="utf-8")
             self.assertIn("[report]", temp_config_text)
             self.assertIn("max_ticks = 3", temp_config_text)
+            self.assertIn('gain_profile = "default_pd"', temp_config_text)
 
 
 if __name__ == "__main__":

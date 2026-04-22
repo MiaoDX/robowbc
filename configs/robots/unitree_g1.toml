@@ -73,6 +73,41 @@ pd_gains = [
     { kp =  1.069, kd = 0.851 },  # right_wrist_yaw
 ]
 
+# MuJoCo/raw-torque gains from the official GEAR-Sonic and GR00T G1 sim
+# configs. These are intentionally much stiffer than the hardware-side gains
+# above and are only used by the simulation transport.
+sim_pd_gains = [
+    { kp = 150.0, kd = 2.0 },  # left_hip_pitch
+    { kp = 150.0, kd = 2.0 },  # left_hip_roll
+    { kp = 150.0, kd = 2.0 },  # left_hip_yaw
+    { kp = 200.0, kd = 4.0 },  # left_knee
+    { kp =  40.0, kd = 2.0 },  # left_ankle_pitch
+    { kp =  40.0, kd = 2.0 },  # left_ankle_roll
+    { kp = 150.0, kd = 2.0 },  # right_hip_pitch
+    { kp = 150.0, kd = 2.0 },  # right_hip_roll
+    { kp = 150.0, kd = 2.0 },  # right_hip_yaw
+    { kp = 200.0, kd = 4.0 },  # right_knee
+    { kp =  40.0, kd = 2.0 },  # right_ankle_pitch
+    { kp =  40.0, kd = 2.0 },  # right_ankle_roll
+    { kp = 250.0, kd = 5.0 },  # waist_yaw
+    { kp = 250.0, kd = 5.0 },  # waist_roll
+    { kp = 250.0, kd = 5.0 },  # waist_pitch
+    { kp = 100.0, kd = 5.0 },  # left_shoulder_pitch
+    { kp = 100.0, kd = 5.0 },  # left_shoulder_roll
+    { kp =  40.0, kd = 2.0 },  # left_shoulder_yaw
+    { kp =  40.0, kd = 2.0 },  # left_elbow
+    { kp =  20.0, kd = 2.0 },  # left_wrist_roll
+    { kp =  20.0, kd = 2.0 },  # left_wrist_pitch
+    { kp =  20.0, kd = 2.0 },  # left_wrist_yaw
+    { kp = 100.0, kd = 5.0 },  # right_shoulder_pitch
+    { kp = 100.0, kd = 5.0 },  # right_shoulder_roll
+    { kp =  40.0, kd = 2.0 },  # right_shoulder_yaw
+    { kp =  40.0, kd = 2.0 },  # right_elbow
+    { kp =  20.0, kd = 2.0 },  # right_wrist_roll
+    { kp =  20.0, kd = 2.0 },  # right_wrist_pitch
+    { kp =  20.0, kd = 2.0 },  # right_wrist_yaw
+]
+
 # Joint limits from g1_29dof.xml MuJoCo model (radians).
 joint_limits = [
     { min = -2.5307, max =  2.8798 },  # left_hip_pitch

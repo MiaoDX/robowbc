@@ -794,6 +794,7 @@ mod tests {
                 (0..n).map(|i| format!("j{i}")).collect()
             },
             pd_gains: vec![PdGains { kp: 1.0, kd: 0.1 }; n],
+            sim_pd_gains: None,
             joint_limits: vec![
                 JointLimit {
                     min: -4.0,
@@ -905,6 +906,7 @@ mod tests {
             joint_velocities: vec![0.0; 4],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::MotionTokens(vec![1.0]),
             timestamp: Instant::now(),
         };
@@ -937,6 +939,7 @@ mod tests {
             joint_velocities: vec![0.01, 0.02, 0.03, 0.04],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::Velocity(Twist {
                 linear: [0.5, 0.0, 0.0],
                 angular: [0.0, 0.0, 0.1],
@@ -1014,6 +1017,7 @@ mod tests {
             joint_velocities: vec![0.0; BFM_G1_JOINT_COUNT],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::MotionTokens(vec![0.0]),
             timestamp: Instant::now(),
         };
@@ -1084,6 +1088,7 @@ mod tests {
             joint_velocities: vec![0.0; BFM_G1_JOINT_COUNT],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::MotionTokens(vec![0.0]),
             timestamp: Instant::now(),
         };

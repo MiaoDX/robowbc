@@ -53,6 +53,7 @@ fn test_robot_config(joint_count: usize) -> RobotConfig {
         joint_count,
         joint_names: (0..joint_count).map(|i| format!("j{i}")).collect(),
         pd_gains: vec![PdGains { kp: 1.0, kd: 0.1 }; joint_count],
+        sim_pd_gains: None,
         joint_limits: vec![
             JointLimit {
                 min: -1.0,
@@ -199,6 +200,7 @@ fn gear_sonic_velocity_obs(joint_count: usize) -> Observation {
         joint_velocities: vec![0.0; joint_count],
         gravity_vector: [0.0, 0.0, -1.0],
         angular_velocity: [0.0, 0.0, 0.0],
+        base_pose: None,
         command: WbcCommand::Velocity(robowbc_core::Twist {
             linear: [0.3, 0.0, 0.0],
             angular: [0.0, 0.0, 0.0],
@@ -213,6 +215,7 @@ fn gear_sonic_tracking_obs(joint_count: usize) -> Observation {
         joint_velocities: vec![0.0; joint_count],
         gravity_vector: [0.0, 0.0, -1.0],
         angular_velocity: [0.0, 0.0, 0.0],
+        base_pose: None,
         command: WbcCommand::MotionTokens(Vec::new()),
         timestamp: Instant::now(),
     }
@@ -344,6 +347,7 @@ fn decoupled_wbc_obs(joint_count: usize, vx: f32, yaw_rate: f32) -> Observation 
         joint_velocities: vec![0.0; joint_count],
         gravity_vector: [0.0, 0.0, -1.0],
         angular_velocity: [0.0, 0.0, 0.0],
+        base_pose: None,
         command: WbcCommand::Velocity(robowbc_core::Twist {
             linear: [vx, 0.0, 0.0],
             angular: [0.0, 0.0, yaw_rate],

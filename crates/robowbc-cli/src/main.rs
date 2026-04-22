@@ -144,6 +144,11 @@ struct RuntimeConfig {
     /// empty `motion_tokens` payload at the user-facing config layer.
     #[serde(default)]
     standing_placeholder_tracking: bool,
+    /// Gear-Sonic-only alias for clip-backed reference-motion tracking. This
+    /// still routes through the encoder+decoder tracking contract, but it
+    /// requires `[policy.config.reference_motion]` to select the official clip.
+    #[serde(default)]
+    reference_motion_tracking: bool,
     #[serde(default)]
     max_ticks: Option<usize>,
 }
@@ -160,6 +165,7 @@ impl Default for RuntimeConfig {
             velocity_schedule: None,
             kinematic_pose: None,
             standing_placeholder_tracking: false,
+            reference_motion_tracking: false,
             max_ticks: Some(200),
         }
     }
@@ -172,6 +178,7 @@ enum ParsedRuntimeCommand {
     VelocitySchedule(VelocityScheduleConfig),
     KinematicPose(KinematicPoseConfig),
     StandingPlaceholderTracking,
+    ReferenceMotionTracking,
 }
 
 impl ParsedRuntimeCommand {
@@ -193,10 +200,13 @@ impl ParsedRuntimeCommand {
         if runtime.standing_placeholder_tracking {
             configured_fields.push("runtime.standing_placeholder_tracking");
         }
+        if runtime.reference_motion_tracking {
+            configured_fields.push("runtime.reference_motion_tracking");
+        }
 
         if configured_fields.len() > 1 {
             return Err(format!(
-                "runtime command fields are mutually exclusive; found {}. Choose exactly one of runtime.motion_tokens, runtime.velocity, runtime.velocity_schedule, runtime.kinematic_pose, or runtime.standing_placeholder_tracking",
+                "runtime command fields are mutually exclusive; found {}. Choose exactly one of runtime.motion_tokens, runtime.velocity, runtime.velocity_schedule, runtime.kinematic_pose, runtime.standing_placeholder_tracking, or runtime.reference_motion_tracking",
                 configured_fields.join(", ")
             ));
         }
@@ -242,6 +252,28 @@ impl ParsedRuntimeCommand {
             return Ok(Self::StandingPlaceholderTracking);
         }
 
+        if runtime.reference_motion_tracking {
+            if config.policy.name != "gear_sonic" {
+                return Err(format!(
+                    "runtime.reference_motion_tracking is only supported when policy.name = \"gear_sonic\"; got {:?}",
+                    config.policy.name
+                ));
+            }
+            let has_reference_motion = config
+                .policy
+                .config
+                .as_table()
+                .and_then(|table| table.get("reference_motion"))
+                .is_some();
+            if !has_reference_motion {
+                return Err(
+                    "runtime.reference_motion_tracking requires [policy.config.reference_motion] to point at an official clip directory"
+                        .to_owned(),
+                );
+            }
+            return Ok(Self::ReferenceMotionTracking);
+        }
+
         Ok(Self::MotionTokens(default_motion_tokens()))
     }
 
@@ -252,6 +284,7 @@ impl ParsedRuntimeCommand {
             Self::VelocitySchedule(_) => "velocity_schedule",
             Self::MotionTokens(_) => "motion_tokens",
             Self::StandingPlaceholderTracking => "standing_placeholder_tracking",
+            Self::ReferenceMotionTracking => "reference_motion_tracking",
         }
     }
 
@@ -268,7 +301,7 @@ impl ParsedRuntimeCommand {
             Self::Velocity([vx, vy, yaw]) => vec![*vx, *vy, *yaw],
             Self::VelocitySchedule(schedule) => schedule.flatten_for_report(),
             Self::MotionTokens(tokens) => tokens.clone(),
-            Self::StandingPlaceholderTracking => Vec::new(),
+            Self::StandingPlaceholderTracking | Self::ReferenceMotionTracking => Vec::new(),
         }
     }
 
@@ -281,7 +314,7 @@ impl ParsedRuntimeCommand {
                 schedule.sample_velocity(elapsed_secs).to_vec()
             }
             Self::MotionTokens(tokens) => tokens.clone(),
-            Self::StandingPlaceholderTracking => Vec::new(),
+            Self::StandingPlaceholderTracking | Self::ReferenceMotionTracking => Vec::new(),
         }
     }
 
@@ -339,7 +372,9 @@ impl ParsedRuntimeCommand {
                 })
             }
             Self::MotionTokens(tokens) => WbcCommand::MotionTokens(tokens.clone()),
-            Self::StandingPlaceholderTracking => WbcCommand::MotionTokens(Vec::new()),
+            Self::StandingPlaceholderTracking | Self::ReferenceMotionTracking => {
+                WbcCommand::MotionTokens(Vec::new())
+            }
         }
     }
 }
@@ -455,6 +490,7 @@ impl RobotTransport for SyntheticTransport {
         Ok(ImuSample {
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             timestamp: Instant::now(),
         })
     }
@@ -968,6 +1004,9 @@ fn run_control_loop_inner<T: RobotTransport + ReportTelemetryProvider>(
                         ParsedRuntimeCommand::StandingPlaceholderTracking => {
                             let _ = vis.log_motion_tokens(&[]);
                         }
+                        ParsedRuntimeCommand::ReferenceMotionTracking => {
+                            let _ = vis.log_motion_tokens(&[]);
+                        }
                         _ => {}
                     }
                 }
@@ -1058,10 +1097,11 @@ fn run_control_loop(
             let mut transport = MujocoTransport::new(sim_cfg, robot.clone())
                 .map_err(|e| format!("mujoco init failed: {e}"))?;
             println!(
-                "mujoco simulation transport active (mapped_joints={}/{}, model={}, model_variant={}, meshless_public_fallback={})",
+                "mujoco simulation transport active (mapped_joints={}/{}, model={}, gain_profile={}, model_variant={}, meshless_public_fallback={})",
                 transport.mapped_joint_count(),
                 robot.joint_count,
                 transport.sim_config().model_path.display(),
+                transport.sim_config().gain_profile.as_str(),
                 transport.model_variant(),
                 transport.uses_meshless_public_fallback()
             );
@@ -1637,6 +1677,7 @@ motion_tokens = []
                 velocity: None,
                 velocity_schedule: Some(VelocityScheduleConfig { segments: vec![] }),
                 kinematic_pose: None,
+                reference_motion_tracking: false,
                 standing_placeholder_tracking: false,
                 max_ticks: Some(1),
             },
@@ -1917,6 +1958,7 @@ standing_placeholder_tracking = true
                 robowbc_core::PdGains { kp: 1.0, kd: 0.1 },
                 robowbc_core::PdGains { kp: 1.0, kd: 0.1 },
             ],
+            sim_pd_gains: None,
             joint_limits: vec![
                 robowbc_core::JointLimit {
                     min: -1.0,
@@ -1981,6 +2023,7 @@ standing_placeholder_tracking = true
             velocity: Some([0.2, 0.0, 0.1]),
             velocity_schedule: None,
             kinematic_pose: None,
+            reference_motion_tracking: false,
             standing_placeholder_tracking: false,
             max_ticks: Some(1),
         };

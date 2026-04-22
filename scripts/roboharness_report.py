@@ -161,15 +161,21 @@ def resolve_showcase_context(repo_root: Path, config_path: Path) -> dict[str, An
         robot_cfg = tomllib.loads((repo_root / str(robot_cfg_path)).read_text(encoding="utf-8"))
         robot_model_path = robot_cfg.get("model_path")
 
+    timestep = 0.002
+    default_substeps = round(1.0 / (max(frequency_hz, 1) * timestep))
+    default_gain_profile = "simulation_pd"
+
     if isinstance(existing_sim, dict):
         model_path = str(existing_sim.get("model_path") or robot_model_path or "")
-        timestep = float(existing_sim.get("timestep", 0.002))
-        substeps = int(existing_sim.get("substeps", 10))
+        timestep = float(existing_sim.get("timestep", timestep))
+        substeps = int(existing_sim.get("substeps", default_substeps))
+        gain_profile = str(existing_sim.get("gain_profile") or default_gain_profile)
         return {
             "transport": "mujoco" if model_path else "synthetic",
             "model_path": model_path or None,
             "timestep": timestep,
             "substeps": substeps,
+            "gain_profile": gain_profile if model_path else None,
             "robot_config_path": str(robot_cfg_path) if robot_cfg_path else None,
             "config_has_sim_section": True,
         }
@@ -180,6 +186,7 @@ def resolve_showcase_context(repo_root: Path, config_path: Path) -> dict[str, An
             "model_path": None,
             "timestep": None,
             "substeps": None,
+            "gain_profile": None,
             "robot_config_path": str(robot_cfg_path) if robot_cfg_path else None,
             "config_has_sim_section": False,
         }
@@ -187,11 +194,39 @@ def resolve_showcase_context(repo_root: Path, config_path: Path) -> dict[str, An
     return {
         "transport": "mujoco",
         "model_path": str(robot_model_path),
-        "timestep": 0.002,
-        "substeps": round(1.0 / (max(frequency_hz, 1) * 0.002)),
+        "timestep": timestep,
+        "substeps": default_substeps,
+        "gain_profile": default_gain_profile,
         "robot_config_path": str(robot_cfg_path) if robot_cfg_path else None,
         "config_has_sim_section": False,
     }
+
+
+def ensure_showcase_sim_section(base_toml: str, showcase_context: dict[str, Any]) -> str:
+    if showcase_context["transport"] != "mujoco":
+        return base_toml.rstrip()
+
+    required_lines = [
+        (r"^model_path\s*=", f'model_path = "{showcase_context["model_path"]}"'),
+        (r"^timestep\s*=", f'timestep = {showcase_context["timestep"]:g}'),
+        (r"^substeps\s*=", f'substeps = {showcase_context["substeps"]}'),
+        (
+            r"^gain_profile\s*=",
+            f'gain_profile = "{showcase_context["gain_profile"]}"',
+        ),
+    ]
+    sim_section_pattern = re.compile(r"^(\[sim\].*?)(?=^\[|\Z)", re.MULTILINE | re.DOTALL)
+    match = sim_section_pattern.search(base_toml)
+    if match is None:
+        sim_lines = ["[sim]"]
+        sim_lines.extend(line for _, line in required_lines)
+        return "\n\n".join([base_toml.rstrip(), "\n".join(sim_lines)])
+
+    sim_section = match.group(1).rstrip()
+    for pattern, line in required_lines:
+        if re.search(pattern, sim_section, re.MULTILINE) is None:
+            sim_section += "\n" + line
+    return base_toml[: match.start()] + sim_section + base_toml[match.end() :]
 
 
 def compose_run_config(
@@ -201,21 +236,7 @@ def compose_run_config(
     showcase_context: dict[str, Any],
     max_ticks: int | None = None,
 ) -> str:
-    sections = [base_toml.rstrip()]
-    if (
-        showcase_context["transport"] == "mujoco"
-        and not showcase_context["config_has_sim_section"]
-    ):
-        sections.append(
-            "\n".join(
-                [
-                    "[sim]",
-                    f'model_path = "{showcase_context["model_path"]}"',
-                    f'timestep = {showcase_context["timestep"]:g}',
-                    f'substeps = {showcase_context["substeps"]}',
-                ]
-            )
-        )
+    sections = [ensure_showcase_sim_section(base_toml, showcase_context).rstrip()]
 
     # Inject report and vis sections
     sections.append(

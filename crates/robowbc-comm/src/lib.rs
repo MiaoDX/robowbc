@@ -17,7 +17,9 @@ pub use unitree::{
     clamp_position_targets, clamp_velocity_targets, UnitreeG1Config, UnitreeG1Transport,
 };
 
-use robowbc_core::{JointPositionTargets, Observation, Result as CoreResult, WbcCommand, WbcError};
+use robowbc_core::{
+    BasePose, JointPositionTargets, Observation, Result as CoreResult, WbcCommand, WbcError,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::thread;
@@ -81,6 +83,8 @@ pub struct ImuSample {
     pub gravity_vector: [f32; 3],
     /// Body-frame angular velocity from the IMU gyro in rad/s.
     pub angular_velocity: [f32; 3],
+    /// Optional floating-base pose when the backend exposes one.
+    pub base_pose: Option<BasePose>,
     /// Capture time for this sample.
     pub timestamp: Instant,
 }
@@ -213,6 +217,7 @@ where
         joint_velocities: joint.velocities,
         gravity_vector: imu.gravity_vector,
         angular_velocity: imu.angular_velocity,
+        base_pose: imu.base_pose,
         command,
         timestamp: std::cmp::max(joint.timestamp, imu.timestamp),
     };
@@ -305,6 +310,7 @@ mod tests {
         ImuSample {
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             timestamp: ts,
         }
     }

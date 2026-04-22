@@ -23,6 +23,7 @@ fn sample_imu() -> ImuSample {
     ImuSample {
         gravity_vector: [0.0, 0.0, -1.0],
         angular_velocity: [0.0, 0.0, 0.0],
+        base_pose: None,
         timestamp: Instant::now(),
     }
 }

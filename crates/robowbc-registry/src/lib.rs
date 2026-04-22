@@ -188,6 +188,7 @@ mod tests {
                     joint_count: 2,
                     joint_names: vec!["hip".to_owned(), "knee".to_owned()],
                     pd_gains: vec![],
+                    sim_pd_gains: None,
                     joint_limits: vec![],
                     default_pose: vec![0.0, 0.0],
                     model_path: None,
@@ -231,6 +232,7 @@ mod tests {
             joint_velocities: vec![0.0, 0.0],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: robowbc_core::WbcCommand::MotionTokens(vec![0.1]),
             timestamp: Instant::now(),
         };
@@ -263,6 +265,7 @@ gain = 3.0
             joint_velocities: vec![0.0],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: robowbc_core::WbcCommand::MotionTokens(vec![0.1]),
             timestamp: Instant::now(),
         };

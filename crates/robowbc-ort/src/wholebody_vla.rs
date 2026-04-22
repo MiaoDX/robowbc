@@ -253,6 +253,7 @@ mod tests {
             joint_count: n,
             joint_names: (0..n).map(|i| format!("j{i}")).collect(),
             pd_gains: vec![PdGains { kp: 1.0, kd: 0.1 }; n],
+            sim_pd_gains: None,
             joint_limits: vec![
                 JointLimit {
                     min: -1.0,
@@ -311,6 +312,7 @@ mod tests {
             joint_velocities: vec![0.0; 4],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::MotionTokens(vec![1.0]),
             timestamp: Instant::now(),
         };
@@ -344,6 +346,7 @@ mod tests {
             joint_velocities: vec![0.01, 0.02, 0.03, 0.04],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::KinematicPose(BodyPose {
                 links: vec![LinkPose {
                     link_name: "left_wrist".to_owned(),
@@ -388,6 +391,7 @@ mod tests {
             joint_velocities: vec![0.0; 4],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::KinematicPose(BodyPose { links: vec![] }),
             timestamp: Instant::now(),
         };
@@ -450,6 +454,7 @@ mod tests {
             joint_velocities: vec![0.0; 23],
             gravity_vector: [0.0, 0.0, -1.0],
             angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
             command: WbcCommand::KinematicPose(BodyPose {
                 links: vec![
                     LinkPose {

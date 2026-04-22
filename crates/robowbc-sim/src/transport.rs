@@ -1,9 +1,12 @@
 //! `MuJoCo`-backed [`RobotTransport`] implementation.
 
-use crate::{MujocoConfig, SimError};
+use crate::{MujocoConfig, MujocoGainProfile, SimError};
 use mujoco_rs::wrappers::{MjData, MjModel, MjtJoint, MjtSensor, MjtTrn};
-use robowbc_comm::{CommError, ImuSample, JointState, RobotTransport};
-use robowbc_core::{JointPositionTargets, RobotConfig};
+use robowbc_comm::{
+    clamp_position_targets, clamp_velocity_targets, CommError, ImuSample, JointState,
+    RobotTransport,
+};
+use robowbc_core::{BasePose, JointPositionTargets, RobotConfig};
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -34,6 +37,9 @@ struct LoadedModel {
     model_variant: &'static str,
 }
 
+const PRIMARY_GYRO_SENSOR_NAMES: &[&str] = &["imu_gyro", "imu-angular-velocity"];
+const PRIMARY_ACCEL_SENSOR_NAMES: &[&str] = &["imu_acc", "imu-linear-acceleration"];
+
 /// A [`RobotTransport`] that steps a `MuJoCo` physics simulation.
 ///
 /// Joint states are read from `MuJoCo` `qpos` / `qvel`, IMU-like root-state
@@ -52,6 +58,7 @@ pub struct MujocoTransport {
     gyro_sensor: SensorSpan,
     accel_sensor: SensorSpan,
     model_variant: &'static str,
+    prev_positions: Vec<f32>,
 }
 
 impl MujocoTransport {
@@ -96,12 +103,24 @@ impl MujocoTransport {
         }
 
         let floating_base = floating_base_mapping(&model);
-        let gyro_sensor = find_sensor_span(&model, MjtSensor::mjSENS_GYRO, 3, "gyro")?;
-        let accel_sensor =
-            find_sensor_span(&model, MjtSensor::mjSENS_ACCELEROMETER, 3, "accelerometer")?;
+        let gyro_sensor = find_sensor_span(
+            &model,
+            PRIMARY_GYRO_SENSOR_NAMES,
+            MjtSensor::mjSENS_GYRO,
+            3,
+            "gyro",
+        )?;
+        let accel_sensor = find_sensor_span(
+            &model,
+            PRIMARY_ACCEL_SENSOR_NAMES,
+            MjtSensor::mjSENS_ACCELEROMETER,
+            3,
+            "accelerometer",
+        )?;
 
         let mut data = MjData::new(Box::new(model));
         initialize_state(&mut data, &robot_config, &joint_mappings);
+        let prev_positions = robot_config.default_pose.clone();
 
         Ok(Self {
             data,
@@ -113,6 +132,7 @@ impl MujocoTransport {
             gyro_sensor,
             accel_sensor,
             model_variant,
+            prev_positions,
         })
     }
 
@@ -145,7 +165,7 @@ impl MujocoTransport {
     /// because the upstream STL bundle is not present locally.
     #[must_use]
     pub fn uses_meshless_public_fallback(&self) -> bool {
-        self.model_variant == "meshless-public-mjcf"
+        self.model_variant.starts_with("meshless-public-mjcf")
     }
 
     /// Returns the current floating-base pose when the loaded MJCF exposes a
@@ -194,35 +214,40 @@ impl RobotTransport for MujocoTransport {
     }
 
     fn recv_imu(&mut self) -> Result<ImuSample, CommError> {
+        let sensor = self.data.sensordata();
+        let angular_velocity = sensor_vec3(sensor, self.gyro_sensor);
+
         if let Some(floating_base) = self.floating_base {
             let qpos = self.data.qpos();
-            let qvel = self.data.qvel();
             let quat_wxyz = [
                 qpos[floating_base.qpos_adr + 3],
                 qpos[floating_base.qpos_adr + 4],
                 qpos[floating_base.qpos_adr + 5],
                 qpos[floating_base.qpos_adr + 6],
             ];
-            let angular_velocity = [
-                mj_scalar(qvel[floating_base.qvel_adr + 3]),
-                mj_scalar(qvel[floating_base.qvel_adr + 4]),
-                mj_scalar(qvel[floating_base.qvel_adr + 5]),
-            ];
             let gravity_vector = gravity_from_free_joint_quaternion(quat_wxyz);
 
             return Ok(ImuSample {
                 gravity_vector,
                 angular_velocity,
+                base_pose: Some(BasePose {
+                    position_world: [
+                        mj_scalar(qpos[floating_base.qpos_adr]),
+                        mj_scalar(qpos[floating_base.qpos_adr + 1]),
+                        mj_scalar(qpos[floating_base.qpos_adr + 2]),
+                    ],
+                    rotation_xyzw: [
+                        mj_scalar(qpos[floating_base.qpos_adr + 4]),
+                        mj_scalar(qpos[floating_base.qpos_adr + 5]),
+                        mj_scalar(qpos[floating_base.qpos_adr + 6]),
+                        mj_scalar(qpos[floating_base.qpos_adr + 3]),
+                    ],
+                }),
                 timestamp: Instant::now(),
             });
         }
 
-        let sensor = self.data.sensordata();
-        let gyro = &sensor[self.gyro_sensor.start..self.gyro_sensor.start + self.gyro_sensor.len];
-        let accel =
-            &sensor[self.accel_sensor.start..self.accel_sensor.start + self.accel_sensor.len];
-
-        let angular_velocity = [mj_scalar(gyro[0]), mj_scalar(gyro[1]), mj_scalar(gyro[2])];
+        let accel = sensor_slice(sensor, self.accel_sensor);
 
         // Read accelerometer (3 values). When stationary the accelerometer
         // measures the reaction to gravity: roughly [0, 0, +9.81].
@@ -242,6 +267,7 @@ impl RobotTransport for MujocoTransport {
         Ok(ImuSample {
             gravity_vector,
             angular_velocity,
+            base_pose: None,
             timestamp: Instant::now(),
         })
     }
@@ -257,42 +283,63 @@ impl RobotTransport for MujocoTransport {
             });
         }
 
-        let qpos = self.data.qpos().to_vec();
-        let qvel = self.data.qvel().to_vec();
-        let commanded_ctrls = self
-            .joint_mappings
-            .iter()
-            .enumerate()
-            .filter_map(|(joint_index, mapping)| {
-                let actuator_id = mapping.actuator_id?;
-                let current_position = mapping.qpos_adr.map_or_else(
-                    || f64::from(self.robot_config.default_pose[joint_index]),
-                    |adr| qpos[adr],
-                );
-                let current_velocity = mapping.qvel_adr.map_or(0.0, |adr| qvel[adr]);
-                let gains = self.robot_config.pd_gains[joint_index];
-                Some((
-                    actuator_id,
-                    compute_pd_control(
-                        targets.positions[joint_index],
-                        current_position,
-                        current_velocity,
-                        gains.kp,
-                        gains.kd,
-                        mapping.ctrl_range,
-                    ),
-                ))
-            })
-            .collect::<Vec<_>>();
+        let after_pos = clamp_position_targets(targets, &self.robot_config.joint_limits);
+        let control_frequency_hz = control_frequency_hz(&self.config);
+        let safe_targets = if let Some(ref vel_limits) = self.robot_config.joint_velocity_limits {
+            clamp_velocity_targets(
+                &after_pos,
+                &self.prev_positions,
+                vel_limits,
+                control_frequency_hz,
+            )
+        } else {
+            after_pos
+        };
+        self.prev_positions.clone_from(&safe_targets.positions);
 
-        // Write mapped control torques into MuJoCo's ctrl vector.
-        let ctrl = self.data.ctrl_mut();
-        for (actuator_id, command) in commanded_ctrls {
-            ctrl[actuator_id] = command;
-        }
+        let pd_gains = match self.config.gain_profile {
+            MujocoGainProfile::DefaultPd => &self.robot_config.pd_gains,
+            MujocoGainProfile::SimulationPd => self.robot_config.simulation_pd_gains(),
+        };
 
-        // Advance simulation by the configured number of substeps.
         for _ in 0..self.config.substeps {
+            let commanded_ctrls = {
+                let qpos = self.data.qpos();
+                let qvel = self.data.qvel();
+                self.joint_mappings
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(joint_index, mapping)| {
+                        let actuator_id = mapping.actuator_id?;
+                        let current_position = mapping.qpos_adr.map_or_else(
+                            || f64::from(self.robot_config.default_pose[joint_index]),
+                            |adr| qpos[adr],
+                        );
+                        let current_velocity = mapping.qvel_adr.map_or(0.0, |adr| qvel[adr]);
+                        let gains = pd_gains[joint_index];
+                        Some((
+                            actuator_id,
+                            compute_pd_control(
+                                safe_targets.positions[joint_index],
+                                current_position,
+                                current_velocity,
+                                gains.kp,
+                                gains.kd,
+                                mapping.ctrl_range,
+                            ),
+                        ))
+                    })
+                    .collect::<Vec<_>>()
+            };
+
+            // Match the official MuJoCo stacks: keep the policy target fixed
+            // for the outer control tick, but recompute torque from the latest
+            // qpos/qvel on every physics substep.
+            let ctrl = self.data.ctrl_mut();
+            for (actuator_id, command) in commanded_ctrls {
+                ctrl[actuator_id] = command;
+            }
+
             self.data.step();
         }
 
@@ -309,22 +356,59 @@ fn load_model_resolving_assets(model_path: &Path) -> Result<LoadedModel, SimErro
             ),
         })?;
 
-    let missing_mesh_assets = collect_missing_mesh_assets(&absolute_model_path)?;
-    if missing_mesh_assets.is_empty() {
+    let mjcf = fs::read_to_string(&absolute_model_path).map_err(|e| SimError::ModelLoadFailed {
+        reason: format!(
+            "failed to read MJCF model {}: {e}",
+            absolute_model_path.display()
+        ),
+    })?;
+    let missing_mesh_assets = collect_missing_mesh_assets(&absolute_model_path, &mjcf)?;
+    let needs_ground_plane = !mjcf_has_plane_geom(&mjcf);
+    if missing_mesh_assets.is_empty() && !needs_ground_plane {
         return Ok(LoadedModel {
             model: load_model_from_xml(&absolute_model_path)?,
             model_variant: "upstream-mjcf",
         });
     }
 
-    let meshless_model_path = write_meshless_public_mjcf(&absolute_model_path)?;
+    let patched_mjcf = if missing_mesh_assets.is_empty() {
+        inject_ground_plane_into_mjcf(&mjcf)?
+    } else {
+        let meshless = strip_mesh_references_from_mjcf(&mjcf);
+        if needs_ground_plane {
+            inject_ground_plane_into_mjcf(&meshless)?
+        } else {
+            meshless
+        }
+    };
+    let meshless_model_path =
+        write_temporary_meshless_model(&absolute_model_path, patched_mjcf.as_bytes())?;
     let model = load_model_from_xml(&meshless_model_path);
     let _ = fs::remove_file(&meshless_model_path);
 
+    let model_variant = match (missing_mesh_assets.is_empty(), needs_ground_plane) {
+        (true, true) => "upstream-mjcf+ground-plane",
+        (false, true) => "meshless-public-mjcf+ground-plane",
+        (false, false) => "meshless-public-mjcf",
+        (true, false) => unreachable!("unpatched upstream models return early"),
+    };
+
     model.map(|model| LoadedModel {
         model,
-        model_variant: "meshless-public-mjcf",
+        model_variant,
     })
+}
+
+fn control_frequency_hz(config: &MujocoConfig) -> u32 {
+    let control_dt = config.timestep * config.substeps as f64;
+    if control_dt <= f64::EPSILON {
+        return 0;
+    }
+
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    {
+        (1.0 / control_dt).round() as u32
+    }
 }
 
 fn load_model_from_xml(model_path: &Path) -> Result<MjModel, SimError> {
@@ -333,11 +417,7 @@ fn load_model_from_xml(model_path: &Path) -> Result<MjModel, SimError> {
     })
 }
 
-fn collect_missing_mesh_assets(model_path: &Path) -> Result<Vec<PathBuf>, SimError> {
-    let mjcf = fs::read_to_string(model_path).map_err(|e| SimError::ModelLoadFailed {
-        reason: format!("failed to read MJCF model {}: {e}", model_path.display()),
-    })?;
-
+fn collect_missing_mesh_assets(model_path: &Path, mjcf: &str) -> Result<Vec<PathBuf>, SimError> {
     let model_dir = model_path
         .parent()
         .ok_or_else(|| SimError::ModelLoadFailed {
@@ -367,12 +447,33 @@ fn collect_missing_mesh_assets(model_path: &Path) -> Result<Vec<PathBuf>, SimErr
     Ok(missing.into_iter().collect())
 }
 
-fn write_meshless_public_mjcf(model_path: &Path) -> Result<PathBuf, SimError> {
-    let mjcf = fs::read_to_string(model_path).map_err(|e| SimError::ModelLoadFailed {
-        reason: format!("failed to read MJCF model {}: {e}", model_path.display()),
-    })?;
-    let serialized = strip_mesh_references_from_mjcf(&mjcf);
-    write_temporary_meshless_model(model_path, serialized.as_bytes())
+fn mjcf_has_plane_geom(mjcf: &str) -> bool {
+    self_closing_tags(mjcf, "geom")
+        .into_iter()
+        .any(|tag| xml_attribute(tag, "type") == Some("plane"))
+}
+
+fn inject_ground_plane_into_mjcf(mjcf: &str) -> Result<String, SimError> {
+    if mjcf_has_plane_geom(mjcf) {
+        return Ok(mjcf.to_owned());
+    }
+
+    let Some(worldbody_start) = mjcf.find("<worldbody>") else {
+        return Err(SimError::ModelLoadFailed {
+            reason: "MJCF model is missing a <worldbody> section needed for ground-plane injection"
+                .to_owned(),
+        });
+    };
+    let insert_at = worldbody_start + "<worldbody>".len();
+    let mut patched = String::with_capacity(mjcf.len() + 128);
+    patched.push_str(&mjcf[..insert_at]);
+    patched.push_str(
+        r#"
+    <geom name="robowbc_ground" type="plane" pos="0 0 0" size="0 0 0.05" friction="1.0 0.1 0.1" rgba="0.2 0.3 0.4 1"/>
+"#,
+    );
+    patched.push_str(&mjcf[insert_at..]);
+    Ok(patched)
 }
 
 fn first_self_closing_tag<'a>(mjcf: &'a str, tag_name: &str) -> Option<&'a str> {
@@ -593,10 +694,24 @@ fn compute_pd_control(
 
 fn find_sensor_span(
     model: &MjModel,
+    preferred_names: &[&str],
     sensor_type: MjtSensor,
     expected_len: usize,
     label: &str,
 ) -> Result<SensorSpan, SimError> {
+    for sensor_name in preferred_names {
+        if let Some(sensor_info) = model.sensor(sensor_name) {
+            return sensor_span_from_id(
+                model,
+                sensor_info.id,
+                sensor_type,
+                expected_len,
+                label,
+                Some(sensor_name),
+            );
+        }
+    }
+
     let Some(sensor_id) = model
         .sensor_type()
         .iter()
@@ -606,6 +721,29 @@ fn find_sensor_span(
             reason: format!("MJCF model is missing the required {label} sensor"),
         });
     };
+
+    sensor_span_from_id(model, sensor_id, sensor_type, expected_len, label, None)
+}
+
+fn sensor_span_from_id(
+    model: &MjModel,
+    sensor_id: usize,
+    sensor_type: MjtSensor,
+    expected_len: usize,
+    label: &str,
+    sensor_name: Option<&str>,
+) -> Result<SensorSpan, SimError> {
+    let actual_type = model.sensor_type()[sensor_id];
+    if actual_type != sensor_type {
+        return Err(SimError::ModelLoadFailed {
+            reason: match sensor_name {
+                Some(name) => {
+                    format!("MJCF sensor `{name}` is not a {label} sensor (type={actual_type:?})")
+                }
+                None => format!("MJCF resolved sensor {sensor_id} is not a {label} sensor"),
+            },
+        });
+    }
 
     let start =
         usize::try_from(model.sensor_adr()[sensor_id]).map_err(|_| SimError::ModelLoadFailed {
@@ -618,11 +756,29 @@ fn find_sensor_span(
 
     if len != expected_len {
         return Err(SimError::ModelLoadFailed {
-            reason: format!("MJCF {label} sensor dimension {len} != expected {expected_len}"),
+            reason: match sensor_name {
+                Some(name) => {
+                    format!("MJCF sensor `{name}` dimension {len} != expected {expected_len}")
+                }
+                None => format!("MJCF {label} sensor dimension {len} != expected {expected_len}"),
+            },
         });
     }
 
     Ok(SensorSpan { start, len })
+}
+
+fn sensor_slice(sensor_data: &[f64], span: SensorSpan) -> &[f64] {
+    &sensor_data[span.start..span.start + span.len]
+}
+
+fn sensor_vec3(sensor_data: &[f64], span: SensorSpan) -> [f32; 3] {
+    let sensor = sensor_slice(sensor_data, span);
+    [
+        mj_scalar(sensor[0]),
+        mj_scalar(sensor[1]),
+        mj_scalar(sensor[2]),
+    ]
 }
 
 fn initialize_state(
@@ -652,6 +808,17 @@ mod tests {
     use std::path::PathBuf;
     use std::time::Instant;
 
+    fn assert_vec3_approx_eq(actual: [f32; 3], expected: [f32; 3]) {
+        for (actual_value, expected_value) in actual.into_iter().zip(expected) {
+            assert!(
+                (actual_value - expected_value).abs() < 1e-5,
+                "expected {:?}, got {:?}",
+                expected,
+                actual
+            );
+        }
+    }
+
     fn repo_root() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
     }
@@ -673,12 +840,14 @@ mod tests {
             model_path: g1_model_path(),
             timestep: 0.004,
             substeps: 2,
+            ..MujocoConfig::default()
         };
 
         let transport = MujocoTransport::new(config.clone(), robot.clone())
             .expect("transport should initialize");
-        let missing_mesh_assets =
-            collect_missing_mesh_assets(&config.model_path).expect("mesh assets should inspect");
+        let mjcf = fs::read_to_string(&config.model_path).expect("model file should read");
+        let missing_mesh_assets = collect_missing_mesh_assets(&config.model_path, &mjcf)
+            .expect("mesh assets should inspect");
 
         assert_eq!(transport.mapped_joint_count(), robot.joint_count);
         assert_eq!(
@@ -697,6 +866,7 @@ mod tests {
                 model_path: g1_model_path(),
                 timestep: 0.002,
                 substeps: 1,
+                ..MujocoConfig::default()
             },
             robot.clone(),
         )
@@ -740,6 +910,7 @@ mod tests {
                 model_path: g1_model_path(),
                 timestep: 0.002,
                 substeps: 1,
+                ..MujocoConfig::default()
             },
             robot.clone(),
         )
@@ -767,6 +938,39 @@ mod tests {
     }
 
     #[test]
+    fn standalone_g1_model_has_support_plane_before_policy_judgment() {
+        let robot = load_robot_config("configs/robots/unitree_g1.toml");
+        let mut transport = MujocoTransport::new(
+            MujocoConfig {
+                model_path: g1_model_path(),
+                timestep: 0.002,
+                substeps: 1,
+                ..MujocoConfig::default()
+            },
+            robot.clone(),
+        )
+        .expect("transport should initialize");
+
+        for _ in 0..20 {
+            transport
+                .send_joint_targets(&JointPositionTargets {
+                    positions: robot.default_pose.clone(),
+                    timestamp: Instant::now(),
+                })
+                .expect("default pose command should succeed");
+        }
+
+        let (position, _) = transport
+            .floating_base_pose()
+            .expect("G1 showcase model should expose a floating base");
+        assert!(
+            position[2] > 0.6,
+            "standalone G1 model lost support and fell to z={} despite default-pose control",
+            position[2]
+        );
+    }
+
+    #[test]
     fn send_joint_targets_computes_pd_control_from_position_error() {
         let robot = load_robot_config("configs/robots/unitree_g1.toml");
         let mut transport = MujocoTransport::new(
@@ -774,6 +978,43 @@ mod tests {
                 model_path: g1_model_path(),
                 timestep: 0.002,
                 substeps: 1,
+                ..MujocoConfig::default()
+            },
+            robot.clone(),
+        )
+        .expect("transport should initialize");
+
+        let mut positions = robot.default_pose.clone();
+        positions[0] += 0.1;
+
+        transport
+            .send_joint_targets(&JointPositionTargets {
+                positions,
+                timestamp: Instant::now(),
+            })
+            .expect("offset command should succeed");
+
+        let actuator_id = transport.joint_mappings[0]
+            .actuator_id
+            .expect("first G1 joint should map to an actuator");
+        let expected = f64::from(robot.simulation_pd_gains()[0].kp) * 0.1;
+        let actual = transport.data.ctrl()[actuator_id];
+
+        assert!(
+            (actual - expected).abs() < 1e-6,
+            "expected PD control {expected}, got {actual}",
+        );
+    }
+
+    #[test]
+    fn send_joint_targets_can_use_default_pd_gains_when_requested() {
+        let robot = load_robot_config("configs/robots/unitree_g1.toml");
+        let mut transport = MujocoTransport::new(
+            MujocoConfig {
+                model_path: g1_model_path(),
+                timestep: 0.002,
+                substeps: 1,
+                gain_profile: MujocoGainProfile::DefaultPd,
             },
             robot.clone(),
         )
@@ -797,7 +1038,7 @@ mod tests {
 
         assert!(
             (actual - expected).abs() < 1e-6,
-            "expected PD control {expected}, got {actual}",
+            "expected hardware/default PD control {expected}, got {actual}",
         );
     }
 
@@ -809,6 +1050,7 @@ mod tests {
                 model_path: g1_model_path(),
                 timestep: 0.002,
                 substeps: 1,
+                ..MujocoConfig::default()
             },
             robot.clone(),
         )
@@ -840,6 +1082,86 @@ mod tests {
     }
 
     #[test]
+    fn multi_substep_send_matches_repeated_single_step_pd_recomputation() {
+        let robot = load_robot_config("configs/robots/unitree_g1.toml");
+        let mut batched = MujocoTransport::new(
+            MujocoConfig {
+                model_path: g1_model_path(),
+                timestep: 0.002,
+                substeps: 2,
+                ..MujocoConfig::default()
+            },
+            robot.clone(),
+        )
+        .expect("batched transport should initialize");
+        let mut repeated = MujocoTransport::new(
+            MujocoConfig {
+                model_path: g1_model_path(),
+                timestep: 0.002,
+                substeps: 1,
+                ..MujocoConfig::default()
+            },
+            robot.clone(),
+        )
+        .expect("single-step transport should initialize");
+
+        let mut positions = robot.default_pose.clone();
+        positions[0] += 0.1;
+        let targets = JointPositionTargets {
+            positions,
+            timestamp: Instant::now(),
+        };
+
+        batched
+            .send_joint_targets(&targets)
+            .expect("batched send should succeed");
+        repeated
+            .send_joint_targets(&targets)
+            .expect("first single-step send should succeed");
+        repeated
+            .send_joint_targets(&targets)
+            .expect("second single-step send should succeed");
+
+        let batched_state = batched
+            .recv_joint_state()
+            .expect("batched joint state should be readable");
+        let repeated_state = repeated
+            .recv_joint_state()
+            .expect("repeated joint state should be readable");
+
+        for (batched_pos, repeated_pos) in batched_state
+            .positions
+            .iter()
+            .zip(repeated_state.positions.iter())
+        {
+            assert!(
+                (batched_pos - repeated_pos).abs() < 1e-6,
+                "batched and repeated positions diverged: {batched_pos} vs {repeated_pos}",
+            );
+        }
+        for (batched_vel, repeated_vel) in batched_state
+            .velocities
+            .iter()
+            .zip(repeated_state.velocities.iter())
+        {
+            assert!(
+                (batched_vel - repeated_vel).abs() < 1e-6,
+                "batched and repeated velocities diverged: {batched_vel} vs {repeated_vel}",
+            );
+        }
+
+        let actuator_id = batched.joint_mappings[0]
+            .actuator_id
+            .expect("first G1 joint should map to an actuator");
+        let batched_ctrl = batched.data.ctrl()[actuator_id];
+        let repeated_ctrl = repeated.data.ctrl()[actuator_id];
+        assert!(
+            (batched_ctrl - repeated_ctrl).abs() < 1e-6,
+            "batched ctrl {batched_ctrl} should match repeated ctrl {repeated_ctrl}",
+        );
+    }
+
+    #[test]
     fn gravity_from_free_joint_quaternion_matches_identity_pose() {
         let gravity = gravity_from_free_joint_quaternion([1.0, 0.0, 0.0, 0.0]);
         assert!((gravity[0] - 0.0).abs() < 1e-6);
@@ -855,6 +1177,7 @@ mod tests {
                 model_path: g1_model_path(),
                 timestep: 0.002,
                 substeps: 1,
+                ..MujocoConfig::default()
             },
             robot,
         )
@@ -863,12 +1186,107 @@ mod tests {
         let floating_base = transport
             .floating_base
             .expect("G1 model should expose a floating base");
+        let quarter_turn = std::f64::consts::FRAC_PI_4;
+        transport.data.qpos_mut()[floating_base.qpos_adr + 3] = quarter_turn.cos();
+        transport.data.qpos_mut()[floating_base.qpos_adr + 4] = 0.0;
+        transport.data.qpos_mut()[floating_base.qpos_adr + 5] = 0.0;
+        transport.data.qpos_mut()[floating_base.qpos_adr + 6] = quarter_turn.sin();
         transport.data.qvel_mut()[floating_base.qvel_adr + 3] = 1.25;
         transport.data.qvel_mut()[floating_base.qvel_adr + 4] = -0.5;
         transport.data.qvel_mut()[floating_base.qvel_adr + 5] = 0.25;
+        transport.data.forward();
+
+        let sensor_gyro = sensor_vec3(transport.data.sensordata(), transport.gyro_sensor);
+        println!(
+            "rotated-base gyro diagnostic: free_joint=[1.25,-0.5,0.25] sensor={sensor_gyro:?}"
+        );
 
         let imu = transport.recv_imu().expect("imu should be readable");
-        assert_eq!(imu.gravity_vector, [0.0, 0.0, -1.0]);
-        assert_eq!(imu.angular_velocity, [1.25, -0.5, 0.25]);
+        assert_vec3_approx_eq(imu.gravity_vector, [0.0, 0.0, -1.0]);
+        assert_vec3_approx_eq(imu.angular_velocity, sensor_gyro);
+        let base_pose = imu.base_pose.expect("floating base IMU should expose pose");
+        assert_vec3_approx_eq(base_pose.position_world, [0.0, 0.0, 0.793]);
+        for (actual, expected) in base_pose.rotation_xyzw.into_iter().zip([
+            0.0,
+            0.0,
+            mj_scalar(quarter_turn.sin()),
+            mj_scalar(quarter_turn.cos()),
+        ]) {
+            assert!((actual - expected).abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn find_sensor_span_prefers_primary_named_imu_sensor() {
+        let model = load_model_from_xml(&g1_model_path()).expect("G1 model should load");
+        let named_sensor = model
+            .sensor("imu_gyro")
+            .expect("G1 model should define the primary IMU gyro");
+        let expected_start = usize::try_from(model.sensor_adr()[named_sensor.id])
+            .expect("primary IMU gyro address should be non-negative");
+
+        let span = find_sensor_span(
+            &model,
+            PRIMARY_GYRO_SENSOR_NAMES,
+            MjtSensor::mjSENS_GYRO,
+            3,
+            "gyro",
+        )
+        .expect("primary gyro sensor should resolve");
+
+        assert_eq!(span.start, expected_start);
+        assert_eq!(span.len, 3);
+    }
+
+    #[test]
+    fn send_joint_targets_applies_hardware_style_safety_clamps() {
+        let robot = load_robot_config("configs/robots/unitree_g1.toml");
+        let mut transport = MujocoTransport::new(
+            MujocoConfig {
+                model_path: g1_model_path(),
+                timestep: 0.002,
+                substeps: 10,
+                ..MujocoConfig::default()
+            },
+            robot.clone(),
+        )
+        .expect("transport should initialize");
+
+        let unsafe_targets = JointPositionTargets {
+            positions: vec![100.0; robot.joint_count],
+            timestamp: Instant::now(),
+        };
+        let after_pos = clamp_position_targets(&unsafe_targets, &robot.joint_limits);
+        let expected = clamp_velocity_targets(
+            &after_pos,
+            &robot.default_pose,
+            robot
+                .joint_velocity_limits
+                .as_ref()
+                .expect("G1 config should expose velocity limits"),
+            control_frequency_hz(transport.sim_config()),
+        );
+
+        transport
+            .send_joint_targets(&unsafe_targets)
+            .expect("send should succeed");
+
+        assert_eq!(transport.prev_positions, expected.positions);
+    }
+
+    #[test]
+    fn inject_ground_plane_adds_plane_once() {
+        let source = "<mujoco><worldbody><body name=\"pelvis\"/></worldbody></mujoco>";
+        let patched = inject_ground_plane_into_mjcf(source).expect("patch should succeed");
+
+        assert!(patched.contains("robowbc_ground"));
+        assert!(mjcf_has_plane_geom(&patched));
+
+        let repatched =
+            inject_ground_plane_into_mjcf(&patched).expect("second patch should succeed");
+        assert_eq!(
+            patched, repatched,
+            "ground-plane injection must be idempotent"
+        );
     }
 }
