@@ -16,6 +16,10 @@ const PROVIDERS_SHARED_RELATIVE_PATH: &str = "lib/libonnxruntime_providers_share
 fn main() {
     println!("cargo:rerun-if-env-changed={ENV_DYLIB_PATH}");
 
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("linux") {
+        panic!("robowbc-ort only supports Linux targets");
+    }
+
     if let Some(path) = env::var_os(ENV_DYLIB_PATH) {
         println!(
             "cargo:rustc-env={ENV_DYLIB_PATH}={}",
@@ -24,7 +28,7 @@ fn main() {
         return;
     }
 
-    if !matches_target("linux", "x86_64") {
+    if env::var("CARGO_CFG_TARGET_ARCH").as_deref() != Ok("x86_64") {
         return;
     }
 
@@ -32,11 +36,6 @@ fn main() {
         Ok(path) => println!("cargo:rustc-env={ENV_DYLIB_PATH}={}", path.display()),
         Err(err) => println!("cargo:warning=failed to prepare ONNX Runtime shared library: {err}"),
     }
-}
-
-fn matches_target(target_os: &str, target_arch: &str) -> bool {
-    env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok(target_os)
-        && env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok(target_arch)
 }
 
 fn ensure_official_runtime() -> Result<PathBuf, Box<dyn Error>> {

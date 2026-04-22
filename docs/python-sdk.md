@@ -5,6 +5,8 @@ it locally with `maturin develop`, or install a published `robowbc` wheel when
 one is available, then load any registered policy by name and call
 `policy.predict(obs)` — no Rust required.
 
+The Python SDK is Linux-only, matching the rest of the RoboWBC runtime.
+
 ## Installation
 
 Python 3.10 or later is required.

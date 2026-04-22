@@ -3,6 +3,9 @@
 This guide takes you from a fresh checkout to running your first WBC inference
 in under 10 minutes.
 
+RoboWBC only supports Linux hosts. If you build on macOS or Windows, the
+runtime crates fail fast by design.
+
 ## Prerequisites
 
 | Requirement | Version | Notes |
@@ -58,7 +61,7 @@ python scripts/generate_policy_showcase.py \
   --output-dir ./artifacts/policy-showcase
 ```
 
-On Linux and Windows, the first `sim-auto-download` build unpacks MuJoCo into
+On Linux, the first `sim-auto-download` build unpacks MuJoCo into
 `MUJOCO_DOWNLOAD_DIR`. If you already manage a system MuJoCo install, the base
 `robowbc-cli/sim` feature path still works too.
 
