@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <numeric>
 #include <optional>
 #include <stdexcept>
@@ -18,6 +19,7 @@
 
 #include <onnxruntime_cxx_api.h>
 
+#include "math_utils.hpp"
 #include "policy_parameters.hpp"
 #include "robot_parameters.hpp"
 
@@ -30,13 +32,27 @@ constexpr std::size_t kPlannerJointOffset = 7;
 constexpr std::size_t kPlannerContextLen = 4;
 constexpr std::size_t kReplanIntervalTicks = 5;
 constexpr std::size_t kAllowedPredNumTokens = 11;
+constexpr std::array<std::int64_t, kAllowedPredNumTokens> kAllowedPredNumTokensMask = {
+    0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0,
+};
 constexpr float kDefaultHeightMeters = 0.74f;
+constexpr float kOfficialDefaultHeightMeters = 0.788740f;
+constexpr float kDefaultHeightSentinel = -1.0f;
 constexpr std::int64_t kDefaultModeWalk = 2;
+constexpr std::int64_t kDefaultModeIdle = 0;
+constexpr std::int64_t kDefaultModeSlowWalk = 1;
+constexpr std::size_t kReferenceFutureFrames = 10;
+constexpr std::size_t kReferenceFrameStep = 5;
+constexpr float kControlDtSeconds = 1.0f / 50.0f;
 constexpr float kPlannerInterpStep = 30.0f / 50.0f;
 constexpr std::size_t kEncoderDim = 64;
 constexpr std::size_t kEncoderObsDictDim = 1762;
 constexpr std::size_t kDecoderObsDictDim = 994;
 constexpr std::size_t kDecoderHistoryLen = 10;
+constexpr std::size_t kEncoderModeOffset = 0;
+constexpr std::size_t kEncoderMotionJointPositionsOffset = 4;
+constexpr std::size_t kEncoderMotionJointVelocitiesOffset = 294;
+constexpr std::size_t kEncoderMotionAnchorOrientationOffset = 601;
 
 volatile float g_sink = 0.0f;
 
@@ -61,6 +77,99 @@ struct Twist {
     std::array<float, 3> linear{};
     std::array<float, 3> angular{};
 };
+
+struct PlannerCommand {
+    std::int64_t mode = kDefaultModeIdle;
+    float target_vel = kDefaultHeightSentinel;
+    float height = kDefaultHeightSentinel;
+    std::array<float, 3> movement_direction{0.0f, 0.0f, 0.0f};
+    std::array<float, 3> facing_direction{1.0f, 0.0f, 0.0f};
+};
+
+float wrap_angle_rad(float angle) {
+    while (angle > static_cast<float>(M_PI)) {
+        angle -= 2.0f * static_cast<float>(M_PI);
+    }
+    while (angle < -static_cast<float>(M_PI)) {
+        angle += 2.0f * static_cast<float>(M_PI);
+    }
+    return angle;
+}
+
+std::pair<float, float> bin_angle_to_8_directions(float angle) {
+    constexpr float kBinSize = static_cast<float>(M_PI / 4.0);
+
+    const float normalized = wrap_angle_rad(angle);
+    int bin_index = static_cast<int>(std::lround(normalized / kBinSize));
+    if (bin_index > 4) {
+        bin_index -= 8;
+    }
+    if (bin_index < -4) {
+        bin_index += 8;
+    }
+
+    float slow_walk_speed = 0.2f;
+    switch (bin_index) {
+        case 0:
+        case 1:
+        case -1:
+            slow_walk_speed = 0.3f;
+            break;
+        case 2:
+        case -2:
+            slow_walk_speed = 0.35f;
+            break;
+        case 3:
+        case -3:
+            slow_walk_speed = 0.25f;
+            break;
+        case 4:
+        case -4:
+        default:
+            slow_walk_speed = 0.2f;
+            break;
+    }
+
+    return {static_cast<float>(bin_index) * kBinSize, slow_walk_speed};
+}
+
+PlannerCommand idle_planner_command() {
+    return PlannerCommand{};
+}
+
+PlannerCommand derive_planner_command(float& facing_yaw_rad, const Twist& twist) {
+    facing_yaw_rad = wrap_angle_rad(facing_yaw_rad + twist.angular[2] * kControlDtSeconds);
+    const std::array<float, 3> facing_direction = {
+        std::cos(facing_yaw_rad),
+        std::sin(facing_yaw_rad),
+        0.0f,
+    };
+    const float command_norm = std::sqrt(
+        twist.linear[0] * twist.linear[0] + twist.linear[1] * twist.linear[1]
+    );
+
+    if (command_norm <= 0.01f) {
+        return PlannerCommand{
+            kDefaultModeIdle,
+            kDefaultHeightSentinel,
+            kDefaultHeightSentinel,
+            {0.0f, 0.0f, 0.0f},
+            facing_direction,
+        };
+    }
+
+    const float local_movement_angle = std::atan2(twist.linear[1], twist.linear[0]);
+    const auto [movement_angle, slow_walk_speed] =
+        bin_angle_to_8_directions(facing_yaw_rad + local_movement_angle);
+
+    return PlannerCommand{
+        kDefaultModeSlowWalk,
+        slow_walk_speed,
+        kDefaultHeightSentinel,
+        {std::cos(movement_angle), std::sin(movement_angle), 0.0f},
+        facing_direction,
+    };
+}
 
 std::vector<float> default_pose() {
     std::vector<float> pose;
@@ -326,6 +435,128 @@ public:
         return positions;
     }
 
+    std::vector<float> velocity_first_live_replan_dump() {
+        if (!dump_dir_.has_value()) {
+            throw std::runtime_error("--dump-dir is required for gear_sonic_velocity/first_live_replan_dump");
+        }
+
+        reset();
+        tracking_state_.reset();
+        latest_action_.assign(G1_NUM_MOTOR, 0.0f);
+
+        std::deque<std::vector<float>> context;
+        const auto standing = make_official_standing_qpos();
+        for (std::size_t index = 0; index < kPlannerContextLen; ++index) {
+            context.push_back(standing);
+        }
+
+        const auto idle_planned_30hz = run_planner_command(context, idle_planner_command());
+        const auto bootstrap_motion_50hz = resample_planner_trajectory_to_50hz(idle_planned_30hz);
+
+        constexpr std::size_t kFirstLiveReplanTick = kReplanIntervalTicks;
+        const auto planner_context =
+            rebuild_planner_context_from_motion(bootstrap_motion_50hz, kFirstLiveReplanTick);
+
+        float facing_yaw_rad = 0.0f;
+        Twist twist;
+        twist.linear = {0.6f, 0.0f, 0.0f};
+        twist.angular = {0.0f, 0.0f, 0.0f};
+        const auto live_command = derive_planner_command(facing_yaw_rad, twist);
+        const auto live_planned_30hz = run_planner_command(planner_context, live_command);
+        const auto live_planned_50hz = resample_planner_trajectory_to_50hz(live_planned_30hz);
+        const auto committed_motion_50hz = blend_planner_motion(
+            bootstrap_motion_50hz,
+            kFirstLiveReplanTick,
+            kFirstLiveReplanTick,
+            live_planned_50hz
+        );
+        const auto committed_joint_velocities =
+            compute_motion_joint_velocities_isaaclab(committed_motion_50hz);
+
+        const std::array<double, 4> init_base_quat_wxyz = {1.0, 0.0, 0.0, 0.0};
+        const auto init_ref_root_quat_wxyz =
+            planner_frame_root_quaternion(committed_motion_50hz.front());
+        const auto encoder_obs = build_velocity_encoder_obs_dict(
+            committed_motion_50hz,
+            committed_joint_velocities,
+            0,
+            init_base_quat_wxyz,
+            init_ref_root_quat_wxyz
+        );
+        const auto tokens = run_single_f32(
+            encoder_,
+            "obs_dict",
+            "encoded_tokens",
+            encoder_obs,
+            kEncoderObsDictDim
+        );
+        if (tokens.size() != kEncoderDim) {
+            throw std::runtime_error(
+                "encoder output dimension mismatch: expected " + std::to_string(kEncoderDim) +
+                ", got " + std::to_string(tokens.size())
+            );
+        }
+
+        tracking_state_.push(tracking_obs_, latest_action_);
+        const auto decoder_obs = build_decoder_obs_dict(tokens);
+        const auto raw_actions = run_single_f32(
+            decoder_,
+            "obs_dict",
+            "action",
+            decoder_obs,
+            kDecoderObsDictDim
+        );
+        if (raw_actions.size() != G1_NUM_MOTOR) {
+            throw std::runtime_error(
+                "decoder output dimension mismatch: expected " + std::to_string(G1_NUM_MOTOR) +
+                ", got " + std::to_string(raw_actions.size())
+            );
+        }
+
+        const std::vector<float> planner_command = {
+            static_cast<float>(live_command.mode),
+            live_command.target_vel,
+            live_command.height,
+            live_command.movement_direction[0],
+            live_command.movement_direction[1],
+            live_command.movement_direction[2],
+            live_command.facing_direction[0],
+            live_command.facing_direction[1],
+            live_command.facing_direction[2],
+        };
+
+        write_matrix_json(*dump_dir_ / "bootstrap_motion_50hz.json", bootstrap_motion_50hz);
+        write_matrix_json(*dump_dir_ / "planner_context.json", deque_to_rows(planner_context));
+        write_vector_json(*dump_dir_ / "planner_command.json", planner_command);
+        write_matrix_json(*dump_dir_ / "planner_motion_30hz.json", live_planned_30hz);
+        write_matrix_json(*dump_dir_ / "planner_motion_50hz.json", live_planned_50hz);
+        write_matrix_json(
+            *dump_dir_ / "planner_motion_50hz_committed.json",
+            committed_motion_50hz
+        );
+        write_matrix_json(
+            *dump_dir_ / "planner_joint_velocities_50hz.json",
+            committed_joint_velocities
+        );
+        write_vector_json(*dump_dir_ / "velocity_encoder_obs.json", encoder_obs);
+        write_vector_json(*dump_dir_ / "velocity_tokens.json", tokens);
+        write_vector_json(*dump_dir_ / "velocity_decoder_obs.json", decoder_obs);
+        write_vector_json(*dump_dir_ / "velocity_raw_actions.json", raw_actions);
+
+        std::vector<float> positions(G1_NUM_MOTOR, 0.0f);
+        for (int mujoco_index = 0; mujoco_index < G1_NUM_MOTOR; ++mujoco_index) {
+            const int isaaclab_index = isaaclab_to_mujoco[static_cast<std::size_t>(mujoco_index)];
+            const float action = raw_actions[static_cast<std::size_t>(isaaclab_index)];
+            const float scaled =
+                action * static_cast<float>(g1_action_scale[static_cast<std::size_t>(mujoco_index)]);
+            positions[static_cast<std::size_t>(mujoco_index)] =
+                static_cast<float>(default_angles[static_cast<std::size_t>(mujoco_index)]) + scaled;
+        }
+
+        latest_action_ = raw_actions;
+        return positions;
+    }
+
 private:
     Ort::Env env_;
     Ort::MemoryInfo memory_info_;
@@ -400,9 +631,54 @@ private:
         return twist;
     }
 
+    static std::vector<float> make_official_standing_qpos() {
+        std::vector<float> qpos(kPlannerQposDim, 0.0f);
+        qpos[2] = kOfficialDefaultHeightMeters;
+        qpos[3] = 1.0f;
+        const auto pose = default_pose();
+        std::copy(
+            pose.begin(),
+            pose.end(),
+            qpos.begin() + static_cast<std::ptrdiff_t>(kPlannerJointOffset)
+        );
+        return qpos;
+    }
+
     std::vector<std::vector<float>> run_planner(
         const std::deque<std::vector<float>>& context,
         const Twist& twist
+    ) {
+        const float cmd_norm =
+            std::sqrt(twist.linear[0] * twist.linear[0] + twist.linear[1] * twist.linear[1]);
+        const std::array<float, 3> movement_direction =
+            cmd_norm > 1e-6f
+                ? std::array<float, 3>{
+                      twist.linear[0] / cmd_norm,
+                      twist.linear[1] / cmd_norm,
+                      0.0f,
+                  }
+                : std::array<float, 3>{1.0f, 0.0f, 0.0f};
+        const float yaw = twist.angular[2];
+        const std::array<float, 3> facing_direction = {
+            std::cos(yaw),
+            std::sin(yaw),
+            0.0f,
+        };
+        return run_planner_command(
+            context,
+            PlannerCommand{
+                kDefaultModeWalk,
+                cmd_norm,
+                kDefaultHeightMeters,
+                movement_direction,
+                facing_direction,
+            }
+        );
+    }
+
+    std::vector<std::vector<float>> run_planner_command(
+        const std::deque<std::vector<float>>& context,
+        const PlannerCommand& command
     ) {
         std::vector<float> context_data;
         context_data.reserve(context.size() * kPlannerQposDim);
@@ -410,29 +686,29 @@ private:
             context_data.insert(context_data.end(), frame.begin(), frame.end());
         }
 
-        const float cmd_norm =
-            std::sqrt(twist.linear[0] * twist.linear[0] + twist.linear[1] * twist.linear[1]);
-        const std::array<float, 3> movement_direction =
-            cmd_norm > 1e-6f ? std::array<float, 3>{twist.linear[0] / cmd_norm, twist.linear[1] / cmd_norm, 0.0f}
-                             : std::array<float, 3>{1.0f, 0.0f, 0.0f};
-        const float yaw = twist.angular[2];
-        const std::array<float, 3> facing_direction = {std::cos(yaw), std::sin(yaw), 0.0f};
-        const std::array<float, 1> target_vel = {cmd_norm};
-        const std::array<std::int64_t, 1> mode = {kDefaultModeWalk};
-        const std::array<float, 1> height = {kDefaultHeightMeters};
+        const std::array<float, 1> target_vel = {command.target_vel};
+        const std::array<std::int64_t, 1> mode = {command.mode};
+        const std::array<float, 1> height = {command.height};
         const std::array<std::int64_t, 1> random_seed = {0};
         const std::array<std::int64_t, 1> has_specific_target = {0};
         const std::vector<float> specific_target_positions(12, 0.0f);
         const std::vector<float> specific_target_headings(4, 0.0f);
-        const std::vector<std::int64_t> allowed_pred_num_tokens(kAllowedPredNumTokens, 1);
+        const auto allowed_pred_num_tokens = kAllowedPredNumTokensMask;
 
-        const std::array<std::int64_t, 3> context_shape = {1, static_cast<std::int64_t>(kPlannerContextLen), static_cast<std::int64_t>(kPlannerQposDim)};
+        const std::array<std::int64_t, 3> context_shape = {
+            1,
+            static_cast<std::int64_t>(kPlannerContextLen),
+            static_cast<std::int64_t>(kPlannerQposDim),
+        };
         const std::array<std::int64_t, 2> vec3_shape = {1, 3};
         const std::array<std::int64_t, 1> scalar_shape = {1};
         const std::array<std::int64_t, 2> has_target_shape = {1, 1};
         const std::array<std::int64_t, 3> specific_positions_shape = {1, 4, 3};
         const std::array<std::int64_t, 2> specific_headings_shape = {1, 4};
-        const std::array<std::int64_t, 2> allowed_tokens_shape = {1, static_cast<std::int64_t>(kAllowedPredNumTokens)};
+        const std::array<std::int64_t, 2> allowed_tokens_shape = {
+            1,
+            static_cast<std::int64_t>(kAllowedPredNumTokens),
+        };
 
         std::vector<Ort::Value> input_tensors;
         input_tensors.reserve(11);
@@ -459,15 +735,15 @@ private:
         ));
         input_tensors.push_back(Ort::Value::CreateTensor<float>(
             memory_info_,
-            const_cast<float*>(movement_direction.data()),
-            movement_direction.size(),
+            const_cast<float*>(command.movement_direction.data()),
+            command.movement_direction.size(),
             vec3_shape.data(),
             vec3_shape.size()
         ));
         input_tensors.push_back(Ort::Value::CreateTensor<float>(
             memory_info_,
-            const_cast<float*>(facing_direction.data()),
-            facing_direction.size(),
+            const_cast<float*>(command.facing_direction.data()),
+            command.facing_direction.size(),
             vec3_shape.data(),
             vec3_shape.size()
         ));
@@ -551,14 +827,16 @@ private:
         std::int64_t predicted_frames = 1;
         const auto frames_info = num_pred_frames.GetTensorTypeAndShapeInfo();
         if (frames_info.GetElementType() == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32) {
-            predicted_frames = static_cast<std::int64_t>(num_pred_frames.GetTensorData<std::int32_t>()[0]);
+            predicted_frames =
+                static_cast<std::int64_t>(num_pred_frames.GetTensorData<std::int32_t>()[0]);
         } else if (frames_info.GetElementType() == ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64) {
             predicted_frames = num_pred_frames.GetTensorData<std::int64_t>()[0];
         } else {
             throw std::runtime_error("planner num_pred_frames output must be int32 or int64");
         }
         predicted_frames = std::max<std::int64_t>(predicted_frames, 1);
-        const std::size_t frame_count = std::min<std::size_t>(static_cast<std::size_t>(predicted_frames), available_frames);
+        const std::size_t frame_count =
+            std::min<std::size_t>(static_cast<std::size_t>(predicted_frames), available_frames);
 
         if (!(qpos_shape.size() == 3 || qpos_shape.size() == 2)) {
             throw std::runtime_error("unexpected planner mujoco_qpos rank");
@@ -568,7 +846,10 @@ private:
         trajectory.reserve(frame_count);
         for (std::size_t frame = 0; frame < frame_count; ++frame) {
             const float* begin = qpos_data + frame * kPlannerQposDim;
-            trajectory.emplace_back(begin, begin + static_cast<std::ptrdiff_t>(kPlannerQposDim));
+            trajectory.emplace_back(
+                begin,
+                begin + static_cast<std::ptrdiff_t>(kPlannerQposDim)
+            );
         }
         return trajectory;
     }
@@ -595,6 +876,269 @@ private:
             state.traj_index += 1;
         }
         return interpolated;
+    }
+
+    static std::array<double, 4> planner_frame_root_quaternion(const std::vector<float>& frame) {
+        return quat_unit_d({
+            static_cast<double>(frame[3]),
+            static_cast<double>(frame[4]),
+            static_cast<double>(frame[5]),
+            static_cast<double>(frame[6]),
+        });
+    }
+
+    static std::vector<float> interpolate_planner_qpos(
+        const std::vector<float>& frame_a,
+        const std::vector<float>& frame_b,
+        float alpha
+    ) {
+        std::vector<float> frame(frame_a.size(), 0.0f);
+        for (std::size_t index = 0; index < frame.size(); ++index) {
+            frame[index] = frame_a[index] + alpha * (frame_b[index] - frame_a[index]);
+        }
+
+        const auto quat = quat_slerp_d(
+            planner_frame_root_quaternion(frame_a),
+            planner_frame_root_quaternion(frame_b),
+            static_cast<double>(alpha)
+        );
+        frame[3] = static_cast<float>(quat[0]);
+        frame[4] = static_cast<float>(quat[1]);
+        frame[5] = static_cast<float>(quat[2]);
+        frame[6] = static_cast<float>(quat[3]);
+        return frame;
+    }
+
+    static std::vector<float> sample_motion_qpos_50hz(
+        const std::vector<std::vector<float>>& motion_qpos,
+        float frame_idx
+    ) {
+        if (motion_qpos.empty()) {
+            return {};
+        }
+        if (motion_qpos.size() == 1) {
+            return motion_qpos.front();
+        }
+
+        const float clamped = std::clamp(
+            frame_idx,
+            0.0f,
+            static_cast<float>(motion_qpos.size() - 1)
+        );
+        const auto frame_a_idx = static_cast<std::size_t>(std::floor(clamped));
+        const auto frame_b_idx = std::min(frame_a_idx + 1, motion_qpos.size() - 1);
+        const float alpha = clamped - static_cast<float>(frame_a_idx);
+        return interpolate_planner_qpos(
+            motion_qpos[frame_a_idx],
+            motion_qpos[frame_b_idx],
+            alpha
+        );
+    }
+
+    static std::vector<std::vector<float>> resample_planner_trajectory_to_50hz(
+        const std::vector<std::vector<float>>& trajectory
+    ) {
+        if (trajectory.empty()) {
+            return {};
+        }
+
+        const float motion_seconds = static_cast<float>(trajectory.size()) / 30.0f;
+        const auto frame_count = std::max(
+            static_cast<std::size_t>(std::floor(motion_seconds * 50.0f)),
+            static_cast<std::size_t>(1)
+        );
+        std::vector<std::vector<float>> motion_qpos;
+        motion_qpos.reserve(frame_count);
+        for (std::size_t frame_50hz = 0; frame_50hz < frame_count; ++frame_50hz) {
+            const float frame_30hz = static_cast<float>(frame_50hz) * 30.0f / 50.0f;
+            const auto frame_a_idx = static_cast<std::size_t>(std::floor(frame_30hz));
+            const auto frame_b_idx = std::min(frame_a_idx + 1, trajectory.size() - 1);
+            const float alpha = frame_30hz - static_cast<float>(frame_a_idx);
+            motion_qpos.push_back(interpolate_planner_qpos(
+                trajectory[frame_a_idx],
+                trajectory[frame_b_idx],
+                alpha
+            ));
+        }
+        return motion_qpos;
+    }
+
+    static std::deque<std::vector<float>> rebuild_planner_context_from_motion(
+        const std::vector<std::vector<float>>& motion_qpos_50hz,
+        std::size_t current_motion_frame
+    ) {
+        std::deque<std::vector<float>> context;
+        if (motion_qpos_50hz.empty()) {
+            return context;
+        }
+
+        const float gen_time = static_cast<float>(current_motion_frame + 2) * kControlDtSeconds;
+        for (std::size_t frame_idx = 0; frame_idx < kPlannerContextLen; ++frame_idx) {
+            const float sample_time = gen_time + static_cast<float>(frame_idx) / 30.0f;
+            context.push_back(sample_motion_qpos_50hz(
+                motion_qpos_50hz,
+                sample_time * 50.0f
+            ));
+        }
+        return context;
+    }
+
+    static std::vector<float> planner_joint_positions_isaaclab(const std::vector<float>& frame) {
+        std::vector<float> positions(G1_NUM_MOTOR, 0.0f);
+        for (std::size_t mujoco_idx = 0; mujoco_idx < G1_NUM_MOTOR; ++mujoco_idx) {
+            const auto isaaclab_idx = static_cast<std::size_t>(isaaclab_to_mujoco[mujoco_idx]);
+            positions[isaaclab_idx] = frame[kPlannerJointOffset + mujoco_idx];
+        }
+        return positions;
+    }
+
+    static std::vector<std::vector<float>> compute_motion_joint_velocities_isaaclab(
+        const std::vector<std::vector<float>>& motion_qpos
+    ) {
+        if (motion_qpos.empty()) {
+            return {};
+        }
+
+        std::vector<std::vector<float>> positions;
+        positions.reserve(motion_qpos.size());
+        for (const auto& frame : motion_qpos) {
+            positions.push_back(planner_joint_positions_isaaclab(frame));
+        }
+
+        std::vector<std::vector<float>> velocities(
+            positions.size(),
+            std::vector<float>(G1_NUM_MOTOR, 0.0f)
+        );
+        for (std::size_t frame_idx = 0; frame_idx + 1 < positions.size(); ++frame_idx) {
+            for (std::size_t joint_idx = 0; joint_idx < G1_NUM_MOTOR; ++joint_idx) {
+                velocities[frame_idx][joint_idx] =
+                    (positions[frame_idx + 1][joint_idx] - positions[frame_idx][joint_idx]) * 50.0f;
+            }
+        }
+        if (positions.size() > 1) {
+            velocities.back() = velocities[velocities.size() - 2];
+        }
+        return velocities;
+    }
+
+    static std::vector<std::vector<float>> blend_planner_motion(
+        const std::vector<std::vector<float>>& existing_motion_qpos,
+        std::size_t current_motion_frame,
+        std::size_t request_motion_frame,
+        const std::vector<std::vector<float>>& new_motion_qpos
+    ) {
+        if (existing_motion_qpos.empty()) {
+            return new_motion_qpos;
+        }
+
+        constexpr std::size_t kPlannerLookAheadSteps = 2;
+        constexpr std::size_t kPlannerBlendFrames = 8;
+
+        const auto gen_frame = request_motion_frame + kPlannerLookAheadSteps;
+        const auto lead_frames =
+            gen_frame > current_motion_frame ? gen_frame - current_motion_frame : 0;
+        const auto new_anim_length = lead_frames + new_motion_qpos.size();
+        const auto blend_start_frame = lead_frames;
+
+        std::vector<std::vector<float>> blended;
+        blended.reserve(new_anim_length);
+        for (std::size_t frame_idx = 0; frame_idx < new_anim_length; ++frame_idx) {
+            auto old_frame_idx = frame_idx + current_motion_frame;
+            if (old_frame_idx >= existing_motion_qpos.size()) {
+                old_frame_idx = existing_motion_qpos.size() - 1;
+            }
+
+            std::size_t new_frame_idx = 0;
+            if (frame_idx + current_motion_frame >= gen_frame) {
+                new_frame_idx = frame_idx + current_motion_frame - gen_frame;
+            }
+            if (new_frame_idx >= new_motion_qpos.size()) {
+                new_frame_idx = new_motion_qpos.size() - 1;
+            }
+
+            const auto weight_new = std::clamp(
+                (static_cast<float>(frame_idx) - static_cast<float>(blend_start_frame)) /
+                    static_cast<float>(kPlannerBlendFrames),
+                0.0f,
+                1.0f
+            );
+            if (weight_new <= std::numeric_limits<float>::epsilon()) {
+                blended.push_back(existing_motion_qpos[old_frame_idx]);
+            } else if (std::abs(1.0f - weight_new) <= std::numeric_limits<float>::epsilon()) {
+                blended.push_back(new_motion_qpos[new_frame_idx]);
+            } else {
+                blended.push_back(interpolate_planner_qpos(
+                    existing_motion_qpos[old_frame_idx],
+                    new_motion_qpos[new_frame_idx],
+                    weight_new
+                ));
+            }
+        }
+
+        return blended;
+    }
+
+    static std::vector<float> build_velocity_encoder_obs_dict(
+        const std::vector<std::vector<float>>& motion_qpos_50hz,
+        const std::vector<std::vector<float>>& motion_joint_velocities_isaaclab,
+        std::size_t current_motion_frame,
+        const std::array<double, 4>& init_base_quat_wxyz,
+        const std::array<double, 4>& init_ref_root_quat_wxyz
+    ) {
+        if (motion_qpos_50hz.empty()) {
+            throw std::runtime_error("planner motion buffer is empty");
+        }
+
+        const auto apply_delta_heading = quat_mul_d(
+            calc_heading_quat_d(init_base_quat_wxyz),
+            calc_heading_quat_inv_d(init_ref_root_quat_wxyz)
+        );
+        const std::array<double, 4> base_quat = {1.0, 0.0, 0.0, 0.0};
+
+        std::vector<float> buf(kEncoderObsDictDim, 0.0f);
+        buf[kEncoderModeOffset] = 0.0f;
+
+        for (std::size_t frame_idx = 0; frame_idx < kReferenceFutureFrames; ++frame_idx) {
+            const auto target_frame = std::min(
+                current_motion_frame + frame_idx * kReferenceFrameStep,
+                motion_qpos_50hz.size() - 1
+            );
+            const auto& motion_frame = motion_qpos_50hz[target_frame];
+            const auto isaaclab_positions = planner_joint_positions_isaaclab(motion_frame);
+
+            const auto pos_offset =
+                kEncoderMotionJointPositionsOffset + frame_idx * isaaclab_positions.size();
+            std::copy(
+                isaaclab_positions.begin(),
+                isaaclab_positions.end(),
+                buf.begin() + static_cast<std::ptrdiff_t>(pos_offset)
+            );
+
+            if (target_frame < motion_joint_velocities_isaaclab.size()) {
+                const auto& joint_velocities = motion_joint_velocities_isaaclab[target_frame];
+                const auto vel_offset =
+                    kEncoderMotionJointVelocitiesOffset + frame_idx * joint_velocities.size();
+                std::copy(
+                    joint_velocities.begin(),
+                    joint_velocities.end(),
+                    buf.begin() + static_cast<std::ptrdiff_t>(vel_offset)
+                );
+            }
+
+            const auto ref_root_quat =
+                quat_mul_d(apply_delta_heading, planner_frame_root_quaternion(motion_frame));
+            const auto base_to_ref = quat_mul_d(quat_conjugate_d(base_quat), ref_root_quat);
+            const auto rotation_matrix = quat_to_rotation_matrix_d(base_to_ref);
+            const auto orn_offset = kEncoderMotionAnchorOrientationOffset + frame_idx * 6;
+            buf[orn_offset] = static_cast<float>(rotation_matrix[0][0]);
+            buf[orn_offset + 1] = static_cast<float>(rotation_matrix[0][1]);
+            buf[orn_offset + 2] = static_cast<float>(rotation_matrix[1][0]);
+            buf[orn_offset + 3] = static_cast<float>(rotation_matrix[1][1]);
+            buf[orn_offset + 4] = static_cast<float>(rotation_matrix[2][0]);
+            buf[orn_offset + 5] = static_cast<float>(rotation_matrix[2][1]);
+        }
+
+        return buf;
     }
 
     std::vector<float> build_encoder_obs_dict() const {
@@ -710,6 +1254,41 @@ private:
         out << "]\n";
     }
 
+    static void write_matrix_json(
+        const fs::path& path,
+        const std::vector<std::vector<float>>& rows
+    ) {
+        fs::create_directories(path.parent_path());
+        std::ofstream out(path);
+        if (!out) {
+            throw std::runtime_error("failed to open tensor dump file: " + path.string());
+        }
+
+        out << "[\n";
+        for (std::size_t row_index = 0; row_index < rows.size(); ++row_index) {
+            out << "  [\n";
+            for (std::size_t value_index = 0; value_index < rows[row_index].size(); ++value_index) {
+                out << "    " << rows[row_index][value_index];
+                if (value_index + 1 < rows[row_index].size()) {
+                    out << ",";
+                }
+                out << "\n";
+            }
+            out << "  ]";
+            if (row_index + 1 < rows.size()) {
+                out << ",";
+            }
+            out << "\n";
+        }
+        out << "]\n";
+    }
+
+    static std::vector<std::vector<float>> deque_to_rows(
+        const std::deque<std::vector<float>>& rows
+    ) {
+        return {rows.begin(), rows.end()};
+    }
+
     void maybe_dump_tracking_tensors(
         const std::vector<float>& encoder_obs,
         const std::vector<float>& tokens,
@@ -732,6 +1311,7 @@ enum class CaseKind {
     ColdStartTick,
     WarmSteadyStateTick,
     ReplanTick,
+    FirstLiveReplanDump,
     StandingPlaceholderTick,
     EndToEndLoop,
 };
@@ -745,6 +1325,9 @@ CaseKind parse_case_kind(const std::string& case_id) {
     }
     if (case_id == "gear_sonic_velocity/replan_tick") {
         return CaseKind::ReplanTick;
+    }
+    if (case_id == "gear_sonic_velocity/first_live_replan_dump") {
+        return CaseKind::FirstLiveReplanDump;
     }
     if (case_id == "gear_sonic_tracking/standing_placeholder_tick") {
         return CaseKind::StandingPlaceholderTick;
@@ -942,6 +1525,18 @@ int main(int argc, char** argv) {
                     [&]() { return harness.velocity_tick(); }
                 );
                 break;
+            case CaseKind::FirstLiveReplanDump: {
+                const auto start = std::chrono::steady_clock::now();
+                const auto result = harness.velocity_first_live_replan_dump();
+                const auto end = std::chrono::steady_clock::now();
+                g_sink = g_sink + (result.empty() ? 0.0f : result.front());
+                samples_ns.push_back(
+                    static_cast<std::uint64_t>(
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count()
+                    )
+                );
+                break;
+            }
             case CaseKind::StandingPlaceholderTick:
                 samples_ns = run_microbench(
                     harness,
