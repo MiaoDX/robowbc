@@ -127,6 +127,12 @@ pub struct RobotConfig {
     /// When absent, simulation falls back to [`RobotConfig::pd_gains`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sim_pd_gains: Option<Vec<PdGains>>,
+    /// Optional per-joint target limits used specifically by raw-torque
+    /// simulators.
+    ///
+    /// When absent, simulation falls back to [`RobotConfig::joint_limits`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sim_joint_limits: Option<Vec<JointLimit>>,
     /// Per-joint min/max position limits in radians.
     pub joint_limits: Vec<JointLimit>,
     /// Default standing pose in radians.
@@ -190,6 +196,15 @@ impl RobotConfig {
                 .into());
             }
         }
+        if let Some(ref sim_joint_limits) = self.sim_joint_limits {
+            if sim_joint_limits.len() != n {
+                return Err(format!(
+                    "sim_joint_limits length {} != joint_count {n}",
+                    sim_joint_limits.len()
+                )
+                .into());
+            }
+        }
         if self.joint_limits.len() != n {
             return Err(format!(
                 "joint_limits length {} != joint_count {n}",
@@ -221,6 +236,15 @@ impl RobotConfig {
     #[must_use]
     pub fn simulation_pd_gains(&self) -> &[PdGains] {
         self.sim_pd_gains.as_deref().unwrap_or(&self.pd_gains)
+    }
+
+    /// Returns the target limits that should be used by the MuJoCo/raw-torque
+    /// simulation path.
+    #[must_use]
+    pub fn simulation_joint_limits(&self) -> &[JointLimit] {
+        self.sim_joint_limits
+            .as_deref()
+            .unwrap_or(&self.joint_limits)
     }
 }
 
@@ -314,6 +338,7 @@ mod tests {
             joint_names: vec!["hip".to_owned(), "knee".to_owned()],
             pd_gains: vec![PdGains { kp: 20.0, kd: 0.5 }, PdGains { kp: 30.0, kd: 0.8 }],
             sim_pd_gains: None,
+            sim_joint_limits: None,
             joint_limits: vec![
                 JointLimit {
                     min: -1.0,
@@ -357,6 +382,7 @@ mod tests {
         assert_eq!(robot.joint_count, robot.joint_names.len());
         assert_eq!(robot.joint_count, robot.pd_gains.len());
         assert_eq!(robot.simulation_pd_gains().len(), robot.joint_count);
+        assert_eq!(robot.simulation_joint_limits().len(), robot.joint_count);
         assert_eq!(robot.joint_count, robot.joint_limits.len());
         assert_eq!(robot.joint_count, robot.default_pose.len());
     }
@@ -479,6 +505,48 @@ mod tests {
         // Hand joints at indices 29–34.
         assert_eq!(config.joint_names[29], "left_hand_index_joint");
         assert_eq!(config.joint_names[32], "right_hand_index_joint");
+    }
+
+    #[test]
+    fn unitree_g1_35dof_wbc_agile_config_loads_from_toml_file() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../configs/robots/unitree_g1_35dof_wbc_agile.toml");
+        let config = RobotConfig::from_toml_file(&path).expect("WBC-AGILE G1 config should load");
+
+        assert_eq!(config.name, "unitree_g1_35dof_wbc_agile");
+        assert_eq!(config.joint_count, 35);
+        assert_eq!(config.joint_names.len(), 35);
+        assert_eq!(config.pd_gains.len(), 35);
+        assert_eq!(
+            config
+                .sim_pd_gains
+                .as_ref()
+                .expect("WBC-AGILE G1 config should carry MuJoCo gains")
+                .len(),
+            35
+        );
+        assert_eq!(
+            config
+                .sim_joint_limits
+                .as_ref()
+                .expect("WBC-AGILE G1 config should carry MuJoCo target limits")
+                .len(),
+            35
+        );
+        assert_eq!(config.joint_limits.len(), 35);
+        assert_eq!(config.default_pose.len(), 35);
+        assert_eq!(config.joint_names[4], "left_ankle_pitch_joint");
+        assert_eq!(config.joint_names[10], "right_ankle_pitch_joint");
+        assert!((config.joint_limits[4].min - (-0.8727)).abs() < 1e-3);
+        assert!((config.joint_limits[4].max - 0.5236).abs() < 1e-3);
+        assert!((config.simulation_joint_limits()[4].min - (-1.1)).abs() < 1e-3);
+        assert!((config.simulation_joint_limits()[4].max - 0.7).abs() < 1e-3);
+        assert!((config.simulation_joint_limits()[10].min - (-1.1)).abs() < 1e-3);
+        assert!((config.simulation_joint_limits()[10].max - 0.7).abs() < 1e-3);
+        assert!((config.simulation_pd_gains()[4].kp - 80.0).abs() < 1e-3);
+        assert!((config.simulation_pd_gains()[4].kd - 4.0).abs() < 1e-3);
+        assert!((config.simulation_pd_gains()[10].kp - 80.0).abs() < 1e-3);
+        assert!((config.simulation_pd_gains()[10].kd - 4.0).abs() < 1e-3);
     }
 
     #[test]

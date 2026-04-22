@@ -189,6 +189,7 @@ mod tests {
                     joint_names: vec!["hip".to_owned(), "knee".to_owned()],
                     pd_gains: vec![],
                     sim_pd_gains: None,
+                    sim_joint_limits: None,
                     joint_limits: vec![],
                     default_pose: vec![0.0, 0.0],
                     model_path: None,
