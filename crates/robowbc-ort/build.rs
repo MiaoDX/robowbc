@@ -16,9 +16,10 @@ const PROVIDERS_SHARED_RELATIVE_PATH: &str = "lib/libonnxruntime_providers_share
 fn main() {
     println!("cargo:rerun-if-env-changed={ENV_DYLIB_PATH}");
 
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("linux") {
-        panic!("robowbc-ort only supports Linux targets");
-    }
+    assert!(
+        env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux"),
+        "robowbc-ort only supports Linux targets"
+    );
 
     if let Some(path) = env::var_os(ENV_DYLIB_PATH) {
         println!(
