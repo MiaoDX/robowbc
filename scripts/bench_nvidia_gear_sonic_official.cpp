@@ -14,6 +14,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -49,6 +50,7 @@ constexpr std::size_t kEncoderDim = 64;
 constexpr std::size_t kEncoderObsDictDim = 1762;
 constexpr std::size_t kDecoderObsDictDim = 994;
 constexpr std::size_t kDecoderHistoryLen = 10;
+constexpr std::size_t kLaterMotionProbeTick = 25;
 constexpr std::size_t kEncoderModeOffset = 0;
 constexpr std::size_t kEncoderMotionJointPositionsOffset = 4;
 constexpr std::size_t kEncoderMotionJointVelocitiesOffset = 294;
@@ -71,6 +73,7 @@ struct Observation {
     std::vector<float> joint_velocities;
     std::array<float, 3> gravity_vector{};
     std::array<float, 3> angular_velocity{};
+    std::array<double, 4> base_quat_wxyz{1.0, 0.0, 0.0, 0.0};
 };
 
 struct Twist {
@@ -180,15 +183,40 @@ std::vector<float> default_pose() {
     return pose;
 }
 
-std::vector<float> mujoco_to_isaaclab_positions(const std::vector<float>& joint_positions) {
-    if (joint_positions.size() != G1_NUM_MOTOR) {
-        throw std::runtime_error("joint_positions must match G1_NUM_MOTOR");
+std::vector<float> mujoco_to_isaaclab_values(const std::vector<float>& values) {
+    if (values.size() != G1_NUM_MOTOR) {
+        throw std::runtime_error("values must match G1_NUM_MOTOR");
     }
 
     std::vector<float> remapped(G1_NUM_MOTOR, 0.0f);
     for (std::size_t mujoco_index = 0; mujoco_index < G1_NUM_MOTOR; ++mujoco_index) {
         remapped[static_cast<std::size_t>(isaaclab_to_mujoco[mujoco_index])] =
-            joint_positions[mujoco_index];
+            values[mujoco_index];
+    }
+    return remapped;
+}
+
+std::vector<float> mujoco_to_isaaclab_positions(const std::vector<float>& joint_positions) {
+    return mujoco_to_isaaclab_values(joint_positions);
+}
+
+std::vector<float> mujoco_to_isaaclab_joint_offsets(const std::vector<float>& joint_positions) {
+    auto remapped = mujoco_to_isaaclab_values(joint_positions);
+    for (std::size_t mujoco_index = 0; mujoco_index < G1_NUM_MOTOR; ++mujoco_index) {
+        remapped[static_cast<std::size_t>(isaaclab_to_mujoco[mujoco_index])] -=
+            static_cast<float>(default_angles[mujoco_index]);
+    }
+    return remapped;
+}
+
+std::vector<float> isaaclab_to_mujoco_values(const std::vector<float>& values) {
+    if (values.size() != G1_NUM_MOTOR) {
+        throw std::runtime_error("values must match G1_NUM_MOTOR");
+    }
+
+    std::vector<float> remapped(G1_NUM_MOTOR, 0.0f);
+    for (std::size_t mujoco_index = 0; mujoco_index < G1_NUM_MOTOR; ++mujoco_index) {
+        remapped[mujoco_index] = values[static_cast<std::size_t>(isaaclab_to_mujoco[mujoco_index])];
     }
     return remapped;
 }
@@ -341,8 +369,8 @@ struct TrackingState {
         }
         gravity.push_back(obs.gravity_vector);
         angular_velocity.push_back(obs.angular_velocity);
-        joint_positions.push_back(obs.joint_positions);
-        joint_velocities.push_back(obs.joint_velocities);
+        joint_positions.push_back(mujoco_to_isaaclab_joint_offsets(obs.joint_positions));
+        joint_velocities.push_back(mujoco_to_isaaclab_values(obs.joint_velocities));
         last_actions.push_back(actions);
     }
 };
@@ -481,6 +509,7 @@ public:
             committed_joint_velocities,
             0,
             init_base_quat_wxyz,
+            init_base_quat_wxyz,
             init_ref_root_quat_wxyz
         );
         const auto tokens = run_single_f32(
@@ -557,6 +586,171 @@ public:
         return positions;
     }
 
+    std::vector<float> velocity_later_motion_dump() {
+        if (!dump_dir_.has_value()) {
+            throw std::runtime_error("--dump-dir is required for gear_sonic_velocity/later_motion_dump");
+        }
+
+        reset();
+        tracking_state_.reset();
+        latest_action_.assign(G1_NUM_MOTOR, 0.0f);
+
+        std::deque<std::vector<float>> context;
+        const auto standing = make_official_standing_qpos();
+        for (std::size_t index = 0; index < kPlannerContextLen; ++index) {
+            context.push_back(standing);
+        }
+
+        const auto idle_planned_30hz = run_planner_command(context, idle_planner_command());
+        const auto bootstrap_motion_50hz = resample_planner_trajectory_to_50hz(idle_planned_30hz);
+
+        constexpr std::size_t kFirstLiveReplanTick = kReplanIntervalTicks;
+        const auto planner_context =
+            rebuild_planner_context_from_motion(bootstrap_motion_50hz, kFirstLiveReplanTick);
+
+        float facing_yaw_rad = 0.0f;
+        Twist twist;
+        twist.linear = {0.6f, 0.0f, 0.0f};
+        twist.angular = {0.0f, 0.0f, 0.0f};
+        const auto live_command = derive_planner_command(facing_yaw_rad, twist);
+        const auto live_planned_30hz = run_planner_command(planner_context, live_command);
+        const auto live_planned_50hz = resample_planner_trajectory_to_50hz(live_planned_30hz);
+        const auto committed_motion_50hz = blend_planner_motion(
+            bootstrap_motion_50hz,
+            kFirstLiveReplanTick,
+            kFirstLiveReplanTick,
+            live_planned_50hz
+        );
+        const auto committed_joint_velocities =
+            compute_motion_joint_velocities_isaaclab(committed_motion_50hz);
+        if (committed_motion_50hz.size() <= kLaterMotionProbeTick) {
+            throw std::runtime_error("later motion probe tick exceeds committed motion length");
+        }
+
+        const std::array<double, 4> init_base_quat_wxyz = {1.0, 0.0, 0.0, 0.0};
+        const auto init_ref_root_quat_wxyz =
+            planner_frame_root_quaternion(committed_motion_50hz.front());
+
+        Observation probe_obs;
+        std::vector<float> encoder_obs;
+        std::vector<float> tokens;
+        std::vector<float> decoder_obs;
+        std::vector<float> raw_actions;
+        for (std::size_t tick = 0; tick <= kLaterMotionProbeTick; ++tick) {
+            probe_obs = motion_observation_from_planner_frame(
+                committed_motion_50hz,
+                committed_joint_velocities,
+                tick
+            );
+            encoder_obs = build_velocity_encoder_obs_dict(
+                committed_motion_50hz,
+                committed_joint_velocities,
+                tick,
+                probe_obs.base_quat_wxyz,
+                init_base_quat_wxyz,
+                init_ref_root_quat_wxyz
+            );
+            tokens = run_single_f32(
+                encoder_,
+                "obs_dict",
+                "encoded_tokens",
+                encoder_obs,
+                kEncoderObsDictDim
+            );
+            if (tokens.size() != kEncoderDim) {
+                throw std::runtime_error(
+                    "encoder output dimension mismatch: expected " + std::to_string(kEncoderDim) +
+                    ", got " + std::to_string(tokens.size())
+                );
+            }
+
+            tracking_state_.push(probe_obs, latest_action_);
+            decoder_obs = build_decoder_obs_dict(tokens);
+            raw_actions = run_single_f32(
+                decoder_,
+                "obs_dict",
+                "action",
+                decoder_obs,
+                kDecoderObsDictDim
+            );
+            if (raw_actions.size() != G1_NUM_MOTOR) {
+                throw std::runtime_error(
+                    "decoder output dimension mismatch: expected " + std::to_string(G1_NUM_MOTOR) +
+                    ", got " + std::to_string(raw_actions.size())
+                );
+            }
+            latest_action_ = raw_actions;
+        }
+
+        write_vector_json(
+            *dump_dir_ / "velocity_probe_tick.json",
+            std::vector<float>{static_cast<float>(kLaterMotionProbeTick)}
+        );
+        write_vector_json(*dump_dir_ / "current_joint_positions_mujoco.json", probe_obs.joint_positions);
+        write_vector_json(*dump_dir_ / "current_joint_velocities_mujoco.json", probe_obs.joint_velocities);
+        write_vector_json(
+            *dump_dir_ / "current_base_quat_wxyz.json",
+            std::vector<float>{
+                static_cast<float>(probe_obs.base_quat_wxyz[0]),
+                static_cast<float>(probe_obs.base_quat_wxyz[1]),
+                static_cast<float>(probe_obs.base_quat_wxyz[2]),
+                static_cast<float>(probe_obs.base_quat_wxyz[3]),
+            }
+        );
+        write_vector_json(
+            *dump_dir_ / "current_gravity.json",
+            std::vector<float>{
+                probe_obs.gravity_vector[0],
+                probe_obs.gravity_vector[1],
+                probe_obs.gravity_vector[2],
+            }
+        );
+        write_vector_json(
+            *dump_dir_ / "current_angular_velocity.json",
+            std::vector<float>{
+                probe_obs.angular_velocity[0],
+                probe_obs.angular_velocity[1],
+                probe_obs.angular_velocity[2],
+            }
+        );
+        write_matrix_json(
+            *dump_dir_ / "history_joint_positions_isaaclab_offsets.json",
+            deque_to_rows(tracking_state_.joint_positions)
+        );
+        write_matrix_json(
+            *dump_dir_ / "history_joint_velocities_isaaclab.json",
+            deque_to_rows(tracking_state_.joint_velocities)
+        );
+        write_matrix_json(
+            *dump_dir_ / "history_last_actions.json",
+            deque_to_rows(tracking_state_.last_actions)
+        );
+        write_matrix_json(
+            *dump_dir_ / "history_gravity.json",
+            deque_to_rows(tracking_state_.gravity)
+        );
+        write_matrix_json(
+            *dump_dir_ / "history_angular_velocity.json",
+            deque_to_rows(tracking_state_.angular_velocity)
+        );
+        write_vector_json(*dump_dir_ / "velocity_encoder_obs.json", encoder_obs);
+        write_vector_json(*dump_dir_ / "velocity_tokens.json", tokens);
+        write_vector_json(*dump_dir_ / "velocity_decoder_obs.json", decoder_obs);
+        write_vector_json(*dump_dir_ / "velocity_raw_actions.json", raw_actions);
+
+        std::vector<float> positions(G1_NUM_MOTOR, 0.0f);
+        for (int mujoco_index = 0; mujoco_index < G1_NUM_MOTOR; ++mujoco_index) {
+            const int isaaclab_index = isaaclab_to_mujoco[static_cast<std::size_t>(mujoco_index)];
+            const float action = raw_actions[static_cast<std::size_t>(isaaclab_index)];
+            const float scaled =
+                action * static_cast<float>(g1_action_scale[static_cast<std::size_t>(mujoco_index)]);
+            positions[static_cast<std::size_t>(mujoco_index)] =
+                static_cast<float>(default_angles[static_cast<std::size_t>(mujoco_index)]) + scaled;
+        }
+
+        return positions;
+    }
+
 private:
     Ort::Env env_;
     Ort::MemoryInfo memory_info_;
@@ -612,14 +806,10 @@ private:
         if (frame[2] == 0.0f) {
             frame[2] = kDefaultHeightMeters;
         }
-        const bool zero_quat = std::all_of(
-            frame.begin() + 3,
-            frame.begin() + 7,
-            [](float value) { return std::abs(value) <= std::numeric_limits<float>::epsilon(); }
-        );
-        if (zero_quat) {
-            frame[3] = 1.0f;
-        }
+        frame[3] = static_cast<float>(obs.base_quat_wxyz[0]);
+        frame[4] = static_cast<float>(obs.base_quat_wxyz[1]);
+        frame[5] = static_cast<float>(obs.base_quat_wxyz[2]);
+        frame[6] = static_cast<float>(obs.base_quat_wxyz[3]);
         std::copy(obs.joint_positions.begin(), obs.joint_positions.end(), frame.begin() + static_cast<std::ptrdiff_t>(kPlannerJointOffset));
         return frame;
     }
@@ -1082,6 +1272,7 @@ private:
         const std::vector<std::vector<float>>& motion_qpos_50hz,
         const std::vector<std::vector<float>>& motion_joint_velocities_isaaclab,
         std::size_t current_motion_frame,
+        const std::array<double, 4>& base_quat_wxyz,
         const std::array<double, 4>& init_base_quat_wxyz,
         const std::array<double, 4>& init_ref_root_quat_wxyz
     ) {
@@ -1093,7 +1284,7 @@ private:
             calc_heading_quat_d(init_base_quat_wxyz),
             calc_heading_quat_inv_d(init_ref_root_quat_wxyz)
         );
-        const std::array<double, 4> base_quat = {1.0, 0.0, 0.0, 0.0};
+        const auto base_quat = quat_unit_d(base_quat_wxyz);
 
         std::vector<float> buf(kEncoderObsDictDim, 0.0f);
         buf[kEncoderModeOffset] = 0.0f;
@@ -1139,6 +1330,68 @@ private:
         }
 
         return buf;
+    }
+
+    static Observation motion_observation_from_planner_frame(
+        const std::vector<std::vector<float>>& motion_qpos_50hz,
+        const std::vector<std::vector<float>>& motion_joint_velocities_isaaclab,
+        std::size_t frame_idx
+    ) {
+        if (motion_qpos_50hz.empty()) {
+            throw std::runtime_error("planner motion buffer is empty");
+        }
+
+        const auto clamped_index = std::min(frame_idx, motion_qpos_50hz.size() - 1);
+        const auto& motion_frame = motion_qpos_50hz[clamped_index];
+        Observation obs;
+        obs.joint_positions.assign(
+            motion_frame.begin() + static_cast<std::ptrdiff_t>(kPlannerJointOffset),
+            motion_frame.end()
+        );
+        obs.joint_velocities =
+            clamped_index < motion_joint_velocities_isaaclab.size()
+                ? isaaclab_to_mujoco_values(motion_joint_velocities_isaaclab[clamped_index])
+                : std::vector<float>(G1_NUM_MOTOR, 0.0f);
+        obs.base_quat_wxyz = planner_frame_root_quaternion(motion_frame);
+        obs.gravity_vector = double_to_float(GetGravityOrientation_d(obs.base_quat_wxyz));
+        obs.angular_velocity =
+            angular_velocity_from_motion_quaternions(motion_qpos_50hz, clamped_index);
+        return obs;
+    }
+
+    static std::array<float, 3> angular_velocity_from_motion_quaternions(
+        const std::vector<std::vector<float>>& motion_qpos_50hz,
+        std::size_t frame_idx
+    ) {
+        if (frame_idx == 0 || motion_qpos_50hz.empty()) {
+            return {0.0f, 0.0f, 0.0f};
+        }
+
+        const auto prev_quat = planner_frame_root_quaternion(motion_qpos_50hz[frame_idx - 1]);
+        const auto curr_quat = planner_frame_root_quaternion(motion_qpos_50hz[frame_idx]);
+        auto delta = quat_mul_d(quat_conjugate_d(prev_quat), curr_quat);
+        if (delta[0] < 0.0) {
+            delta = {-delta[0], -delta[1], -delta[2], -delta[3]};
+        }
+        delta = quat_unit_d(delta);
+
+        const auto sin_half = std::sqrt(
+            delta[1] * delta[1] + delta[2] * delta[2] + delta[3] * delta[3]
+        );
+        if (sin_half <= 1e-6) {
+            return {0.0f, 0.0f, 0.0f};
+        }
+
+        const auto [angle, axis] = quat_to_angle_axis(delta);
+        if (!std::isfinite(angle)) {
+            return {0.0f, 0.0f, 0.0f};
+        }
+
+        return {
+            static_cast<float>(axis[0] * angle / kControlDtSeconds),
+            static_cast<float>(axis[1] * angle / kControlDtSeconds),
+            static_cast<float>(axis[2] * angle / kControlDtSeconds),
+        };
     }
 
     std::vector<float> build_encoder_obs_dict() const {
@@ -1289,6 +1542,18 @@ private:
         return {rows.begin(), rows.end()};
     }
 
+    template <std::size_t N>
+    static std::vector<std::vector<float>> deque_to_rows(
+        const std::deque<std::array<float, N>>& rows
+    ) {
+        std::vector<std::vector<float>> out;
+        out.reserve(rows.size());
+        for (const auto& row : rows) {
+            out.emplace_back(row.begin(), row.end());
+        }
+        return out;
+    }
+
     void maybe_dump_tracking_tensors(
         const std::vector<float>& encoder_obs,
         const std::vector<float>& tokens,
@@ -1312,6 +1577,7 @@ enum class CaseKind {
     WarmSteadyStateTick,
     ReplanTick,
     FirstLiveReplanDump,
+    LaterMotionDump,
     StandingPlaceholderTick,
     EndToEndLoop,
 };
@@ -1328,6 +1594,9 @@ CaseKind parse_case_kind(const std::string& case_id) {
     }
     if (case_id == "gear_sonic_velocity/first_live_replan_dump") {
         return CaseKind::FirstLiveReplanDump;
+    }
+    if (case_id == "gear_sonic_velocity/later_motion_dump") {
+        return CaseKind::LaterMotionDump;
     }
     if (case_id == "gear_sonic_tracking/standing_placeholder_tick") {
         return CaseKind::StandingPlaceholderTick;
@@ -1528,6 +1797,18 @@ int main(int argc, char** argv) {
             case CaseKind::FirstLiveReplanDump: {
                 const auto start = std::chrono::steady_clock::now();
                 const auto result = harness.velocity_first_live_replan_dump();
+                const auto end = std::chrono::steady_clock::now();
+                g_sink = g_sink + (result.empty() ? 0.0f : result.front());
+                samples_ns.push_back(
+                    static_cast<std::uint64_t>(
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(end - start).count()
+                    )
+                );
+                break;
+            }
+            case CaseKind::LaterMotionDump: {
+                const auto start = std::chrono::steady_clock::now();
+                const auto result = harness.velocity_later_motion_dump();
                 const auto end = std::chrono::steady_clock::now();
                 g_sink = g_sink + (result.empty() ? 0.0f : result.front());
                 samples_ns.push_back(
