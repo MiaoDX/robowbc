@@ -1207,6 +1207,18 @@ fn quat_to_rotation_matrix(quat: [f32; 4]) -> [[f32; 3]; 3] {
 ///   upstream g1 reference-tracking contract; otherwise it falls back to the
 ///   standing-placeholder contract. The planner stays loaded but is not
 ///   executed on those ticks.
+#[derive(Clone, Copy)]
+struct GearSonicReferenceMotionPlayback {
+    auto_play: bool,
+    loop_playback: bool,
+}
+
+#[derive(Clone, Copy)]
+struct GearSonicContractSupport {
+    real_tracking: bool,
+    real_planner: bool,
+}
+
 pub struct GearSonicPolicy {
     encoder: Mutex<OrtBackend>,
     decoder: Mutex<OrtBackend>,
@@ -1215,10 +1227,8 @@ pub struct GearSonicPolicy {
     tracking_state: Mutex<GearSonicTrackingState>,
     reference_motion: Option<GearSonicReferenceMotion>,
     reference_motion_state: Mutex<GearSonicReferenceMotionState>,
-    reference_motion_auto_play: bool,
-    reference_motion_loop_playback: bool,
-    supports_real_tracking_contract: bool,
-    supports_real_planner_contract: bool,
+    reference_motion_playback: GearSonicReferenceMotionPlayback,
+    contract_support: GearSonicContractSupport,
     robot: RobotConfig,
 }
 
@@ -1236,8 +1246,10 @@ impl GearSonicPolicy {
             .map_err(|e| robowbc_core::WbcError::InferenceFailed(e.to_string()))?;
         let planner = OrtBackend::new(&config.planner)
             .map_err(|e| robowbc_core::WbcError::InferenceFailed(e.to_string()))?;
-        let supports_real_tracking_contract = Self::supports_real_tracking_contract(&encoder);
-        let supports_real_planner_contract = Self::supports_real_planner_contract(&planner);
+        let contract_support = GearSonicContractSupport {
+            real_tracking: Self::supports_real_tracking_contract(&encoder),
+            real_planner: Self::supports_real_planner_contract(&planner),
+        };
         let reference_motion = config
             .reference_motion
             .as_ref()
@@ -1248,17 +1260,20 @@ impl GearSonicPolicy {
                 )
             })
             .transpose()?;
-        let reference_motion_auto_play = config
-            .reference_motion
-            .as_ref()
-            .is_some_and(|reference_motion| reference_motion.auto_play);
-        let reference_motion_loop_playback = config
-            .reference_motion
-            .as_ref()
-            .is_some_and(|reference_motion| reference_motion.loop_playback);
+        let reference_motion_playback = GearSonicReferenceMotionPlayback {
+            auto_play: config
+                .reference_motion
+                .as_ref()
+                .is_some_and(|reference_motion| reference_motion.auto_play),
+            loop_playback: config
+                .reference_motion
+                .as_ref()
+                .is_some_and(|reference_motion| reference_motion.loop_playback),
+        };
         let planner_state = GearSonicPlannerState::new(&config.robot);
         let tracking_state = GearSonicTrackingState::new(&config.robot);
-        let reference_motion_state = GearSonicReferenceMotionState::new(reference_motion_auto_play);
+        let reference_motion_state =
+            GearSonicReferenceMotionState::new(reference_motion_playback.auto_play);
 
         Ok(Self {
             encoder: Mutex::new(encoder),
@@ -1268,10 +1283,8 @@ impl GearSonicPolicy {
             tracking_state: Mutex::new(tracking_state),
             reference_motion,
             reference_motion_state: Mutex::new(reference_motion_state),
-            reference_motion_auto_play,
-            reference_motion_loop_playback,
-            supports_real_tracking_contract,
-            supports_real_planner_contract,
+            reference_motion_playback,
+            contract_support,
             robot: config.robot,
         })
     }
@@ -1406,25 +1419,51 @@ impl GearSonicPolicy {
 
     fn bin_planner_angle_to_8_directions(angle: f32) -> (f32, f32) {
         const BIN_SIZE: f32 = std::f32::consts::FRAC_PI_4;
+        const HALF_BIN_SIZE: f32 = BIN_SIZE * 0.5;
 
         let normalized = Self::wrap_angle_rad(angle);
-        let mut bin_index = (normalized / BIN_SIZE).round() as i32;
-        if bin_index > 4 {
-            bin_index -= 8;
-        }
-        if bin_index < -4 {
-            bin_index += 8;
-        }
-
-        let slow_walk_speed = match bin_index {
-            0 | 1 | -1 => 0.3,
-            2 | -2 => 0.35,
-            3 | -3 => 0.25,
-            4 | -4 => 0.2,
-            _ => 0.2,
+        let bin_index = if normalized <= -7.0 * HALF_BIN_SIZE {
+            -4
+        } else if normalized <= -5.0 * HALF_BIN_SIZE {
+            -3
+        } else if normalized <= -3.0 * HALF_BIN_SIZE {
+            -2
+        } else if normalized <= -HALF_BIN_SIZE {
+            -1
+        } else if normalized < HALF_BIN_SIZE {
+            0
+        } else if normalized < 3.0 * HALF_BIN_SIZE {
+            1
+        } else if normalized < 5.0 * HALF_BIN_SIZE {
+            2
+        } else if normalized < 7.0 * HALF_BIN_SIZE {
+            3
+        } else {
+            4
         };
 
-        (bin_index as f32 * BIN_SIZE, slow_walk_speed)
+        let slow_walk_speed = match bin_index {
+            -1..=1 => 0.3,
+            -2 | 2 => 0.35,
+            -3 | 3 => 0.25,
+            -4 | 4 => 0.2,
+            _ => unreachable!("planner direction bin should stay within [-4, 4]"),
+        };
+
+        let binned_angle = match bin_index {
+            -4 => -4.0 * BIN_SIZE,
+            -3 => -3.0 * BIN_SIZE,
+            -2 => -2.0 * BIN_SIZE,
+            -1 => -BIN_SIZE,
+            0 => 0.0,
+            1 => BIN_SIZE,
+            2 => 2.0 * BIN_SIZE,
+            3 => 3.0 * BIN_SIZE,
+            4 => 4.0 * BIN_SIZE,
+            _ => unreachable!("planner direction bin should stay within [-4, 4]"),
+        };
+
+        (binned_angle, slow_walk_speed)
     }
 
     fn vec3_distance(a: [f32; 3], b: [f32; 3]) -> f32 {
@@ -1613,7 +1652,41 @@ impl GearSonicPolicy {
         context
     }
 
-    fn sample_motion_qpos_50hz(motion_qpos: &[Vec<f32>], frame_idx: f32) -> Vec<f32> {
+    fn alpha_from_thirds(remainder: usize) -> f32 {
+        match remainder {
+            0 => 0.0,
+            1 => 1.0 / 3.0,
+            2 => 2.0 / 3.0,
+            _ => unreachable!("third-based resampling remainder should stay within [0, 2]"),
+        }
+    }
+
+    fn alpha_from_fifths(remainder: usize) -> f32 {
+        match remainder {
+            0 => 0.0,
+            1 => 0.2,
+            2 => 0.4,
+            3 => 0.6,
+            4 => 0.8,
+            _ => unreachable!("fifth-based resampling remainder should stay within [0, 4]"),
+        }
+    }
+
+    fn planner_blend_weight(frame_idx: usize, blend_start_frame: usize) -> f32 {
+        const BLEND_WEIGHTS: [f32; 9] = [0.0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1.0];
+
+        debug_assert_eq!(GEAR_SONIC_PLANNER_BLEND_FRAMES + 1, BLEND_WEIGHTS.len());
+        let blend_progress = frame_idx
+            .saturating_sub(blend_start_frame)
+            .min(GEAR_SONIC_PLANNER_BLEND_FRAMES);
+        BLEND_WEIGHTS[blend_progress]
+    }
+
+    fn interpolate_motion_frame(
+        motion_qpos: &[Vec<f32>],
+        lower_frame_idx: usize,
+        alpha: f32,
+    ) -> Vec<f32> {
         if motion_qpos.is_empty() {
             return Vec::new();
         }
@@ -1621,11 +1694,13 @@ impl GearSonicPolicy {
             return motion_qpos[0].clone();
         }
 
-        let clamped = frame_idx.clamp(0.0, (motion_qpos.len() - 1) as f32);
-        let frame_a_idx = clamped.floor() as usize;
-        let frame_b_idx = (frame_a_idx + 1).min(motion_qpos.len() - 1);
-        let alpha = clamped - frame_a_idx as f32;
-        Self::interpolate_planner_qpos(&motion_qpos[frame_a_idx], &motion_qpos[frame_b_idx], alpha)
+        let clamped_lower_idx = lower_frame_idx.min(motion_qpos.len() - 1);
+        let upper_frame_idx = (clamped_lower_idx + 1).min(motion_qpos.len() - 1);
+        Self::interpolate_planner_qpos(
+            &motion_qpos[clamped_lower_idx],
+            &motion_qpos[upper_frame_idx],
+            alpha.clamp(0.0, 1.0),
+        )
     }
 
     fn rebuild_planner_context_from_motion(state: &mut GearSonicPlannerState) {
@@ -1633,14 +1708,18 @@ impl GearSonicPolicy {
             return;
         }
 
-        let gen_time = (state.current_motion_frame + GEAR_SONIC_PLANNER_LOOK_AHEAD_STEPS) as f32
-            * GEAR_SONIC_CONTROL_DT_SECS;
+        let sample_start_frame = state
+            .current_motion_frame
+            .saturating_add(GEAR_SONIC_PLANNER_LOOK_AHEAD_STEPS);
         let mut context = VecDeque::with_capacity(GEAR_SONIC_PLANNER_CONTEXT_LEN);
-        for frame_idx in 0..GEAR_SONIC_PLANNER_CONTEXT_LEN {
-            let sample_time = gen_time + frame_idx as f32 / 30.0;
-            context.push_back(Self::sample_motion_qpos_50hz(
+        for context_frame_idx in 0..GEAR_SONIC_PLANNER_CONTEXT_LEN {
+            let source_frame_numerator = context_frame_idx.saturating_mul(5);
+            let lower_frame_idx = sample_start_frame.saturating_add(source_frame_numerator / 3);
+            let alpha = Self::alpha_from_thirds(source_frame_numerator % 3);
+            context.push_back(Self::interpolate_motion_frame(
                 &state.motion_qpos_50hz,
-                sample_time * 50.0,
+                lower_frame_idx,
+                alpha,
             ));
         }
         state.last_context_frame = context
@@ -1655,17 +1734,16 @@ impl GearSonicPolicy {
             return Vec::new();
         }
 
-        let motion_seconds = trajectory.len() as f32 / 30.0;
-        let frame_count = ((motion_seconds * 50.0).floor() as usize).max(1);
+        let frame_count = trajectory.len().saturating_mul(5) / 3;
+        let frame_count = frame_count.max(1);
         let mut motion_qpos = Vec::with_capacity(frame_count);
         for frame_50hz in 0..frame_count {
-            let frame_30hz = frame_50hz as f32 * 30.0 / 50.0;
-            let frame_a_idx = frame_30hz.floor() as usize;
-            let frame_b_idx = (frame_a_idx + 1).min(trajectory.len() - 1);
-            let alpha = frame_30hz - frame_a_idx as f32;
-            motion_qpos.push(Self::interpolate_planner_qpos(
-                &trajectory[frame_a_idx],
-                &trajectory[frame_b_idx],
+            let source_frame_numerator = frame_50hz.saturating_mul(3);
+            let lower_frame_idx = source_frame_numerator / 5;
+            let alpha = Self::alpha_from_fifths(source_frame_numerator % 5);
+            motion_qpos.push(Self::interpolate_motion_frame(
+                trajectory,
+                lower_frame_idx,
                 alpha,
             ));
         }
@@ -1690,7 +1768,9 @@ impl GearSonicPolicy {
             }
         }
         if positions.len() > 1 {
-            velocities[positions.len() - 1] = velocities[positions.len() - 2].clone();
+            let last_frame_idx = positions.len() - 1;
+            let (history, tail) = velocities.split_at_mut(last_frame_idx);
+            tail[0].clone_from(&history[last_frame_idx - 1]);
         }
         velocities
     }
@@ -1713,18 +1793,13 @@ impl GearSonicPolicy {
         let mut blended = Vec::with_capacity(new_anim_length);
 
         for frame_idx in 0..new_anim_length {
-            let old_frame_idx =
-                (frame_idx + current_motion_frame).min(existing_motion_qpos.len() - 1);
-            let new_frame_idx = if frame_idx + current_motion_frame >= gen_frame {
-                frame_idx + current_motion_frame - gen_frame
-            } else {
-                0
-            }
-            .min(new_motion_qpos.len() - 1);
+            let current_frame_idx = frame_idx.saturating_add(current_motion_frame);
+            let old_frame_idx = current_frame_idx.min(existing_motion_qpos.len() - 1);
+            let new_frame_idx = current_frame_idx
+                .saturating_sub(gen_frame)
+                .min(new_motion_qpos.len() - 1);
 
-            let weight_new = ((frame_idx as f32 - blend_start_frame as f32)
-                / GEAR_SONIC_PLANNER_BLEND_FRAMES as f32)
-                .clamp(0.0, 1.0);
+            let weight_new = Self::planner_blend_weight(frame_idx, blend_start_frame);
             if weight_new <= f32::EPSILON {
                 blended.push(existing_motion_qpos[old_frame_idx].clone());
             } else if (1.0 - weight_new).abs() <= f32::EPSILON {
@@ -1853,7 +1928,7 @@ impl GearSonicPolicy {
         obs: &Observation,
         motion_tokens: &[f32],
     ) -> CoreResult<JointPositionTargets> {
-        if self.supports_real_tracking_contract {
+        if self.contract_support.real_tracking {
             return Err(robowbc_core::WbcError::UnsupportedCommand(
                 "GearSonicPolicy motion-token mode is only wired for the fixture-style single-input pipeline; use WbcCommand::Velocity for published planner_sonic.onnx checkpoints",
             ));
@@ -2166,12 +2241,12 @@ impl GearSonicPolicy {
         obs: &Observation,
         twist: &robowbc_core::Twist,
     ) -> CoreResult<JointPositionTargets> {
-        if !self.supports_real_tracking_contract {
+        if !self.contract_support.real_tracking {
             return Err(robowbc_core::WbcError::UnsupportedCommand(
                 "GearSonicPolicy velocity mode requires the published planner_sonic.onnx contract together with the real encoder/decoder obs_dict checkpoints",
             ));
         }
-        if !self.supports_real_planner_contract {
+        if !self.contract_support.real_planner {
             return Err(robowbc_core::WbcError::UnsupportedCommand(
                 "GearSonicPolicy velocity mode requires the published planner_sonic.onnx contract",
             ));
@@ -2233,11 +2308,9 @@ impl GearSonicPolicy {
                     planner_command,
                     planned_50hz,
                 )?;
-            } else {
-                if planner_state.pending_replan.is_none() {
-                    self.start_async_planner_replan(&mut planner_state, planner_command);
-                    planner_state.last_command = Some(planner_command);
-                }
+            } else if planner_state.pending_replan.is_none() {
+                self.start_async_planner_replan(&mut planner_state, planner_command);
+                planner_state.last_command = Some(planner_command);
             }
             planner_state.steps_since_plan = 0;
             planner_state.steps_since_planner_tick = 0;
@@ -2506,7 +2579,7 @@ impl GearSonicPolicy {
 
     /// Real encoder → decoder tracking contract.
     fn run_tracking_contract(&self, obs: &Observation) -> CoreResult<JointPositionTargets> {
-        if !self.supports_real_tracking_contract {
+        if !self.contract_support.real_tracking {
             return Err(robowbc_core::WbcError::UnsupportedCommand(
                 "GearSonicPolicy tracking mode requires encoder/decoder checkpoints with the obs_dict contract",
             ));
@@ -2542,7 +2615,10 @@ impl GearSonicPolicy {
                     "reference motion state mutex poisoned".to_owned(),
                 )
             })?;
-            reference_motion_state.advance(reference_motion, self.reference_motion_loop_playback);
+            reference_motion_state.advance(
+                reference_motion,
+                self.reference_motion_playback.loop_playback,
+            );
         }
 
         Ok(targets)
@@ -2571,7 +2647,7 @@ impl GearSonicPolicy {
             )
         })?;
         *reference_motion_state =
-            GearSonicReferenceMotionState::new(self.reference_motion_auto_play);
+            GearSonicReferenceMotionState::new(self.reference_motion_playback.auto_play);
 
         Ok(())
     }
