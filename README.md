@@ -107,7 +107,8 @@ generators, and assembles the final static bundle into `/tmp/robowbc-site`.
 Set `MUJOCO_DOWNLOAD_DIR=/your/cache make site` if you want a different cache
 location, or override `SITE_OUTPUT_DIR=/your/output make site` if you want the
 site somewhere else. `make site-smoke` validates the generated bundle layout
-without serving it.
+without serving it, and `make site-serve-check` does a short start/stop probe
+of the local HTTP server.
 
 The output folder contains `index.html`, `manifest.json`, `policies/<policy>/`
 folders with per-policy HTML plus raw run artifacts, `benchmarks/nvidia/` with
