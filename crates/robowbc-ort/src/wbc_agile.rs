@@ -618,6 +618,11 @@ inventory::submit! {
 pub fn force_link() {}
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::float_cmp,
+    clippy::unreadable_literal
+)]
 mod tests {
     use super::*;
     use robowbc_core::{JointLimit, PdGains, WbcPolicy};
