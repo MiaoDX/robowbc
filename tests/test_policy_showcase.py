@@ -307,6 +307,49 @@ class PolicyShowcaseTests(unittest.TestCase):
         self.assertEqual(manifest[0]["quality_verdict"]["label"], "BAD")
         self.assertIn("mean joint error", manifest[0]["quality_verdict"]["summary"])
 
+    def test_classify_quality_verdict_marks_straight_velocity_run_as_good(self) -> None:
+        verdict = SHOWCASE.classify_quality_verdict(
+            "ok",
+            "velocity_schedule",
+            {
+                "dropped_frames": 1,
+                "achieved_frequency_hz": 47.5,
+                "velocity_tracking": {
+                    "vx_rmse_mps": 0.346,
+                    "yaw_rate_rmse_rad_s": 0.894,
+                    "heading_change_deg": 2.4,
+                    "forward_distance_m": 2.91,
+                },
+                "target_tracking": {
+                    "frames_below_base_height_0_4m": 0,
+                    "frames_below_base_height_0_2m": 0,
+                },
+            },
+        )
+
+        self.assertEqual(verdict["label"], "GOOD")
+        self.assertEqual(verdict["css_class"], "good")
+
+    def test_classify_quality_verdict_marks_stable_tracking_as_good(self) -> None:
+        verdict = SHOWCASE.classify_quality_verdict(
+            "ok",
+            "motion_tokens",
+            {
+                "dropped_frames": 0,
+                "achieved_frequency_hz": 47.6,
+                "target_tracking": {
+                    "mean_joint_abs_error_rad": 0.13,
+                    "p95_joint_abs_error_rad": 0.42,
+                    "base_height_min_m": 0.74,
+                    "frames_below_base_height_0_4m": 0,
+                    "frames_below_base_height_0_2m": 0,
+                },
+            },
+        )
+
+        self.assertEqual(verdict["label"], "GOOD")
+        self.assertEqual(verdict["css_class"], "good")
+
     def test_render_html_marks_mixed_velocity_cards_as_unknown(self) -> None:
         entry = make_entry(
             card_id="wbc_agile",

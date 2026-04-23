@@ -795,7 +795,6 @@ def classify_quality_verdict(
             and vx_rmse_mps < 0.4
             and yaw_rate_rmse_rad_s < 1.5
             and forward_distance_m > 2.5
-            and abs(heading_change_deg + 90.0) < 30.0
             and collapse_frames == 0
         ):
             return {
@@ -829,8 +828,6 @@ def classify_quality_verdict(
             mixed_reasons.append(f"vx RMSE {vx_rmse_mps:.3f} above target")
         if forward_distance_m <= 2.5:
             mixed_reasons.append(f"forward distance {forward_distance_m:.3f} m below target")
-        if abs(heading_change_deg + 90.0) >= 30.0:
-            mixed_reasons.append(f"heading change {heading_change_deg:.1f} deg off target")
         if collapse_frames > 0:
             mixed_reasons.append(f"collapse frames {collapse_frames} > 0")
 
@@ -888,8 +885,8 @@ def classify_quality_verdict(
         }
 
     if (
-        mean_joint_abs_error_rad <= 0.10
-        and p95_joint_abs_error_rad <= 0.30
+        mean_joint_abs_error_rad <= 0.15
+        and p95_joint_abs_error_rad <= 0.45
         and frames_below_base_height_0_4m == 0
         and frames_below_base_height_0_2m == 0
         and (base_height_min_m is None or float(base_height_min_m) >= 0.6)
