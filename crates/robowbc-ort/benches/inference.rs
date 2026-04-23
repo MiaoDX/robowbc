@@ -190,6 +190,7 @@ fn load_gear_sonic_policy() -> Option<GearSonicPolicy> {
         encoder: test_ort_config(encoder_path),
         decoder: test_ort_config(decoder_path),
         planner: test_ort_config(planner_path),
+        reference_motion: None,
         robot,
     };
     Some(GearSonicPolicy::new(config).expect("policy should build"))
