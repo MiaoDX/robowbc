@@ -1,7 +1,10 @@
 //! `MuJoCo`-backed [`RobotTransport`] implementation.
 
 use crate::{MujocoConfig, MujocoGainProfile, SimError};
-use mujoco_rs::wrappers::{MjData, MjModel, MjtJoint, MjtSensor, MjtTrn};
+use mujoco_rs::renderer::MjRenderer;
+use mujoco_rs::wrappers::{
+    MjData, MjModel, MjtJoint, MjtObj, MjtSensor, MjtState, MjtTrn, MjvCamera,
+};
 use robowbc_comm::{
     clamp_position_targets, clamp_velocity_targets, CommError, ImuSample, JointState,
     RobotTransport,
@@ -30,12 +33,47 @@ struct SensorSpan {
 #[derive(Debug, Clone, Copy)]
 struct FloatingBaseMapping {
     qpos_adr: usize,
+    #[allow(dead_code)]
     qvel_adr: usize,
 }
 
 struct LoadedModel {
     model: MjModel,
     model_variant: &'static str,
+}
+
+/// Serializable snapshot of the current live MuJoCo state.
+#[derive(Debug, Clone)]
+pub struct MujocoLiveState {
+    /// Simulation time in seconds.
+    pub sim_time_secs: f64,
+    /// Current per-joint positions in robot-config order.
+    pub joint_positions: Vec<f32>,
+    /// Current per-joint velocities in robot-config order.
+    pub joint_velocities: Vec<f32>,
+    /// Gravity vector in the robot body frame.
+    pub gravity_vector: [f32; 3],
+    /// Body-frame angular velocity from the IMU gyro.
+    pub angular_velocity: [f32; 3],
+    /// Optional floating-base pose in world coordinates.
+    pub base_pose: Option<BasePose>,
+    /// Raw MuJoCo generalized coordinates.
+    pub qpos: Vec<f32>,
+    /// Raw MuJoCo generalized velocities.
+    pub qvel: Vec<f32>,
+}
+
+/// RGB camera capture returned by the transport.
+#[derive(Debug, Clone)]
+pub struct MujocoCameraFrame {
+    /// Camera name requested by the caller.
+    pub camera_name: String,
+    /// Frame width in pixels.
+    pub width: usize,
+    /// Frame height in pixels.
+    pub height: usize,
+    /// Packed RGB bytes in row-major order.
+    pub rgb: Vec<u8>,
 }
 
 const PRIMARY_GYRO_SENSOR_NAMES: &[&str] = &["imu_gyro", "imu-angular-velocity"];
@@ -190,10 +228,134 @@ impl MujocoTransport {
             ],
         ))
     }
-}
 
-impl RobotTransport for MujocoTransport {
-    fn recv_joint_state(&mut self) -> Result<JointState, CommError> {
+    /// Returns the current simulation time in seconds.
+    #[must_use]
+    pub fn sim_time_secs(&self) -> f64 {
+        self.data.time()
+    }
+
+    /// Returns a snapshot of the current MuJoCo `qpos` state as `f32`.
+    #[must_use]
+    pub fn qpos_snapshot(&self) -> Vec<f32> {
+        self.data
+            .qpos()
+            .iter()
+            .map(|value| mj_scalar(*value))
+            .collect()
+    }
+
+    /// Returns a snapshot of the current MuJoCo `qvel` state as `f32`.
+    #[must_use]
+    pub fn qvel_snapshot(&self) -> Vec<f32> {
+        self.data
+            .qvel()
+            .iter()
+            .map(|value| mj_scalar(*value))
+            .collect()
+    }
+
+    /// Resets the simulator to the configured default pose.
+    pub fn reset_state(&mut self) {
+        self.data.reset();
+        initialize_state(&mut self.data, &self.robot_config, &self.joint_mappings);
+        self.prev_positions
+            .clone_from(&self.robot_config.default_pose);
+    }
+
+    /// Saves the current full MuJoCo physics state.
+    #[must_use]
+    pub fn full_physics_state(&self) -> Vec<f64> {
+        self.data
+            .state(MjtState::mjSTATE_FULLPHYSICS as u32)
+            .into_vec()
+    }
+
+    /// Restores a previously saved full MuJoCo physics state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SimError`] if the provided state vector does not match the
+    /// current model's expected layout.
+    pub fn restore_full_physics_state(&mut self, state: &[f64]) -> Result<(), SimError> {
+        // SAFETY: the state comes from MuJoCo's own `mj_getState` layout and we
+        // immediately call `mj_forward` afterwards to re-validate derived arrays.
+        unsafe {
+            self.data
+                .set_state(state, MjtState::mjSTATE_FULLPHYSICS as u32)
+                .map_err(|error| SimError::StateError {
+                    reason: error.to_string(),
+                })?;
+        }
+        self.data.forward();
+        let (joint_positions, _) = self.joint_state_vectors();
+        self.prev_positions = joint_positions;
+        Ok(())
+    }
+
+    /// Returns a snapshot of the current simulator state.
+    #[must_use]
+    pub fn state_snapshot(&self) -> MujocoLiveState {
+        let (joint_positions, joint_velocities) = self.joint_state_vectors();
+        let (gravity_vector, angular_velocity, base_pose) = self.imu_snapshot();
+        MujocoLiveState {
+            sim_time_secs: self.sim_time_secs(),
+            joint_positions,
+            joint_velocities,
+            gravity_vector,
+            angular_velocity,
+            base_pose,
+            qpos: self.qpos_snapshot(),
+            qvel: self.qvel_snapshot(),
+        }
+    }
+
+    /// Captures an RGB frame from a named MuJoCo camera or a built-in preset.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SimError`] if the renderer cannot be initialized or rendering
+    /// fails in the current environment.
+    pub fn capture_camera_rgb(
+        &mut self,
+        camera_name: &str,
+        width: usize,
+        height: usize,
+    ) -> Result<MujocoCameraFrame, SimError> {
+        let mut renderer = MjRenderer::builder()
+            .width(width as u32)
+            .height(height as u32)
+            .rgb(true)
+            .depth(false)
+            .camera(self.camera_for_name(camera_name))
+            .build(self.data.model())
+            .map_err(|error| SimError::RenderFailed {
+                reason: error.to_string(),
+            })?;
+        renderer
+            .sync_data(&mut self.data)
+            .map_err(|error| SimError::RenderFailed {
+                reason: error.to_string(),
+            })?;
+        renderer.render().map_err(|error| SimError::RenderFailed {
+            reason: error.to_string(),
+        })?;
+        let rgb = renderer
+            .rgb_flat()
+            .ok_or_else(|| SimError::RenderFailed {
+                reason: "renderer completed without RGB output".to_owned(),
+            })?
+            .to_vec();
+
+        Ok(MujocoCameraFrame {
+            camera_name: camera_name.to_owned(),
+            width,
+            height,
+            rgb,
+        })
+    }
+
+    fn joint_state_vectors(&self) -> (Vec<f32>, Vec<f32>) {
         let qpos = self.data.qpos();
         let qvel = self.data.qvel();
         let mut positions = self.robot_config.default_pose.clone();
@@ -208,14 +370,10 @@ impl RobotTransport for MujocoTransport {
             }
         }
 
-        Ok(JointState {
-            positions,
-            velocities,
-            timestamp: Instant::now(),
-        })
+        (positions, velocities)
     }
 
-    fn recv_imu(&mut self) -> Result<ImuSample, CommError> {
+    fn imu_snapshot(&self) -> ([f32; 3], [f32; 3], Option<BasePose>) {
         let sensor = self.data.sensordata();
         let angular_velocity = sensor_vec3(sensor, self.gyro_sensor);
 
@@ -228,33 +386,23 @@ impl RobotTransport for MujocoTransport {
                 qpos[floating_base.qpos_adr + 6],
             ];
             let gravity_vector = gravity_from_free_joint_quaternion(quat_wxyz);
-
-            return Ok(ImuSample {
-                gravity_vector,
-                angular_velocity,
-                base_pose: Some(BasePose {
-                    position_world: [
-                        mj_scalar(qpos[floating_base.qpos_adr]),
-                        mj_scalar(qpos[floating_base.qpos_adr + 1]),
-                        mj_scalar(qpos[floating_base.qpos_adr + 2]),
-                    ],
-                    rotation_xyzw: [
-                        mj_scalar(qpos[floating_base.qpos_adr + 4]),
-                        mj_scalar(qpos[floating_base.qpos_adr + 5]),
-                        mj_scalar(qpos[floating_base.qpos_adr + 6]),
-                        mj_scalar(qpos[floating_base.qpos_adr + 3]),
-                    ],
-                }),
-                timestamp: Instant::now(),
-            });
+            let base_pose = BasePose {
+                position_world: [
+                    mj_scalar(qpos[floating_base.qpos_adr]),
+                    mj_scalar(qpos[floating_base.qpos_adr + 1]),
+                    mj_scalar(qpos[floating_base.qpos_adr + 2]),
+                ],
+                rotation_xyzw: [
+                    mj_scalar(qpos[floating_base.qpos_adr + 4]),
+                    mj_scalar(qpos[floating_base.qpos_adr + 5]),
+                    mj_scalar(qpos[floating_base.qpos_adr + 6]),
+                    mj_scalar(qpos[floating_base.qpos_adr + 3]),
+                ],
+            };
+            return (gravity_vector, angular_velocity, Some(base_pose));
         }
 
         let accel = sensor_slice(sensor, self.accel_sensor);
-
-        // Read accelerometer (3 values). When stationary the accelerometer
-        // measures the reaction to gravity: roughly [0, 0, +9.81].
-        // The policy expects a unit gravity vector in body frame, so we
-        // negate and normalise.
         let ax = mj_scalar(accel[0]);
         let ay = mj_scalar(accel[1]);
         let az = mj_scalar(accel[2]);
@@ -266,10 +414,64 @@ impl RobotTransport for MujocoTransport {
             [0.0, 0.0, -1.0]
         };
 
+        (gravity_vector, angular_velocity, None)
+    }
+
+    fn camera_for_name(&self, camera_name: &str) -> MjvCamera {
+        if let Some(camera_id) = self
+            .data
+            .model()
+            .name_to_id(MjtObj::mjOBJ_CAMERA, camera_name)
+        {
+            return MjvCamera::new_fixed(camera_id);
+        }
+
+        let mut camera = MjvCamera::new_tracking(0);
+        match camera_name {
+            "side" => {
+                camera.distance = 2.5;
+                camera.azimuth = 90.0;
+                camera.elevation = -10.0;
+            }
+            "top" => {
+                camera.distance = 3.0;
+                camera.azimuth = 0.0;
+                camera.elevation = -80.0;
+            }
+            "front" => {
+                camera.distance = 2.2;
+                camera.azimuth = 180.0;
+                camera.elevation = -15.0;
+            }
+            _ => {
+                camera.distance = 2.5;
+                camera.azimuth = 135.0;
+                camera.elevation = -20.0;
+            }
+        }
+        camera.lookat = [0.0, 0.0, 0.8];
+        camera
+    }
+}
+
+impl RobotTransport for MujocoTransport {
+    fn recv_joint_state(&mut self) -> Result<JointState, CommError> {
+        let (positions, velocities) = self.joint_state_vectors();
+
+        Ok(JointState {
+            positions,
+            velocities,
+            timestamp: Instant::now(),
+        })
+    }
+
+    fn recv_imu(&mut self) -> Result<ImuSample, CommError> {
+        let (gravity_vector, angular_velocity, base_pose) = self.imu_snapshot();
+
         Ok(ImuSample {
             gravity_vector,
             angular_velocity,
-            base_pose: None,
+            base_pose,
             timestamp: Instant::now(),
         })
     }

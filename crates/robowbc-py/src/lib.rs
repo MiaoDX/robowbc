@@ -53,8 +53,13 @@
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 #[allow(clippy::wildcard_imports)]
 use pyo3::prelude::*;
-use robowbc_core::{Observation, Twist, WbcCommand};
+use pyo3::types::{PyBytes, PyDict};
+use robowbc_comm::{run_control_tick, CommConfig};
+use robowbc_core::{Observation, RobotConfig, Twist, WbcCommand, WbcPolicy};
 use robowbc_registry::WbcRegistry;
+use robowbc_sim::{MujocoConfig, MujocoTransport};
+use serde::Deserialize;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -208,6 +213,605 @@ fn into_observation(obs: &PyObservation) -> PyResult<Observation> {
         command,
         timestamp: Instant::now(),
     })
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionPolicySection {
+    name: String,
+    #[serde(default = "default_policy_table")]
+    config: toml::Value,
+}
+
+fn default_policy_table() -> toml::Value {
+    toml::Value::Table(toml::map::Map::new())
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionRobotSection {
+    config_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SessionVelocityScheduleSegmentConfig {
+    duration_secs: f32,
+    start: [f32; 3],
+    end: [f32; 3],
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SessionVelocityScheduleConfig {
+    segments: Vec<SessionVelocityScheduleSegmentConfig>,
+}
+
+impl SessionVelocityScheduleConfig {
+    fn validate(&self) -> Result<(), String> {
+        if self.segments.is_empty() {
+            return Err("runtime.velocity_schedule.segments must not be empty".to_owned());
+        }
+
+        for (index, segment) in self.segments.iter().enumerate() {
+            if !segment.duration_secs.is_finite() || segment.duration_secs <= 0.0 {
+                return Err(format!(
+                    "runtime.velocity_schedule.segments[{index}].duration_secs must be a positive finite number"
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn sample_velocity(&self, elapsed_secs: f32) -> [f32; 3] {
+        let mut remaining = elapsed_secs.max(0.0);
+
+        for segment in &self.segments {
+            if remaining <= segment.duration_secs {
+                let alpha = if segment.duration_secs <= f32::EPSILON {
+                    1.0
+                } else {
+                    (remaining / segment.duration_secs).clamp(0.0, 1.0)
+                };
+                return [
+                    lerp_f32(segment.start[0], segment.end[0], alpha),
+                    lerp_f32(segment.start[1], segment.end[1], alpha),
+                    lerp_f32(segment.start[2], segment.end[2], alpha),
+                ];
+            }
+            remaining -= segment.duration_secs;
+        }
+
+        self.segments
+            .last()
+            .map_or([0.0, 0.0, 0.0], |segment| segment.end)
+    }
+
+    fn flatten(&self) -> Vec<f32> {
+        let mut flattened = Vec::with_capacity(self.segments.len() * 7);
+        for segment in &self.segments {
+            flattened.push(segment.duration_secs);
+            flattened.extend_from_slice(&segment.start);
+            flattened.extend_from_slice(&segment.end);
+        }
+        flattened
+    }
+
+    fn from_flattened_data(data: &[f32]) -> PyResult<Self> {
+        if data.is_empty() || data.len() % 7 != 0 {
+            return Err(PyValueError::new_err(
+                "velocity_schedule command_data must contain N groups of 7 floats",
+            ));
+        }
+
+        let mut segments = Vec::with_capacity(data.len() / 7);
+        for chunk in data.chunks_exact(7) {
+            segments.push(SessionVelocityScheduleSegmentConfig {
+                duration_secs: chunk[0],
+                start: [chunk[1], chunk[2], chunk[3]],
+                end: [chunk[4], chunk[5], chunk[6]],
+            });
+        }
+
+        let schedule = Self { segments };
+        schedule.validate().map_err(PyValueError::new_err)?;
+        Ok(schedule)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct SessionRuntimeConfig {
+    #[serde(default)]
+    motion_tokens: Option<Vec<f32>>,
+    #[serde(default)]
+    velocity: Option<[f32; 3]>,
+    #[serde(default)]
+    velocity_schedule: Option<SessionVelocityScheduleConfig>,
+    #[serde(default)]
+    kinematic_pose: Option<toml::Value>,
+    #[serde(default)]
+    standing_placeholder_tracking: bool,
+    #[serde(default)]
+    reference_motion_tracking: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionConfig {
+    policy: SessionPolicySection,
+    robot: SessionRobotSection,
+    #[serde(default, alias = "communication")]
+    comm: CommConfig,
+    #[serde(default)]
+    runtime: SessionRuntimeConfig,
+    sim: MujocoConfig,
+}
+
+#[derive(Debug, Clone)]
+enum SessionCommandSpec {
+    Velocity([f32; 3]),
+    VelocitySchedule(SessionVelocityScheduleConfig),
+    MotionTokens(Vec<f32>),
+    JointTargets(Vec<f32>),
+}
+
+impl SessionCommandSpec {
+    fn from_runtime_config(
+        runtime: &SessionRuntimeConfig,
+        policy_name: &str,
+    ) -> Result<Self, String> {
+        let mut configured_fields = Vec::new();
+        if runtime.motion_tokens.is_some() {
+            configured_fields.push("runtime.motion_tokens");
+        }
+        if runtime.velocity.is_some() {
+            configured_fields.push("runtime.velocity");
+        }
+        if runtime.velocity_schedule.is_some() {
+            configured_fields.push("runtime.velocity_schedule");
+        }
+        if runtime.kinematic_pose.is_some() {
+            configured_fields.push("runtime.kinematic_pose");
+        }
+        if runtime.standing_placeholder_tracking {
+            configured_fields.push("runtime.standing_placeholder_tracking");
+        }
+        if runtime.reference_motion_tracking {
+            configured_fields.push("runtime.reference_motion_tracking");
+        }
+
+        if configured_fields.len() > 1 {
+            return Err(format!(
+                "runtime command fields are mutually exclusive; found {}",
+                configured_fields.join(", ")
+            ));
+        }
+
+        if runtime.kinematic_pose.is_some() {
+            return Err(
+                "runtime.kinematic_pose is not yet supported by robowbc.MujocoSession".to_owned(),
+            );
+        }
+
+        if let Some(velocity) = runtime.velocity {
+            return Ok(Self::Velocity(velocity));
+        }
+
+        if let Some(schedule) = &runtime.velocity_schedule {
+            schedule.validate()?;
+            return Ok(Self::VelocitySchedule(schedule.clone()));
+        }
+
+        if let Some(tokens) = &runtime.motion_tokens {
+            if tokens.is_empty() {
+                return Err(
+                    "runtime.motion_tokens must not be empty; use standing_placeholder_tracking or reference_motion_tracking for the Gear-Sonic tracking paths"
+                        .to_owned(),
+                );
+            }
+            return Ok(Self::MotionTokens(tokens.clone()));
+        }
+
+        if runtime.standing_placeholder_tracking || runtime.reference_motion_tracking {
+            if policy_name != "gear_sonic" {
+                return Err(format!(
+                    "Gear-Sonic tracking aliases are only supported when policy.name = \"gear_sonic\"; got {:?}",
+                    policy_name
+                ));
+            }
+            return Ok(Self::MotionTokens(Vec::new()));
+        }
+
+        Ok(Self::MotionTokens(vec![0.0]))
+    }
+
+    fn from_command_type_and_data(command_type: &str, command_data: &[f32]) -> PyResult<Self> {
+        match command_type {
+            "velocity" => {
+                if command_data.len() == 3 {
+                    Ok(Self::Velocity([
+                        command_data[0],
+                        command_data[1],
+                        command_data[2],
+                    ]))
+                } else if command_data.len() >= 6 {
+                    Ok(Self::Velocity([
+                        command_data[0],
+                        command_data[1],
+                        command_data[5],
+                    ]))
+                } else {
+                    Err(PyValueError::new_err(
+                        "velocity command_data must contain either [vx, vy, yaw_rate] or the 6D Observation layout",
+                    ))
+                }
+            }
+            "velocity_schedule" => Ok(Self::VelocitySchedule(
+                SessionVelocityScheduleConfig::from_flattened_data(command_data)?,
+            )),
+            "motion_tokens" => Ok(Self::MotionTokens(command_data.to_vec())),
+            "joint_targets" => Ok(Self::JointTargets(command_data.to_vec())),
+            other => Err(PyValueError::new_err(format!(
+                "unknown command_type {other:?}; expected \"velocity\", \"velocity_schedule\", \"motion_tokens\", or \"joint_targets\""
+            ))),
+        }
+    }
+
+    fn command_type(&self) -> &'static str {
+        match self {
+            Self::Velocity(_) => "velocity",
+            Self::VelocitySchedule(_) => "velocity_schedule",
+            Self::MotionTokens(_) => "motion_tokens",
+            Self::JointTargets(_) => "joint_targets",
+        }
+    }
+
+    fn command_data(&self) -> Vec<f32> {
+        match self {
+            Self::Velocity([vx, vy, yaw_rate]) => vec![*vx, *vy, *yaw_rate],
+            Self::VelocitySchedule(schedule) => schedule.flatten(),
+            Self::MotionTokens(tokens) | Self::JointTargets(tokens) => tokens.clone(),
+        }
+    }
+
+    fn command_data_for_tick(&self, tick: usize, frequency_hz: u32) -> Vec<f32> {
+        match self {
+            Self::VelocitySchedule(schedule) => {
+                let elapsed_secs = elapsed_secs_for_tick(tick, frequency_hz);
+                schedule.sample_velocity(elapsed_secs).to_vec()
+            }
+            _ => self.command_data(),
+        }
+    }
+
+    fn command_for_tick(&self, tick: usize, frequency_hz: u32) -> WbcCommand {
+        match self {
+            Self::Velocity([vx, vy, yaw_rate]) => WbcCommand::Velocity(Twist {
+                linear: [*vx, *vy, 0.0],
+                angular: [0.0, 0.0, *yaw_rate],
+            }),
+            Self::VelocitySchedule(schedule) => {
+                let elapsed_secs = elapsed_secs_for_tick(tick, frequency_hz);
+                let [vx, vy, yaw_rate] = schedule.sample_velocity(elapsed_secs);
+                WbcCommand::Velocity(Twist {
+                    linear: [vx, vy, 0.0],
+                    angular: [0.0, 0.0, yaw_rate],
+                })
+            }
+            Self::MotionTokens(tokens) => WbcCommand::MotionTokens(tokens.clone()),
+            Self::JointTargets(targets) => WbcCommand::JointTargets(targets.clone()),
+        }
+    }
+}
+
+fn lerp_f32(start: f32, end: f32, alpha: f32) -> f32 {
+    start + alpha * (end - start)
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn elapsed_secs_for_tick(tick: usize, frequency_hz: u32) -> f32 {
+    tick as f32 / frequency_hz as f32
+}
+
+fn insert_robot_into_policy(
+    mut policy_cfg: toml::Value,
+    robot: &RobotConfig,
+) -> Result<toml::Value, String> {
+    let robot_value = toml::Value::try_from(robot)
+        .map_err(|error| format!("failed to serialize robot config into TOML: {error}"))?;
+
+    let table = policy_cfg
+        .as_table_mut()
+        .ok_or("[policy.config] must be a TOML table".to_owned())?;
+    table.insert("robot".to_owned(), robot_value);
+    Ok(policy_cfg)
+}
+
+fn parse_action_command(action: &Bound<'_, PyAny>) -> PyResult<SessionCommandSpec> {
+    let dict = action.cast::<PyDict>().map_err(|_| {
+        PyValueError::new_err(
+            "action must be a dict containing command_type/command_data, velocity, motion_tokens, or joint_targets",
+        )
+    })?;
+
+    if let Some(command_type) = dict.get_item("command_type")? {
+        let command_type = command_type.extract::<String>()?;
+        let command_data_item = dict
+            .get_item("command_data")?
+            .ok_or_else(|| PyValueError::new_err("action.command_data is required"))?;
+        let command_data = command_data_item.extract::<Vec<f32>>()?;
+        return SessionCommandSpec::from_command_type_and_data(&command_type, &command_data);
+    }
+
+    if let Some(velocity) = dict.get_item("velocity")? {
+        let velocity = velocity.extract::<Vec<f32>>()?;
+        return SessionCommandSpec::from_command_type_and_data("velocity", &velocity);
+    }
+
+    if let Some(tokens) = dict.get_item("motion_tokens")? {
+        let tokens = tokens.extract::<Vec<f32>>()?;
+        return SessionCommandSpec::from_command_type_and_data("motion_tokens", &tokens);
+    }
+
+    if let Some(targets) = dict.get_item("joint_targets")? {
+        let targets = targets.extract::<Vec<f32>>()?;
+        return SessionCommandSpec::from_command_type_and_data("joint_targets", &targets);
+    }
+
+    Err(PyValueError::new_err(
+        "action must provide command_type/command_data, velocity, motion_tokens, or joint_targets",
+    ))
+}
+
+fn command_dict(
+    py: Python<'_>,
+    command: &SessionCommandSpec,
+    tick: usize,
+    frequency_hz: u32,
+) -> PyResult<Py<PyAny>> {
+    let dict = PyDict::new(py);
+    dict.set_item("command_type", command.command_type())?;
+    dict.set_item(
+        "command_data",
+        command.command_data_for_tick(tick, frequency_hz),
+    )?;
+    Ok(dict.unbind().into_any())
+}
+
+fn base_pose_dict(
+    py: Python<'_>,
+    base_pose: Option<robowbc_core::BasePose>,
+) -> PyResult<Py<PyAny>> {
+    match base_pose {
+        Some(base_pose) => {
+            let dict = PyDict::new(py);
+            dict.set_item("position_world", base_pose.position_world.to_vec())?;
+            dict.set_item("rotation_xyzw", base_pose.rotation_xyzw.to_vec())?;
+            Ok(dict.unbind().into_any())
+        }
+        None => Ok(py.None()),
+    }
+}
+
+/// Live MuJoCo-backed RoboWBC session for Python callers.
+#[pyclass(name = "MujocoSession", unsendable)]
+pub struct PyMujocoSession {
+    policy_name: String,
+    policy: Box<dyn WbcPolicy>,
+    robot: RobotConfig,
+    transport: MujocoTransport,
+    command_frequency_hz: u32,
+    default_command: SessionCommandSpec,
+    current_command: SessionCommandSpec,
+    tick_index: usize,
+    initial_state: Vec<f64>,
+    last_targets: Option<Vec<f32>>,
+    render_width: usize,
+    render_height: usize,
+}
+
+impl PyMujocoSession {
+    fn current_command_tick(&self) -> usize {
+        self.tick_index.saturating_sub(1)
+    }
+
+    fn state_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let state = self.transport.state_snapshot();
+        let dict = PyDict::new(py);
+        dict.set_item("time", state.sim_time_secs)?;
+        dict.set_item("joint_names", self.robot.joint_names.clone())?;
+        dict.set_item("joint_positions", state.joint_positions)?;
+        dict.set_item("joint_velocities", state.joint_velocities)?;
+        dict.set_item("gravity_vector", state.gravity_vector.to_vec())?;
+        dict.set_item("angular_velocity", state.angular_velocity.to_vec())?;
+        dict.set_item("base_pose", base_pose_dict(py, state.base_pose)?)?;
+        dict.set_item("qpos", state.qpos)?;
+        dict.set_item("qvel", state.qvel)?;
+        dict.set_item(
+            "command",
+            command_dict(
+                py,
+                &self.current_command,
+                self.current_command_tick(),
+                self.command_frequency_hz,
+            )?,
+        )?;
+        match &self.last_targets {
+            Some(last_targets) => dict.set_item("last_targets", last_targets.clone())?,
+            None => dict.set_item("last_targets", py.None())?,
+        }
+        Ok(dict.unbind().into_any())
+    }
+}
+
+#[pymethods]
+impl PyMujocoSession {
+    #[new]
+    #[pyo3(signature = (config_path, render_width=640, render_height=480))]
+    fn new(config_path: &str, render_width: usize, render_height: usize) -> PyResult<Self> {
+        if render_width == 0 || render_height == 0 {
+            return Err(PyValueError::new_err(
+                "render_width and render_height must both be greater than zero",
+            ));
+        }
+
+        let content = std::fs::read_to_string(config_path).map_err(|error| {
+            PyRuntimeError::new_err(format!("cannot read config file {config_path:?}: {error}"))
+        })?;
+        let app: SessionConfig = toml::from_str(&content).map_err(|error| {
+            PyRuntimeError::new_err(format!("invalid TOML in {config_path:?}: {error}"))
+        })?;
+        if app.comm.frequency_hz == 0 {
+            return Err(PyValueError::new_err(
+                "comm.frequency_hz must be greater than zero",
+            ));
+        }
+
+        let robot = RobotConfig::from_toml_file(&app.robot.config_path).map_err(|error| {
+            PyRuntimeError::new_err(format!("failed to load robot config: {error}"))
+        })?;
+        let default_command =
+            SessionCommandSpec::from_runtime_config(&app.runtime, &app.policy.name)
+                .map_err(PyValueError::new_err)?;
+        let policy_cfg = insert_robot_into_policy(app.policy.config.clone(), &robot)
+            .map_err(PyRuntimeError::new_err)?;
+        let policy = WbcRegistry::build(&app.policy.name, &policy_cfg)
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+        let transport = MujocoTransport::new(app.sim.clone(), robot.clone())
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+        let initial_state = transport.full_physics_state();
+
+        Ok(Self {
+            policy_name: app.policy.name,
+            policy,
+            robot,
+            transport,
+            command_frequency_hz: app.comm.frequency_hz,
+            default_command: default_command.clone(),
+            current_command: default_command,
+            tick_index: 0,
+            initial_state,
+            last_targets: None,
+            render_width,
+            render_height,
+        })
+    }
+
+    /// Reset the simulator and policy state.
+    fn reset(&mut self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        self.policy.reset();
+        self.transport
+            .restore_full_physics_state(&self.initial_state)
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+        self.tick_index = 0;
+        self.current_command = self.default_command.clone();
+        self.last_targets = None;
+        self.state_dict(py)
+    }
+
+    /// Advance one Rust-owned policy + MuJoCo control tick.
+    #[pyo3(signature = (action=None))]
+    fn step(&mut self, py: Python<'_>, action: Option<&Bound<'_, PyAny>>) -> PyResult<Py<PyAny>> {
+        let command_spec = match action {
+            Some(action) => parse_action_command(action)?,
+            None => self.current_command.clone(),
+        };
+        let command = command_spec.command_for_tick(self.tick_index, self.command_frequency_hz);
+        let mut last_targets = None;
+
+        run_control_tick(&mut self.transport, command, |obs| {
+            let targets = self.policy.predict(&obs)?;
+            last_targets = Some(targets.positions.clone());
+            Ok(targets)
+        })
+        .map_err(|error| PyRuntimeError::new_err(format!("control tick failed: {error}")))?;
+
+        self.current_command = command_spec;
+        self.tick_index = self.tick_index.saturating_add(1);
+        self.last_targets = last_targets;
+        self.state_dict(py)
+    }
+
+    /// Get the current simulation state.
+    fn get_state(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        self.state_dict(py)
+    }
+
+    /// Save full MuJoCo state plus session command metadata.
+    fn save_state(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let dict = PyDict::new(py);
+        dict.set_item("mujoco_state", self.transport.full_physics_state())?;
+        dict.set_item("tick_index", self.tick_index)?;
+        dict.set_item(
+            "current_command",
+            command_dict(
+                py,
+                &self.current_command,
+                self.current_command_tick(),
+                self.command_frequency_hz,
+            )?,
+        )?;
+        match &self.last_targets {
+            Some(last_targets) => dict.set_item("last_targets", last_targets.clone())?,
+            None => dict.set_item("last_targets", py.None())?,
+        }
+        Ok(dict.unbind().into_any())
+    }
+
+    /// Restore a previously saved simulator state.
+    fn restore_state(&mut self, state: &Bound<'_, PyAny>) -> PyResult<()> {
+        let dict = state.cast::<PyDict>().map_err(|_| {
+            PyValueError::new_err("state must be a dict returned by MujocoSession.save_state()")
+        })?;
+        let mujoco_state_item = dict
+            .get_item("mujoco_state")?
+            .ok_or_else(|| PyValueError::new_err("state.mujoco_state is required"))?;
+        let mujoco_state = mujoco_state_item.extract::<Vec<f64>>()?;
+        self.transport
+            .restore_full_physics_state(&mujoco_state)
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+
+        self.tick_index = match dict.get_item("tick_index")? {
+            Some(tick_index) => tick_index.extract::<usize>()?,
+            None => 0,
+        };
+
+        self.current_command = match dict.get_item("current_command")? {
+            Some(command_state) => parse_action_command(&command_state)?,
+            None => self.default_command.clone(),
+        };
+
+        self.last_targets = match dict.get_item("last_targets")? {
+            Some(last_targets) if !last_targets.is_none() => {
+                Some(last_targets.extract::<Vec<f32>>()?)
+            }
+            _ => None,
+        };
+        Ok(())
+    }
+
+    /// Capture an RGB frame from a named MuJoCo camera or preset.
+    fn capture_camera(&mut self, py: Python<'_>, camera_name: &str) -> PyResult<Py<PyAny>> {
+        let frame = self
+            .transport
+            .capture_camera_rgb(camera_name, self.render_width, self.render_height)
+            .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+        let dict = PyDict::new(py);
+        dict.set_item("name", frame.camera_name)?;
+        dict.set_item("width", frame.width)?;
+        dict.set_item("height", frame.height)?;
+        dict.set_item("rgb", PyBytes::new(py, &frame.rgb))?;
+        dict.set_item("sim_time_secs", self.transport.sim_time_secs())?;
+        Ok(dict.unbind().into_any())
+    }
+
+    /// Return current simulator time in seconds.
+    fn get_sim_time(&self) -> f64 {
+        self.transport.sim_time_secs()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "MujocoSession(policy={:?}, robot={:?}, control_frequency_hz={})",
+            self.policy_name, self.robot.name, self.command_frequency_hz
+        )
+    }
 }
 
 /// Predicted joint position targets returned by a policy.
@@ -373,6 +977,7 @@ fn robowbc(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyObservation>()?;
     m.add_class::<PyJointPositionTargets>()?;
     m.add_class::<PyPolicy>()?;
+    m.add_class::<PyMujocoSession>()?;
     m.add_class::<PyRegistry>()?;
     m.add_function(wrap_pyfunction!(load_from_config, m)?)?;
     Ok(())

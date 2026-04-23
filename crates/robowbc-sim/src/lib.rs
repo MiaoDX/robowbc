@@ -113,6 +113,18 @@ pub enum SimError {
         /// Human-readable failure reason.
         reason: String,
     },
+    /// Physics state snapshot or restore failed.
+    #[error("simulation state error: {reason}")]
+    StateError {
+        /// Human-readable failure reason.
+        reason: String,
+    },
+    /// Camera rendering failed.
+    #[error("simulation render failed: {reason}")]
+    RenderFailed {
+        /// Human-readable failure reason.
+        reason: String,
+    },
 }
 
 // ---------------------------------------------------------------------------

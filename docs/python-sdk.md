@@ -2,8 +2,11 @@
 
 RoboWBC ships a first-class Python SDK backed by the same Rust runtime. Build
 it locally with `maturin develop`, or install a published `robowbc` wheel when
-one is available, then load any registered policy by name and call
-`policy.predict(obs)` — no Rust required.
+one is available, then either:
+
+- load a registered policy by name and call `policy.predict(obs)`, or
+- open a live `robowbc.MujocoSession` that keeps MuJoCo stepping and policy
+  inference in Rust while exposing a Python-facing simulator session
 
 The Python SDK is Linux-only, matching the rest of the RoboWBC runtime.
 
@@ -16,8 +19,14 @@ Python 3.10 or later is required.
 ```bash
 # Requires Rust stable >= 1.75 and maturin
 pip install "maturin>=1.4,<2.0"
+export MUJOCO_DOWNLOAD_DIR="$(pwd)/.cache/mujoco"   # optional auto-download path for MujocoSession
 maturin develop          # installs an editable build into the current venv
 ```
+
+The live `MujocoSession` API additionally requires MuJoCo at build and run
+time. You can either use a system MuJoCo install, or reuse RoboWBC's existing
+auto-download path by setting `MUJOCO_DOWNLOAD_DIR` to an absolute directory
+before running `maturin develop`.
 
 ### Install a published wheel
 
@@ -103,6 +112,48 @@ A loaded policy ready for inference. Obtain via `Registry`.
 | `predict(obs) → targets`     | Run one inference step.                        |
 | `control_frequency_hz() → int` | Required loop rate (typically 50 Hz).        |
 
+### `MujocoSession`
+
+Live Python-facing MuJoCo session around the Rust RoboWBC control path.
+
+```python
+MujocoSession(
+    config_path: str,
+    render_width: int = 640,
+    render_height: int = 480,
+)
+```
+
+The config must include a `[sim]` section. The session loads the robot config,
+builds the policy, creates `MujocoTransport`, and keeps the live control loop in
+Rust.
+
+Supported high-level `step()` action forms:
+
+- `{"velocity": [vx, vy, yaw_rate]}`
+- `{"motion_tokens": [...]}`
+- `{"joint_targets": [...]}`
+- `{"command_type": "...", "command_data": [...]}` for explicit command payloads
+
+Methods:
+
+| Method | Description |
+|--------|-------------|
+| `reset() -> dict` | Reset the simulator and policy state. |
+| `step(action=None) -> dict` | Advance one Rust-owned control tick. |
+| `get_state() -> dict` | Return current joint/base/MuJoCo state. |
+| `save_state() -> dict` | Save full MuJoCo physics state plus session command metadata. |
+| `restore_state(state) -> None` | Restore a state returned by `save_state()`. |
+| `capture_camera(name) -> dict` | Return RGB bytes plus width/height for a named camera or preset. |
+| `get_sim_time() -> float` | Return current simulator time in seconds. |
+
+The session does not reimplement the controller in Python. Each `step()` call:
+
+1. reads live simulator observations in Rust
+2. runs the policy in Rust
+3. sends targets through the Rust MuJoCo transport
+4. advances MuJoCo using the configured substep semantics
+
 ### `Registry`
 
 Factory for building registered policies.
@@ -152,6 +203,31 @@ for _ in range(100):                        # 2 seconds at 50 Hz
 
 A full runnable example is at `examples/python/gear_sonic_inference.py`.
 
+### Live MuJoCo session
+
+```python
+import robowbc
+
+session = robowbc.MujocoSession(
+    "configs/sonic_g1.toml",
+    render_width=640,
+    render_height=480,
+)
+
+state = session.reset()
+print(state["joint_names"][:3])
+
+for _ in range(10):
+    state = session.step({"velocity": [0.3, 0.0, 0.0]})
+
+capture = session.capture_camera("track")
+print(capture["width"], capture["height"], len(capture["rgb"]))
+```
+
+The returned camera payload is intentionally simple: RGB bytes plus dimensions.
+The reference roboharness adapter at `examples/python/roboharness_backend.py`
+wraps that payload into `roboharness.core.capture.CameraView`.
+
 ## LeRobot integration
 
 robowbc can act as a drop-in WBC inference backend for LeRobot's
@@ -188,6 +264,17 @@ policy = robowbc.load_from_config("configs/sonic_g1.toml")
 ```
 
 See `docs/community/lerobot-rfc.md` for the full RFC and submission plan.
+
+## Roboharness live backend path
+
+`examples/python/roboharness_backend.py` shows the intended ownership boundary:
+
+- Python adapts `robowbc.MujocoSession` to roboharness's `SimulatorBackend`
+  protocol
+- Rust continues to own live simulator state reads, policy inference, target
+  generation, and MuJoCo stepping
+- roboharness remains an optional Python-side dependency; no RoboWBC Rust crate
+  depends on it directly
 
 ## Publishing new releases
 

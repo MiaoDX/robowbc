@@ -384,10 +384,32 @@ struct ReportConfig {
     output_path: PathBuf,
     #[serde(default = "default_report_max_frames")]
     max_frames: usize,
+    #[serde(default)]
+    replay_output_path: Option<PathBuf>,
 }
 
 fn default_report_max_frames() -> usize {
     200
+}
+
+impl ReportConfig {
+    fn replay_output_path(&self) -> PathBuf {
+        self.replay_output_path
+            .clone()
+            .unwrap_or_else(|| default_replay_output_path(&self.output_path))
+    }
+}
+
+fn default_replay_output_path(report_output_path: &Path) -> PathBuf {
+    let stem = report_output_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("run_report");
+    let extension = report_output_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("json");
+    report_output_path.with_file_name(format!("{stem}_replay_trace.{extension}"))
 }
 
 #[derive(Debug, Deserialize)]
@@ -546,6 +568,90 @@ struct ReportFrame {
     inference_latency_ms: f64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct ReplayFrame {
+    tick: usize,
+    sim_time_secs: f64,
+    command_data: Vec<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    base_pose: Option<ReportBasePose>,
+    actual_positions: Vec<f32>,
+    actual_velocities: Vec<f32>,
+    target_positions: Vec<f32>,
+    inference_latency_ms: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mujoco_qpos: Option<Vec<f32>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mujoco_qvel: Option<Vec<f32>>,
+}
+
+impl From<&ReplayFrame> for ReportFrame {
+    fn from(frame: &ReplayFrame) -> Self {
+        Self {
+            tick: frame.tick,
+            command_data: frame.command_data.clone(),
+            base_pose: frame.base_pose,
+            actual_positions: frame.actual_positions.clone(),
+            actual_velocities: frame.actual_velocities.clone(),
+            target_positions: frame.target_positions.clone(),
+            inference_latency_ms: frame.inference_latency_ms,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ReplayMujocoState {
+    qpos: Vec<f32>,
+    qvel: Vec<f32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ReplayTransportMetadata {
+    kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model_variant: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    gain_profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timestep_secs: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    substeps: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mapped_joint_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    meshless_public_fallback: Option<bool>,
+}
+
+impl ReplayTransportMetadata {
+    fn synthetic() -> Self {
+        Self {
+            kind: "synthetic".to_owned(),
+            model_path: None,
+            model_variant: None,
+            gain_profile: None,
+            timestep_secs: None,
+            substeps: None,
+            mapped_joint_count: None,
+            meshless_public_fallback: None,
+        }
+    }
+
+    fn hardware(kind: &str) -> Self {
+        Self {
+            kind: kind.to_owned(),
+            model_path: None,
+            model_variant: None,
+            gain_profile: None,
+            timestep_secs: None,
+            substeps: None,
+            mapped_joint_count: None,
+            meshless_public_fallback: None,
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct RunReport {
     report_version: u32,
@@ -558,6 +664,21 @@ struct RunReport {
     requested_max_ticks: Option<usize>,
     metrics: Metrics,
     frames: Vec<ReportFrame>,
+}
+
+#[derive(Debug, Serialize)]
+struct ReplayTrace {
+    schema_version: u32,
+    runtime_report_version: u32,
+    policy_name: String,
+    robot_name: String,
+    joint_names: Vec<String>,
+    command_kind: String,
+    command_data: Vec<f32>,
+    control_frequency_hz: u32,
+    requested_max_ticks: Option<usize>,
+    transport: ReplayTransportMetadata,
+    frames: Vec<ReplayFrame>,
 }
 
 enum CliCommand {
@@ -634,6 +755,24 @@ fn write_run_report(path: &Path, report: &RunReport) -> Result<(), String> {
         .map_err(|e| format!("failed to write run report {}: {e}", path.display()))
 }
 
+fn write_replay_trace(path: &Path, trace: &ReplayTrace) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                format!(
+                    "failed to create replay trace directory {}: {e}",
+                    parent.display()
+                )
+            })?;
+        }
+    }
+
+    let payload = serde_json::to_vec_pretty(trace)
+        .map_err(|e| format!("failed to serialize replay trace as JSON: {e}"))?;
+    std::fs::write(path, payload)
+        .map_err(|e| format!("failed to write replay trace {}: {e}", path.display()))
+}
+
 const TEMPLATE_CONFIG: &str = r#"# RoboWBC configuration template.
 # Use this file as a starting point, then change policy/config paths.
 #
@@ -695,6 +834,7 @@ max_ticks = 1
 # [report]
 # output_path = "artifacts/run/report.json"
 # max_frames = 200
+# replay_output_path = "artifacts/run/report_replay_trace.json"
 
 # Optional Rerun recording (requires `--features robowbc-cli/vis`).
 # [vis]
@@ -744,6 +884,14 @@ trait ReportTelemetryProvider {
     fn report_base_pose(&self) -> Option<ReportBasePose> {
         None
     }
+
+    fn report_sim_time_secs(&self, tick: usize, frequency_hz: u32) -> f64 {
+        f64::from(elapsed_secs_for_tick(tick, frequency_hz))
+    }
+
+    fn report_mujoco_state(&self) -> Option<ReplayMujocoState> {
+        None
+    }
 }
 
 impl ReportTelemetryProvider for SyntheticTransport {}
@@ -758,6 +906,17 @@ impl ReportTelemetryProvider for MujocoTransport {
                 position_world,
                 rotation_xyzw,
             })
+    }
+
+    fn report_sim_time_secs(&self, _tick: usize, _frequency_hz: u32) -> f64 {
+        self.sim_time_secs()
+    }
+
+    fn report_mujoco_state(&self) -> Option<ReplayMujocoState> {
+        Some(ReplayMujocoState {
+            qpos: self.qpos_snapshot(),
+            qvel: self.qvel_snapshot(),
+        })
     }
 }
 
@@ -836,7 +995,7 @@ impl VelocityTrackingAccumulator {
 }
 
 fn compute_velocity_tracking_metrics(
-    frames: &[ReportFrame],
+    frames: &[ReplayFrame],
     runtime_command: &ParsedRuntimeCommand,
     frequency_hz: u32,
 ) -> Option<VelocityTrackingMetrics> {
@@ -933,6 +1092,7 @@ fn run_control_loop_inner<T: RobotTransport + ReportTelemetryProvider>(
     runtime_command: &ParsedRuntimeCommand,
     max_ticks: Option<usize>,
     running: &AtomicBool,
+    replay_frames: &mut Vec<ReplayFrame>,
     report_frames: &mut Vec<ReportFrame>,
     report_max_frames: Option<usize>,
     #[cfg(feature = "vis")] visualizer: &mut Option<RerunVisualizer>,
@@ -954,7 +1114,9 @@ fn run_control_loop_inner<T: RobotTransport + ReportTelemetryProvider>(
         let tick_index = ticks;
         let command = runtime_command.command_for_tick(tick_index, comm.frequency_hz);
         let base_pose = transport.report_base_pose();
-        let mut captured_tick: Option<ReportFrame> = None;
+        let sim_time_secs = transport.report_sim_time_secs(tick_index, comm.frequency_hz);
+        let replay_state = transport.report_mujoco_state();
+        let mut captured_tick: Option<ReplayFrame> = None;
 
         run_control_tick(transport, command.clone(), |obs| {
             let infer_start = Instant::now();
@@ -962,8 +1124,9 @@ fn run_control_loop_inner<T: RobotTransport + ReportTelemetryProvider>(
             let elapsed = infer_start.elapsed();
             inference_total += elapsed;
 
-            captured_tick = Some(ReportFrame {
+            captured_tick = Some(ReplayFrame {
                 tick: tick_index,
+                sim_time_secs,
                 command_data: runtime_command.command_data_for_tick(tick_index, comm.frequency_hz),
                 base_pose,
                 actual_positions: obs.joint_positions.clone(),
@@ -973,6 +1136,8 @@ fn run_control_loop_inner<T: RobotTransport + ReportTelemetryProvider>(
                     .map(|t| t.positions.clone())
                     .unwrap_or_default(),
                 inference_latency_ms: elapsed.as_secs_f64() * 1e3,
+                mujoco_qpos: replay_state.as_ref().map(|state| state.qpos.clone()),
+                mujoco_qvel: replay_state.as_ref().map(|state| state.qvel.clone()),
             });
 
             output
@@ -1013,8 +1178,9 @@ fn run_control_loop_inner<T: RobotTransport + ReportTelemetryProvider>(
             }
 
             if let Some(max_frames) = report_max_frames {
+                replay_frames.push(frame.clone());
                 if report_frames.len() < max_frames {
-                    report_frames.push(frame);
+                    report_frames.push(ReportFrame::from(&frame));
                 }
             }
         }
@@ -1069,12 +1235,13 @@ fn run_control_loop(
     };
 
     let started_at = Instant::now();
+    let mut replay_frames = Vec::new();
     let mut report_frames = Vec::new();
     let report_max_frames = report_config.map(|cfg| cfg.max_frames);
 
     // Transport priority: hardware → sim (if feature enabled) → synthetic.
     #[cfg(feature = "sim")]
-    let (ticks, dropped_frames, inference_total, sent_count) = {
+    let (ticks, dropped_frames, inference_total, sent_count, replay_transport) = {
         if let Some(hw_cfg) = hardware {
             let mut transport =
                 UnitreeG1Transport::connect(hw_cfg, robot.clone(), comm.frequency_hz)
@@ -1087,12 +1254,19 @@ fn run_control_loop(
                 runtime_command,
                 requested_max_ticks,
                 running,
+                &mut replay_frames,
                 &mut report_frames,
                 report_max_frames,
                 #[cfg(feature = "vis")]
                 &mut visualizer,
             )?;
-            (ticks, dropped, inf, ticks)
+            (
+                ticks,
+                dropped,
+                inf,
+                ticks,
+                ReplayTransportMetadata::hardware("unitree_g1"),
+            )
         } else if let Some(sim_cfg) = sim_config {
             let mut transport = MujocoTransport::new(sim_cfg, robot.clone())
                 .map_err(|e| format!("mujoco init failed: {e}"))?;
@@ -1112,12 +1286,28 @@ fn run_control_loop(
                 runtime_command,
                 requested_max_ticks,
                 running,
+                &mut replay_frames,
                 &mut report_frames,
                 report_max_frames,
                 #[cfg(feature = "vis")]
                 &mut visualizer,
             )?;
-            (ticks, dropped, inf, ticks)
+            (
+                ticks,
+                dropped,
+                inf,
+                ticks,
+                ReplayTransportMetadata {
+                    kind: "mujoco".to_owned(),
+                    model_path: Some(transport.sim_config().model_path.display().to_string()),
+                    model_variant: Some(transport.model_variant().to_owned()),
+                    gain_profile: Some(transport.sim_config().gain_profile.as_str().to_owned()),
+                    timestep_secs: Some(transport.sim_config().timestep),
+                    substeps: Some(transport.sim_config().substeps),
+                    mapped_joint_count: Some(transport.mapped_joint_count()),
+                    meshless_public_fallback: Some(transport.uses_meshless_public_fallback()),
+                },
+            )
         } else {
             let mut transport = SyntheticTransport::new(robot.default_pose.clone());
             let (ticks, dropped, inf) = run_control_loop_inner(
@@ -1127,17 +1317,24 @@ fn run_control_loop(
                 runtime_command,
                 requested_max_ticks,
                 running,
+                &mut replay_frames,
                 &mut report_frames,
                 report_max_frames,
                 #[cfg(feature = "vis")]
                 &mut visualizer,
             )?;
-            (ticks, dropped, inf, transport.sent_commands())
+            (
+                ticks,
+                dropped,
+                inf,
+                transport.sent_commands(),
+                ReplayTransportMetadata::synthetic(),
+            )
         }
     };
 
     #[cfg(not(feature = "sim"))]
-    let (ticks, dropped_frames, inference_total, sent_count) = {
+    let (ticks, dropped_frames, inference_total, sent_count, replay_transport) = {
         if let Some(hw_cfg) = hardware {
             let mut transport =
                 UnitreeG1Transport::connect(hw_cfg, robot.clone(), comm.frequency_hz)
@@ -1150,12 +1347,19 @@ fn run_control_loop(
                 runtime_command,
                 requested_max_ticks,
                 running,
+                &mut replay_frames,
                 &mut report_frames,
                 report_max_frames,
                 #[cfg(feature = "vis")]
                 &mut visualizer,
             )?;
-            (ticks, dropped, inf, ticks)
+            (
+                ticks,
+                dropped,
+                inf,
+                ticks,
+                ReplayTransportMetadata::hardware("unitree_g1"),
+            )
         } else {
             let mut transport = SyntheticTransport::new(robot.default_pose.clone());
             let (ticks, dropped, inf) = run_control_loop_inner(
@@ -1165,12 +1369,19 @@ fn run_control_loop(
                 runtime_command,
                 requested_max_ticks,
                 running,
+                &mut replay_frames,
                 &mut report_frames,
                 report_max_frames,
                 #[cfg(feature = "vis")]
                 &mut visualizer,
             )?;
-            (ticks, dropped, inf, transport.sent_commands())
+            (
+                ticks,
+                dropped,
+                inf,
+                transport.sent_commands(),
+                ReplayTransportMetadata::synthetic(),
+            )
         }
     };
 
@@ -1188,7 +1399,7 @@ fn run_control_loop(
     #[allow(clippy::cast_precision_loss)]
     let average_inference_ms = (inference_total.as_secs_f64() * 1_000.0) / (ticks as f64);
     let velocity_tracking =
-        compute_velocity_tracking_metrics(&report_frames, runtime_command, comm.frequency_hz);
+        compute_velocity_tracking_metrics(&replay_frames, runtime_command, comm.frequency_hz);
 
     println!(
         "runtime metrics: ticks={ticks}, sent_commands={sent_count}, avg_inference_ms={average_inference_ms:.3}, achieved_hz={achieved_frequency_hz:.2}, dropped_frames={dropped_frames}",
@@ -1227,6 +1438,23 @@ fn run_control_loop(
         };
         write_run_report(&report_cfg.output_path, &report)?;
         println!("wrote run report to {}", report_cfg.output_path.display());
+
+        let replay_trace = ReplayTrace {
+            schema_version: 1,
+            runtime_report_version: report.report_version,
+            policy_name: policy_name.to_owned(),
+            robot_name: robot.name.clone(),
+            joint_names: robot.joint_names.clone(),
+            command_kind: runtime_command.report_command_kind().to_owned(),
+            command_data: runtime_command.report_command_data(),
+            control_frequency_hz: policy.control_frequency_hz(),
+            requested_max_ticks,
+            transport: replay_transport,
+            frames: replay_frames,
+        };
+        let replay_output_path = report_cfg.replay_output_path();
+        write_replay_trace(&replay_output_path, &replay_trace)?;
+        println!("wrote replay trace to {}", replay_output_path.display());
     }
 
     Ok(metrics)
@@ -1329,6 +1557,25 @@ fn main() {
 mod tests {
     use super::*;
 
+    fn replay_frame(
+        tick: usize,
+        command_data: Vec<f32>,
+        base_pose: Option<ReportBasePose>,
+    ) -> ReplayFrame {
+        ReplayFrame {
+            tick,
+            sim_time_secs: tick as f64 * 0.02,
+            command_data,
+            base_pose,
+            actual_positions: vec![],
+            actual_velocities: vec![],
+            target_positions: vec![],
+            inference_latency_ms: 0.0,
+            mujoco_qpos: None,
+            mujoco_qvel: None,
+        }
+    }
+
     fn assert_vec3_approx_eq(actual: [f32; 3], expected: [f32; 3]) {
         for (actual, expected) in actual.iter().zip(expected.iter()) {
             assert!(
@@ -1424,6 +1671,7 @@ device = "cpu"
 [report]
 output_path = "/tmp/robowbc-showcase/report.json"
 max_frames = 12
+replay_output_path = "/tmp/robowbc-showcase/report_replay_trace.json"
 "#;
 
         let parsed: AppConfig = toml::from_str(config).expect("config should parse");
@@ -1433,6 +1681,26 @@ max_frames = 12
             PathBuf::from("/tmp/robowbc-showcase/report.json")
         );
         assert_eq!(report.max_frames, 12);
+        assert_eq!(
+            report.replay_output_path,
+            Some(PathBuf::from(
+                "/tmp/robowbc-showcase/report_replay_trace.json"
+            ))
+        );
+    }
+
+    #[test]
+    fn report_replay_output_path_defaults_beside_report() {
+        let report = ReportConfig {
+            output_path: PathBuf::from("artifacts/run/run_report.json"),
+            max_frames: 200,
+            replay_output_path: None,
+        };
+
+        assert_eq!(
+            report.replay_output_path(),
+            PathBuf::from("artifacts/run/run_report_replay_trace.json")
+        );
     }
 
     #[test]
@@ -1802,6 +2070,45 @@ standing_placeholder_tracking = true
     }
 
     #[test]
+    fn write_replay_trace_creates_parent_dirs() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("robowbc-replay-trace-{unique}"));
+        let path = root.join("nested/run_report_replay_trace.json");
+
+        let trace = ReplayTrace {
+            schema_version: 1,
+            runtime_report_version: 2,
+            policy_name: "decoupled_wbc".to_owned(),
+            robot_name: "unitree_g1_mock".to_owned(),
+            joint_names: vec!["j0".to_owned()],
+            command_kind: "velocity".to_owned(),
+            command_data: vec![0.2, 0.0, 0.1],
+            control_frequency_hz: 50,
+            requested_max_ticks: Some(1),
+            transport: ReplayTransportMetadata::synthetic(),
+            frames: vec![replay_frame(
+                0,
+                vec![0.2, 0.0, 0.1],
+                Some(ReportBasePose {
+                    position_world: [0.0, 0.0, 0.78],
+                    rotation_xyzw: [0.0, 0.0, 0.0, 1.0],
+                }),
+            )],
+        };
+
+        write_replay_trace(&path, &trace).expect("replay trace should be written");
+        let raw = std::fs::read_to_string(&path).expect("replay trace should be readable");
+        assert!(raw.contains("\"schema_version\": 1"));
+        assert!(raw.contains("\"runtime_report_version\": 2"));
+        assert!(raw.contains("\"sim_time_secs\": 0.0"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn validate_config_rejects_unknown_inference_backend() {
         let config = AppConfig {
             policy: PolicySection {
@@ -1833,42 +2140,30 @@ standing_placeholder_tracking = true
     fn compute_velocity_tracking_metrics_matches_perfect_forward_motion() {
         let runtime_command = ParsedRuntimeCommand::Velocity([0.5, 0.0, 0.0]);
         let frames = vec![
-            ReportFrame {
-                tick: 0,
-                command_data: vec![0.5, 0.0, 0.0],
-                base_pose: Some(ReportBasePose {
+            replay_frame(
+                0,
+                vec![0.5, 0.0, 0.0],
+                Some(ReportBasePose {
                     position_world: [0.0, 0.0, 0.0],
                     rotation_xyzw: [0.0, 0.0, 0.0, 1.0],
                 }),
-                actual_positions: vec![],
-                actual_velocities: vec![],
-                target_positions: vec![],
-                inference_latency_ms: 0.0,
-            },
-            ReportFrame {
-                tick: 1,
-                command_data: vec![0.5, 0.0, 0.0],
-                base_pose: Some(ReportBasePose {
+            ),
+            replay_frame(
+                1,
+                vec![0.5, 0.0, 0.0],
+                Some(ReportBasePose {
                     position_world: [0.01, 0.0, 0.0],
                     rotation_xyzw: [0.0, 0.0, 0.0, 1.0],
                 }),
-                actual_positions: vec![],
-                actual_velocities: vec![],
-                target_positions: vec![],
-                inference_latency_ms: 0.0,
-            },
-            ReportFrame {
-                tick: 2,
-                command_data: vec![0.5, 0.0, 0.0],
-                base_pose: Some(ReportBasePose {
+            ),
+            replay_frame(
+                2,
+                vec![0.5, 0.0, 0.0],
+                Some(ReportBasePose {
                     position_world: [0.02, 0.0, 0.0],
                     rotation_xyzw: [0.0, 0.0, 0.0, 1.0],
                 }),
-                actual_positions: vec![],
-                actual_velocities: vec![],
-                target_positions: vec![],
-                inference_latency_ms: 0.0,
-            },
+            ),
         ];
 
         let metrics = compute_velocity_tracking_metrics(&frames, &runtime_command, 50)
@@ -1886,42 +2181,30 @@ standing_placeholder_tracking = true
     fn compute_velocity_tracking_metrics_matches_perfect_turn_rate() {
         let runtime_command = ParsedRuntimeCommand::Velocity([0.0, 0.0, 1.0]);
         let frames = vec![
-            ReportFrame {
-                tick: 0,
-                command_data: vec![0.0, 0.0, 1.0],
-                base_pose: Some(ReportBasePose {
+            replay_frame(
+                0,
+                vec![0.0, 0.0, 1.0],
+                Some(ReportBasePose {
                     position_world: [0.0, 0.0, 0.0],
                     rotation_xyzw: [0.0, 0.0, 0.0, 1.0],
                 }),
-                actual_positions: vec![],
-                actual_velocities: vec![],
-                target_positions: vec![],
-                inference_latency_ms: 0.0,
-            },
-            ReportFrame {
-                tick: 1,
-                command_data: vec![0.0, 0.0, 1.0],
-                base_pose: Some(ReportBasePose {
+            ),
+            replay_frame(
+                1,
+                vec![0.0, 0.0, 1.0],
+                Some(ReportBasePose {
                     position_world: [0.0, 0.0, 0.0],
                     rotation_xyzw: [0.0, 0.0, 0.01_f32.sin(), 0.01_f32.cos()],
                 }),
-                actual_positions: vec![],
-                actual_velocities: vec![],
-                target_positions: vec![],
-                inference_latency_ms: 0.0,
-            },
-            ReportFrame {
-                tick: 2,
-                command_data: vec![0.0, 0.0, 1.0],
-                base_pose: Some(ReportBasePose {
+            ),
+            replay_frame(
+                2,
+                vec![0.0, 0.0, 1.0],
+                Some(ReportBasePose {
                     position_world: [0.0, 0.0, 0.0],
                     rotation_xyzw: [0.0, 0.0, 0.02_f32.sin(), 0.02_f32.cos()],
                 }),
-                actual_positions: vec![],
-                actual_velocities: vec![],
-                target_positions: vec![],
-                inference_latency_ms: 0.0,
-            },
+            ),
         ];
 
         let metrics = compute_velocity_tracking_metrics(&frames, &runtime_command, 50)
