@@ -58,6 +58,47 @@ def make_frames() -> list[dict[str, object]]:
     ]
 
 
+def make_bad_tracking_frames() -> list[dict[str, object]]:
+    return [
+        {
+            "tick": 0,
+            "target_positions": [0.0, 0.0],
+            "actual_positions": [1.8, -1.6],
+            "actual_velocities": [0.0, 0.0],
+            "command_data": [],
+            "inference_latency_ms": 3.0,
+            "base_pose": {
+                "position_world": [0.0, 0.0, 0.75],
+                "rotation_xyzw": [0.0, 0.0, 0.0, 1.0],
+            },
+        },
+        {
+            "tick": 1,
+            "target_positions": [0.1, -0.1],
+            "actual_positions": [2.0, -1.7],
+            "actual_velocities": [0.1, -0.1],
+            "command_data": [],
+            "inference_latency_ms": 3.2,
+            "base_pose": {
+                "position_world": [0.0, 0.0, 0.22],
+                "rotation_xyzw": [0.0, 0.0, 0.2, 0.98],
+            },
+        },
+        {
+            "tick": 2,
+            "target_positions": [0.2, -0.2],
+            "actual_positions": [2.1, -1.8],
+            "actual_velocities": [0.1, -0.1],
+            "command_data": [],
+            "inference_latency_ms": 3.4,
+            "base_pose": {
+                "position_world": [0.0, 0.0, 0.18],
+                "rotation_xyzw": [0.0, 0.0, 0.4, 0.92],
+            },
+        },
+    ]
+
+
 def make_entry(
     *,
     card_id: str,
@@ -68,6 +109,7 @@ def make_entry(
     demo_family: str,
     rrd_file: str,
     velocity_tracking: dict[str, float] | None = None,
+    frames: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     metrics: dict[str, object] = {
         "ticks": 3,
@@ -86,7 +128,7 @@ def make_entry(
         "command_data": [0.2, 0.0, 0.0],
         "control_frequency_hz": 50,
         "joint_names": ["left_hip_pitch_joint"],
-        "frames": make_frames(),
+        "frames": frames if frames is not None else make_frames(),
         "metrics": metrics,
         "_meta": {
             "card_id": card_id,
@@ -205,7 +247,7 @@ class PolicyShowcaseTests(unittest.TestCase):
         self.assertEqual(section_ids, ["gear_sonic", "gear_sonic_tracking"])
         self.assertEqual(viewer_keys, ["gear_sonic", "gear_sonic_tracking"])
 
-    def test_render_html_only_shows_velocity_tracking_metrics_for_velocity_cards(self) -> None:
+    def test_render_html_shows_velocity_metrics_only_for_velocity_cards(self) -> None:
         entries = [
             make_entry(
                 card_id="decoupled_wbc",
@@ -237,8 +279,56 @@ class PolicyShowcaseTests(unittest.TestCase):
 
         self.assertEqual(html_text.count("VX RMSE"), 1)
         self.assertEqual(html_text.count("Yaw RMSE"), 1)
+        self.assertEqual(html_text.count("Mean joint error"), 2)
+        self.assertEqual(html_text.count("Quality verdict"), 2)
         self.assertIn(">motion_tokens<", html_text)
         self.assertIn(">velocity_schedule<", html_text)
+
+    def test_render_html_marks_bad_tracking_cards_with_quality_pill_and_heuristics(self) -> None:
+        entries = [
+            make_entry(
+                card_id="gear_sonic_tracking",
+                policy_family="gear_sonic",
+                title="GEAR-SONIC Reference Motion",
+                command_kind="reference_motion_tracking",
+                command_source="runtime.reference_motion_tracking",
+                demo_family="Reference / pose tracking",
+                rrd_file="gear_sonic_tracking.rrd",
+                frames=make_bad_tracking_frames(),
+            )
+        ]
+
+        html_text, manifest = self.render(entries)
+
+        self.assertIn(">BAD<", html_text)
+        self.assertIn("Mean joint error", html_text)
+        self.assertIn("Frames height &lt; 0.4 m", html_text)
+        self.assertIn("min base height", html_text.lower())
+        self.assertEqual(manifest[0]["quality_verdict"]["label"], "BAD")
+        self.assertIn("mean joint error", manifest[0]["quality_verdict"]["summary"])
+
+    def test_render_html_marks_mixed_velocity_cards_as_unknown(self) -> None:
+        entry = make_entry(
+            card_id="wbc_agile",
+            policy_family="wbc_agile",
+            title="WBC-AGILE",
+            command_kind="velocity_schedule",
+            command_source="runtime.velocity_schedule",
+            demo_family="Velocity tracking",
+            rrd_file="wbc_agile.rrd",
+            velocity_tracking={
+                "vx_rmse_mps": 0.39,
+                "yaw_rate_rmse_rad_s": 0.37,
+                "heading_change_deg": -96.0,
+                "forward_distance_m": 1.86,
+            },
+        )
+
+        html_text, manifest = self.render([entry])
+
+        self.assertIn(">??<", html_text)
+        self.assertEqual(manifest[0]["quality_verdict"]["label"], "??")
+        self.assertIn("forward distance", manifest[0]["quality_verdict"]["summary"])
 
 
 if __name__ == "__main__":

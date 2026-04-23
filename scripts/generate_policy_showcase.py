@@ -699,6 +699,216 @@ def derive_velocity_tracking_series(
     }
 
 
+def derive_target_tracking_metrics(
+    frames: list[dict[str, object]],
+) -> dict[str, float | int | None] | None:
+    joint_abs_errors: list[float] = []
+    joint_sq_error_sum = 0.0
+    matched_frame_count = 0
+    base_heights_m: list[float] = []
+
+    for frame in frames:
+        actual_positions = frame.get("actual_positions")
+        target_positions = frame.get("target_positions")
+        if (
+            isinstance(actual_positions, list)
+            and isinstance(target_positions, list)
+            and actual_positions
+            and len(actual_positions) == len(target_positions)
+        ):
+            matched_frame_count += 1
+            for actual_position, target_position in zip(actual_positions, target_positions):
+                abs_error = abs(float(actual_position) - float(target_position))
+                joint_abs_errors.append(abs_error)
+                joint_sq_error_sum += abs_error * abs_error
+
+        base_pose = frame.get("base_pose")
+        if isinstance(base_pose, dict):
+            position_world = base_pose.get("position_world")
+            if isinstance(position_world, list) and len(position_world) >= 3:
+                base_heights_m.append(float(position_world[2]))
+
+    if not joint_abs_errors:
+        return None
+
+    joint_abs_errors_sorted = sorted(joint_abs_errors)
+    p95_index = max(0, math.ceil(0.95 * len(joint_abs_errors_sorted)) - 1)
+    joint_sample_count = len(joint_abs_errors)
+    mean_joint_abs_error_rad = sum(joint_abs_errors) / joint_sample_count
+    joint_rmse_rad = math.sqrt(joint_sq_error_sum / joint_sample_count)
+    base_height_min_m = min(base_heights_m) if base_heights_m else None
+    base_height_max_m = max(base_heights_m) if base_heights_m else None
+
+    return {
+        "matched_frame_count": matched_frame_count,
+        "joint_sample_count": joint_sample_count,
+        "mean_joint_abs_error_rad": mean_joint_abs_error_rad,
+        "p95_joint_abs_error_rad": joint_abs_errors_sorted[p95_index],
+        "peak_joint_abs_error_rad": max(joint_abs_errors),
+        "joint_rmse_rad": joint_rmse_rad,
+        "base_height_min_m": base_height_min_m,
+        "base_height_max_m": base_height_max_m,
+        "frames_below_base_height_0_4m": sum(height < 0.4 for height in base_heights_m),
+        "frames_below_base_height_0_2m": sum(height < 0.2 for height in base_heights_m),
+    }
+
+
+def classify_quality_verdict(
+    status: str,
+    command_kind: str,
+    metrics: dict[str, object] | None,
+) -> dict[str, str] | None:
+    if status != "ok":
+        return None
+    if not isinstance(metrics, dict):
+        return {"label": "??", "css_class": "unknown", "summary": "runtime metrics unavailable"}
+
+    dropped_frames = int(metrics.get("dropped_frames", 0) or 0)
+    achieved_frequency_hz = float(metrics.get("achieved_frequency_hz", 0.0) or 0.0)
+    target_tracking = metrics.get("target_tracking")
+    target_tracking_dict = target_tracking if isinstance(target_tracking, dict) else None
+
+    if command_kind in {"velocity", "velocity_schedule"}:
+        velocity_tracking = metrics.get("velocity_tracking")
+        if not isinstance(velocity_tracking, dict):
+            return {
+                "label": "??",
+                "css_class": "unknown",
+                "summary": "velocity-tracking metrics unavailable",
+            }
+
+        vx_rmse_mps = float(velocity_tracking.get("vx_rmse_mps", math.inf))
+        yaw_rate_rmse_rad_s = float(
+            velocity_tracking.get("yaw_rate_rmse_rad_s", math.inf)
+        )
+        forward_distance_m = float(velocity_tracking.get("forward_distance_m", 0.0))
+        heading_change_deg = float(velocity_tracking.get("heading_change_deg", math.nan))
+        collapse_frames = (
+            int(target_tracking_dict.get("frames_below_base_height_0_4m", 0))
+            if target_tracking_dict is not None
+            else 0
+        )
+
+        if (
+            dropped_frames <= 1
+            and achieved_frequency_hz >= 47.0
+            and vx_rmse_mps < 0.4
+            and yaw_rate_rmse_rad_s < 1.5
+            and forward_distance_m > 2.5
+            and abs(heading_change_deg + 90.0) < 30.0
+            and collapse_frames == 0
+        ):
+            return {
+                "label": "GOOD",
+                "css_class": "good",
+                "summary": "meets the showcase velocity gates",
+            }
+
+        bad_reasons: list[str] = []
+        if dropped_frames > 5:
+            bad_reasons.append(f"dropped frames {dropped_frames} > 5")
+        if achieved_frequency_hz < 45.0:
+            bad_reasons.append(f"achieved rate {achieved_frequency_hz:.1f} Hz < 45")
+        if vx_rmse_mps >= 0.6:
+            bad_reasons.append(f"vx RMSE {vx_rmse_mps:.3f} >= 0.6")
+        if yaw_rate_rmse_rad_s >= 1.5:
+            bad_reasons.append(f"yaw RMSE {yaw_rate_rmse_rad_s:.3f} >= 1.5")
+        if forward_distance_m < 0.5:
+            bad_reasons.append(f"forward distance {forward_distance_m:.3f} m < 0.5")
+        if collapse_frames > 20:
+            bad_reasons.append(f"collapse frames {collapse_frames} > 20")
+        if bad_reasons:
+            return {
+                "label": "BAD",
+                "css_class": "bad",
+                "summary": "; ".join(bad_reasons[:3]),
+            }
+
+        mixed_reasons: list[str] = []
+        if vx_rmse_mps >= 0.4:
+            mixed_reasons.append(f"vx RMSE {vx_rmse_mps:.3f} above target")
+        if forward_distance_m <= 2.5:
+            mixed_reasons.append(f"forward distance {forward_distance_m:.3f} m below target")
+        if abs(heading_change_deg + 90.0) >= 30.0:
+            mixed_reasons.append(f"heading change {heading_change_deg:.1f} deg off target")
+        if collapse_frames > 0:
+            mixed_reasons.append(f"collapse frames {collapse_frames} > 0")
+
+        return {
+            "label": "??",
+            "css_class": "unknown",
+            "summary": "; ".join(mixed_reasons[:3]) or "mixed velocity metrics",
+        }
+
+    if target_tracking_dict is None:
+        return {
+            "label": "??",
+            "css_class": "unknown",
+            "summary": "joint-tracking metrics unavailable",
+        }
+
+    mean_joint_abs_error_rad = float(target_tracking_dict["mean_joint_abs_error_rad"])
+    p95_joint_abs_error_rad = float(target_tracking_dict["p95_joint_abs_error_rad"])
+    base_height_min_m = target_tracking_dict.get("base_height_min_m")
+    frames_below_base_height_0_4m = int(
+        target_tracking_dict["frames_below_base_height_0_4m"]
+    )
+    frames_below_base_height_0_2m = int(
+        target_tracking_dict["frames_below_base_height_0_2m"]
+    )
+
+    bad_reasons = []
+    if mean_joint_abs_error_rad > 0.35:
+        bad_reasons.append(f"mean joint error {mean_joint_abs_error_rad:.3f} rad > 0.35")
+    if p95_joint_abs_error_rad > 1.0:
+        bad_reasons.append(f"joint error p95 {p95_joint_abs_error_rad:.3f} rad > 1.0")
+    if frames_below_base_height_0_4m > 20:
+        bad_reasons.append(
+            f"collapse frames {frames_below_base_height_0_4m} > 20"
+        )
+    if frames_below_base_height_0_2m > 5:
+        bad_reasons.append(
+            f"deep-collapse frames {frames_below_base_height_0_2m} > 5"
+        )
+    if (
+        base_height_min_m is not None
+        and float(base_height_min_m) < 0.4
+    ):
+        bad_reasons.append(f"min base height {float(base_height_min_m):.3f} m < 0.4")
+    if dropped_frames > 5:
+        bad_reasons.append(f"dropped frames {dropped_frames} > 5")
+    if achieved_frequency_hz < 45.0:
+        bad_reasons.append(f"achieved rate {achieved_frequency_hz:.1f} Hz < 45")
+
+    if bad_reasons:
+        return {
+            "label": "BAD",
+            "css_class": "bad",
+            "summary": "; ".join(bad_reasons[:3]),
+        }
+
+    if (
+        mean_joint_abs_error_rad <= 0.10
+        and p95_joint_abs_error_rad <= 0.30
+        and frames_below_base_height_0_4m == 0
+        and frames_below_base_height_0_2m == 0
+        and (base_height_min_m is None or float(base_height_min_m) >= 0.6)
+        and dropped_frames == 0
+        and achieved_frequency_hz >= 47.0
+    ):
+        return {
+            "label": "GOOD",
+            "css_class": "good",
+            "summary": "stable run with tight joint-target tracking",
+        }
+
+    return {
+        "label": "??",
+        "css_class": "unknown",
+        "summary": "stable run, but only generic tracking heuristics are available",
+    }
+
+
 def spark_svg(series_list: list[dict[str, object]], width: int = 360, height: int = 140) -> str:
     if not series_list:
         return '<svg class="chart" viewBox="0 0 360 140" role="img"></svg>'
@@ -889,10 +1099,24 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
         transport = str(meta.get("showcase_transport", "synthetic"))
         model_variant = showcase_model_variant_text(meta.get("showcase_model_variant"))
         transport_html = pill(showcase_transport_badge_label(transport), "transport")
-        status_html = pill("OK" if status == "ok" else "BLOCKED", "ok" if status == "ok" else "blocked")
+        status_html = pill(
+            "OK" if status == "ok" else "BLOCKED",
+            "ok" if status == "ok" else "blocked",
+        )
         provenance_html = " ".join([pill(execution_kind.upper(), execution_kind), transport_html])
 
+        frames = normalized_entry.get("frames", [])
         metrics = normalized_entry.get("metrics") or {}
+        quality_verdict = None
+        if status == "ok" and isinstance(metrics, dict):
+            metrics.setdefault("target_tracking", derive_target_tracking_metrics(frames))
+            quality_verdict = classify_quality_verdict(status, command_kind, metrics)
+            normalized_entry["quality_verdict"] = quality_verdict
+        quality_html = (
+            pill(str(quality_verdict["label"]), str(quality_verdict["css_class"]))
+            if isinstance(quality_verdict, dict)
+            else '<span class="muted">n/a</span>'
+        )
         ticks = metrics.get("ticks", "-")
         avg_inference = (
             f"{metrics['average_inference_ms']:.3f} ms" if metrics else "-"
@@ -905,6 +1129,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
         overview_rows.append(
             f"<tr><td><strong>{html.escape(str(meta['title']))}</strong><div class=\"muted\">{html.escape(identity_label)}</div></td>"
             f"<td>{status_html}</td>"
+            f"<td>{quality_html}</td>"
             f"<td>{provenance_html}</td>"
             f"<td>{html.escape(str(meta['demo_family']))}</td>"
             f"<td>{html.escape(str(meta['coverage']))}</td>"
@@ -914,7 +1139,14 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
             f"<td>{dropped_frames}</td></tr>"
         )
 
-        badge_row = " ".join(
+        badge_bits = []
+        if isinstance(quality_verdict, dict):
+            badge_bits.append(
+                pill(str(quality_verdict["label"]), str(quality_verdict["css_class"]))
+            )
+        elif status != "ok":
+            badge_bits.append(pill("BLOCKED", "blocked"))
+        badge_bits.extend(
             [
                 pill(execution_kind.upper(), execution_kind),
                 transport_html,
@@ -922,6 +1154,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
                 pill(str(meta["command_source"]), "meta"),
             ]
         )
+        badge_row = " ".join(badge_bits)
 
         if status != "ok":
             missing_paths = meta.get("missing_paths", [])
@@ -1004,12 +1237,13 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
                 tracking_cards.append(card_html)
             continue
 
-        frames = normalized_entry.get("frames", [])
         metrics = normalized_entry["metrics"]
         joint_names = normalized_entry.get("joint_names", [])
         velocity_tracking_metrics = None
+        target_tracking_metrics = None
         if isinstance(metrics, dict):
             velocity_tracking_metrics = metrics.get("velocity_tracking")
+            target_tracking_metrics = metrics.get("target_tracking")
 
         target_series = []
         for idx, joint_name in enumerate(joint_names[:4]):
@@ -1131,6 +1365,50 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
         else:
             velocity_tracking_details = ""
 
+        if isinstance(target_tracking_metrics, dict):
+            min_base_height = target_tracking_metrics.get("base_height_min_m")
+            min_base_height_text = (
+                f"{float(min_base_height):.3f} m"
+                if min_base_height is not None
+                else "n/a"
+            )
+            target_tracking_details = f'''
+    <div>
+      <span>Mean joint error</span>
+      <strong>{float(target_tracking_metrics["mean_joint_abs_error_rad"]):.3f} rad</strong>
+    </div>
+    <div>
+      <span>Joint error p95</span>
+      <strong>{float(target_tracking_metrics["p95_joint_abs_error_rad"]):.3f} rad</strong>
+    </div>
+    <div>
+      <span>Peak joint error</span>
+      <strong>{float(target_tracking_metrics["peak_joint_abs_error_rad"]):.3f} rad</strong>
+    </div>
+    <div>
+      <span>Min base height</span>
+      <strong>{html.escape(min_base_height_text)}</strong>
+    </div>
+    <div>
+      <span>Frames height &lt; 0.4 m</span>
+      <strong>{int(target_tracking_metrics["frames_below_base_height_0_4m"])}</strong>
+    </div>'''
+        else:
+            target_tracking_details = ""
+
+        if isinstance(quality_verdict, dict):
+            verdict_details = f'''
+    <div>
+      <span>Quality verdict</span>
+      <strong>{html.escape(str(quality_verdict["label"]))}</strong>
+    </div>
+    <div>
+      <span>Verdict basis</span>
+      <strong>{html.escape(str(quality_verdict["summary"]))}</strong>
+    </div>'''
+        else:
+            verdict_details = ""
+
         card_html = f'''<section class="card" id="policy-{html.escape(card_id)}">
   <div class="card-header">
     <div>
@@ -1238,6 +1516,8 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
       <span>Last target frame</span>
       <code>{html.escape(format_vector(frames[-1]['target_positions'] if frames else []))}</code>
     </div>
+    {verdict_details}
+    {target_tracking_details}
     {velocity_tracking_details}
   </div>
   <p class="links"><a href="{html.escape(str(meta['rrd_file']))}">Rerun recording</a> · <a href="{html.escape(str(meta['json_file']))}">JSON summary</a> · <a href="{html.escape(str(meta['log_file']))}">run log</a> · <code>{html.escape(str(meta['config_path']))}</code></p>
@@ -1283,6 +1563,12 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
       --meta-fg: #334155;
       --transport-bg: #e8f1ff;
       --transport-fg: #1d4ed8;
+      --good-bg: #e7f7ef;
+      --good-fg: #11643a;
+      --bad-bg: #fff1f2;
+      --bad-fg: #b42318;
+      --unknown-bg: #fff6db;
+      --unknown-fg: #8a5b00;
     }}
     * {{ box-sizing: border-box; }}
     body {{ margin: 0; font-family: "IBM Plex Sans", "Segoe UI", sans-serif; background: radial-gradient(circle at top, #eef7ff, var(--bg) 45%); color: var(--text); }}
@@ -1310,6 +1596,9 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
     .pill.fixture {{ background: var(--fixture-bg); color: var(--fixture-fg); }}
     .pill.blocked {{ background: var(--blocked-bg); color: var(--blocked-fg); }}
     .pill.ok {{ background: var(--real-bg); color: var(--real-fg); }}
+    .pill.good {{ background: var(--good-bg); color: var(--good-fg); }}
+    .pill.bad {{ background: var(--bad-bg); color: var(--bad-fg); }}
+    .pill.unknown {{ background: var(--unknown-bg); color: var(--unknown-fg); }}
     .pill.command {{ background: var(--command-bg); color: var(--command-fg); }}
     .pill.meta {{ background: var(--meta-bg); color: var(--meta-fg); text-transform: none; }}
     .pill.transport {{ background: var(--transport-bg); color: var(--transport-fg); }}
@@ -1350,6 +1639,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
       <h1>RoboWBC Policy Showcase</h1>
       <p>This artifact is generated automatically in CI from the set of real policy integrations that are wired today. Successful cards run real checkpoints through the MuJoCo transport and save the resulting 3D Rerun scene; when assets are unavailable, the page degrades to a visible blocked card instead of pretending the integration exists.</p>
       <p class="muted">The showcase is now split into explicit velocity-tracking demos and reference or pose-tracking demos. Velocity cards use a staged command profile instead of a single constant command, while upper-body or reference demos stay blocked unless a verified official asset and runtime path actually exist.</p>
+      <p class="muted">Each successful card now also carries a heuristic quality verdict. Velocity cards use the plan's RMSE, heading, distance, and timing gates; reference or pose cards only use generic joint-target and base-height heuristics until a stronger policy-specific oracle exists.</p>
       <p class="muted">The public G1 cards currently load a meshless MuJoCo MJCF variant because this repository does not redistribute Unitree's upstream STL mesh bundle. The dynamics stay MuJoCo-backed, while the Rerun robot scene is reconstructed from the same open MJCF kinematic tree.</p>
       <p class="muted">Each successful card lazy-loads its saved Rerun recording when visible. The raw <code>.rrd</code> files are still available for download, and serving the folder over HTTP remains the most reliable way to open the interactive viewer locally.</p>
       <div class="meta-row">
@@ -1364,7 +1654,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
       <p class="muted">Successful cards use real checkpoints or public asset bundles cached by CI and must activate the requested showcase transport. Blocked cards surface the exact missing files or unavailable upstream artifacts instead of falling back to mock output.</p>
       <table>
         <thead>
-          <tr><th>Policy</th><th>Status</th><th>Run path</th><th>Demo family</th><th>Coverage</th><th>Ticks</th><th>Avg inference</th><th>Achieved rate</th><th>Dropped frames</th></tr>
+          <tr><th>Policy</th><th>Status</th><th>Quality</th><th>Run path</th><th>Demo family</th><th>Coverage</th><th>Ticks</th><th>Avg inference</th><th>Achieved rate</th><th>Dropped frames</th></tr>
         </thead>
         <tbody>
           {''.join(overview_rows)}
