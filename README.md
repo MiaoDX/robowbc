@@ -93,7 +93,7 @@ The same report generator powers both the local HTML bundle and the published
 GitHub Pages site.
 
 ```bash
-cargo build --bin robowbc --features robowbc-cli/vis
+cargo build --bin robowbc --features robowbc-cli/sim-auto-download,robowbc-cli/vis
 python scripts/generate_policy_showcase.py \
   --repo-root . \
   --robowbc-binary ./target/debug/robowbc \
@@ -106,7 +106,10 @@ python -m http.server 8000
 The output folder contains `index.html`, `manifest.json`, per-policy `*.json`
 run summaries, raw `*.rrd` recordings, logs, and the embedded Rerun web viewer
 runtime. Pull requests keep the downloadable `policy-showcase` artifact, and
-`main` publishes the generated site to the live report link above.
+`main` publishes the generated site to the live report link above. The root
+`index.html` is the overview page; each policy also gets its own
+`policies/<policy>.html` page with the embedded Rerun playback, charts, logs,
+and proof-pack links.
 </details>
 
 <details>

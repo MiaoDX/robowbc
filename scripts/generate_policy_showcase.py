@@ -1098,6 +1098,320 @@ def render_demo_section(title: str, cards: list[str]) -> str:
     </section>'''
 
 
+def relative_href(from_path: Path, target_path: Path) -> str:
+    return os.path.relpath(target_path, start=from_path.parent).replace(os.sep, "/")
+
+
+def detail_page_path(output_dir: Path, card_id: str) -> Path:
+    return output_dir / "policies" / f"{card_id}.html"
+
+
+def rebase_meta_artifact_paths(
+    meta: dict[str, object],
+    from_page: Path,
+    output_dir: Path,
+) -> dict[str, object]:
+    rebased = dict(meta)
+    for key in (
+        "json_file",
+        "rrd_file",
+        "log_file",
+        "proof_pack_html_file",
+        "proof_pack_manifest_file",
+    ):
+        value = meta.get(key)
+        if isinstance(value, str) and value:
+            rebased[key] = relative_href(from_page, output_dir / value)
+    return rebased
+
+
+def render_overview_links(meta: dict[str, object], detail_href: str) -> str:
+    links = [f'<a href="{html.escape(detail_href)}">Detail page</a>']
+    for key, label in (
+        ("rrd_file", "Rerun"),
+        ("json_file", "JSON"),
+        ("log_file", "log"),
+        ("proof_pack_html_file", "Proof pack"),
+    ):
+        value = meta.get(key)
+        if isinstance(value, str) and value:
+            links.append(f'<a href="{html.escape(value)}">{html.escape(label)}</a>')
+    return " · ".join(links)
+
+
+def render_policy_link_card(
+    entry: dict[str, object],
+    detail_href: str,
+    quality_html: str,
+) -> str:
+    meta = dict(entry["_meta"])
+    status = str(entry.get("status", "ok"))
+    metrics = entry.get("metrics") or {}
+    badge_bits = [
+        quality_html if status == "ok" else pill("BLOCKED", "blocked"),
+        pill(str(meta["execution_kind"]).upper(), str(meta["execution_kind"])),
+        pill(showcase_transport_badge_label(str(meta.get("showcase_transport", "synthetic"))), "transport"),
+        pill(str(entry.get("command_kind", "")).upper(), "command"),
+    ]
+    metric_line = (
+        f'<span>{metrics.get("ticks", "-")} ticks · '
+        f'{float(metrics.get("average_inference_ms", 0.0)):.3f} ms avg · '
+        f'{float(metrics.get("achieved_frequency_hz", 0.0)):.2f} Hz</span>'
+        if status == "ok" and isinstance(metrics, dict)
+        else f'<span>{html.escape(str(meta.get("blocked_reason", "Blocked")))}'
+        "</span>"
+    )
+    links = render_overview_links(meta, detail_href)
+    return f'''<article class="policy-link-card">
+  <div class="policy-link-header">
+    <div>
+      <h3><a href="{html.escape(detail_href)}">{html.escape(str(meta["title"]))}</a></h3>
+      <p class="muted">{html.escape(str(meta["source"]))} · {html.escape(str(meta["coverage"]))}</p>
+      <p class="muted">{html.escape(entry_identity_label(entry))}</p>
+    </div>
+    <div class="badge-row">{" ".join(badge_bits)}</div>
+  </div>
+  <p>{html.escape(str(meta["summary"]))}</p>
+  <div class="policy-link-meta">
+    {metric_line}
+    <span>{html.escape(str(meta["demo_family"]))}</span>
+  </div>
+  <p class="links">{links}</p>
+</article>'''
+
+
+def showcase_styles() -> str:
+    return """\
+    :root {
+      color-scheme: light;
+      --bg: #f5f7fb;
+      --panel: #ffffff;
+      --text: #142033;
+      --muted: #5f6f85;
+      --border: #d9e0ea;
+      --shadow: 0 18px 50px rgba(20, 32, 51, 0.08);
+      --real-bg: #e7f7ef;
+      --real-fg: #11643a;
+      --experimental-bg: #fff4e5;
+      --experimental-fg: #9a3412;
+      --fixture-bg: #e7f0ff;
+      --fixture-fg: #1146a6;
+      --blocked-bg: #fff1f2;
+      --blocked-fg: #b42318;
+      --command-bg: #fff6db;
+      --command-fg: #8a5b00;
+      --meta-bg: #edf2f7;
+      --meta-fg: #334155;
+      --transport-bg: #e8f1ff;
+      --transport-fg: #1d4ed8;
+      --good-bg: #e7f7ef;
+      --good-fg: #11643a;
+      --bad-bg: #fff1f2;
+      --bad-fg: #b42318;
+      --unknown-bg: #fff6db;
+      --unknown-fg: #8a5b00;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: "IBM Plex Sans", "Segoe UI", sans-serif; background: radial-gradient(circle at top, #eef7ff, var(--bg) 45%); color: var(--text); }
+    main { width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: 40px 0 64px; }
+    h1, h2, h3, p { margin-top: 0; }
+    a { color: #0f5bd3; }
+    .hero { background: linear-gradient(135deg, #ffffff, #ecf4ff); border: 1px solid var(--border); border-radius: 28px; box-shadow: var(--shadow); padding: 32px; margin-bottom: 28px; }
+    .hero p { max-width: 80ch; line-height: 1.6; }
+    .meta-row { display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: 0.95rem; }
+    .breadcrumbs { margin-bottom: 12px; font-weight: 700; }
+    .overview, .footer-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 24px; box-shadow: var(--shadow); padding: 24px; margin-bottom: 28px; }
+    .demo-section { margin-bottom: 28px; }
+    .section-header { margin-bottom: 16px; }
+    .section-header p { max-width: 80ch; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 12px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th { font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+    .cards { display: grid; gap: 20px; }
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 24px; box-shadow: var(--shadow); padding: 24px; }
+    .policy-link-card { display: block; text-decoration: none; background: var(--panel); border: 1px solid var(--border); border-radius: 24px; box-shadow: var(--shadow); padding: 24px; color: inherit; }
+    .policy-link-card:hover { border-color: #b9cae3; box-shadow: 0 20px 55px rgba(20, 32, 51, 0.12); }
+    .policy-link-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+    .policy-link-meta { display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); margin-bottom: 14px; }
+    .blocked-card { border-color: #f5c2c7; }
+    .card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+    .badge-row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+    .pill { border-radius: 999px; padding: 8px 12px; font-size: 0.82rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; display: inline-flex; align-items: center; }
+    .pill.real { background: var(--real-bg); color: var(--real-fg); }
+    .pill.experimental { background: var(--experimental-bg); color: var(--experimental-fg); }
+    .pill.fixture { background: var(--fixture-bg); color: var(--fixture-fg); }
+    .pill.blocked { background: var(--blocked-bg); color: var(--blocked-fg); }
+    .pill.ok { background: var(--real-bg); color: var(--real-fg); }
+    .pill.good { background: var(--good-bg); color: var(--good-fg); }
+    .pill.bad { background: var(--bad-bg); color: var(--bad-fg); }
+    .pill.unknown { background: var(--unknown-bg); color: var(--unknown-fg); }
+    .pill.command { background: var(--command-bg); color: var(--command-fg); }
+    .pill.meta { background: var(--meta-bg); color: var(--meta-fg); text-transform: none; }
+    .pill.transport { background: var(--transport-bg); color: var(--transport-fg); }
+    .muted { color: var(--muted); }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin: 16px 0 20px; }
+    .stats div, .details-grid div { background: #f7f9fc; border: 1px solid var(--border); border-radius: 16px; padding: 12px 14px; }
+    .stats span, .details-grid span, .blocked-paths span { display: block; color: var(--muted); font-size: 0.82rem; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .stats strong { font-size: 1.05rem; }
+    .charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-bottom: 18px; }
+    figure { margin: 0; }
+    figcaption { margin-bottom: 10px; font-weight: 700; }
+    .chart { width: 100%; height: auto; display: block; }
+    .chart rect { fill: #fbfdff; stroke: var(--border); }
+    .chart .baseline { stroke: #d4dae3; stroke-width: 1; }
+    .details-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+    .rerun-block { margin: 0 0 18px; }
+    .rerun-block-header { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; margin-bottom: 10px; flex-wrap: wrap; }
+    .rerun-stage { min-height: 420px; border-radius: 18px; border: 1px solid var(--border); background: linear-gradient(180deg, #0f172a, #111827); overflow: hidden; position: relative; }
+    .rerun-stage canvas { display: block; width: 100%; height: 420px; }
+    .rerun-stage-placeholder, .rerun-stage-error { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 20px; text-align: center; color: #e5edf8; font-size: 0.95rem; }
+    .rerun-stage-placeholder strong, .rerun-stage-error strong { color: #ffffff; }
+    .rerun-stage-error { background: linear-gradient(180deg, rgba(127, 29, 29, 0.95), rgba(69, 10, 10, 0.96)); }
+    .blocked-reason, .blocked-paths { margin-top: 18px; background: #fff7f7; border: 1px solid #f5c2c7; border-radius: 16px; padding: 14px; }
+    code { font-family: "IBM Plex Mono", "SFMono-Regular", monospace; font-size: 0.9rem; word-break: break-word; }
+    .links { margin-top: 16px; }
+    ul { margin-bottom: 0; }
+    @media (max-width: 720px) {
+      main { width: min(100% - 20px, 1180px); padding-top: 20px; }
+      .hero, .overview, .card, .footer-panel, .policy-link-card { padding: 20px; border-radius: 20px; }
+      .card-header, .policy-link-header { flex-direction: column; }
+      .badge-row { justify-content: flex-start; }
+    }
+    """
+
+
+def viewer_loader_script(viewer_module_path: str) -> str:
+    return f"""<script type=\"module\">
+    let webViewerCtor = null;
+    const viewers = new Map();
+
+    async function getWebViewerCtor() {{
+      if (webViewerCtor === null) {{
+        const module = await import({json.dumps(viewer_module_path)});
+        webViewerCtor = module.WebViewer;
+      }}
+      return webViewerCtor;
+    }}
+
+    function recordingUrl(stage) {{
+      const rrdFile = stage.dataset.rrdFile;
+      if (!rrdFile) {{
+        throw new Error("missing data-rrd-file attribute");
+      }}
+      return new URL(rrdFile, window.location.href).toString();
+    }}
+
+    function showStageError(stage, message) {{
+      stage.dataset.loading = "false";
+      stage.replaceChildren();
+      const errorNode = document.createElement("div");
+      errorNode.className = "rerun-stage-error";
+      const title = document.createElement("strong");
+      title.textContent = "Viewer failed to start";
+      const body = document.createElement("span");
+      body.textContent = message;
+      errorNode.append(title, body);
+      stage.append(errorNode);
+    }}
+
+    function showFileProtocolMessage(stage) {{
+      showStageError(
+        stage,
+        "This report was opened via file://. Serve the folder over HTTP, for example with `python scripts/serve_showcase.py --dir ./artifacts/policy-showcase`."
+      );
+    }}
+
+    async function mountStage(stage) {{
+      const policyId = stage.dataset.rerunPolicy;
+      if (!policyId || viewers.has(policyId)) {{
+        return;
+      }}
+
+      stage.dataset.loading = "true";
+      stage.replaceChildren();
+      try {{
+        const WebViewer = await getWebViewerCtor();
+        const viewer = new WebViewer();
+        await viewer.start(recordingUrl(stage), stage, {{
+          width: "100%",
+          height: "420px",
+          hide_welcome_screen: true,
+          theme: "light",
+          render_backend: "webgl",
+        }});
+        viewers.set(policyId, viewer);
+        stage.dataset.loading = "false";
+      }} catch (error) {{
+        console.error(`failed to mount rerun viewer for ${{policyId}}`, error);
+        showStageError(stage, error instanceof Error ? error.message : String(error));
+      }}
+    }}
+
+    const observer = new IntersectionObserver((entries) => {{
+      for (const entry of entries) {{
+        if (!entry.isIntersecting) {{
+          continue;
+        }}
+        observer.unobserve(entry.target);
+        void mountStage(entry.target);
+      }}
+    }}, {{ rootMargin: "180px 0px" }});
+
+    const stages = [...document.querySelectorAll(".rerun-stage[data-rerun-policy]")];
+    if (window.location.protocol === "file:") {{
+      for (const stage of stages) {{
+        showFileProtocolMessage(stage);
+      }}
+    }} else {{
+      if (stages.length > 0) {{
+        void mountStage(stages[0]);
+      }}
+      for (const stage of stages.slice(1)) {{
+        observer.observe(stage);
+      }}
+    }}
+  </script>"""
+
+
+def render_policy_detail_page(
+    page_title: str,
+    page_summary: str,
+    body_html: str,
+    back_href: str,
+    generated_at: str,
+    commit_html: str,
+    run_html: str,
+    viewer_module_path: str,
+) -> str:
+    return f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{html.escape(page_title)} · RoboWBC Showcase</title>
+  <style>
+{showcase_styles()}
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <p class="breadcrumbs"><a href="{html.escape(back_href)}">← Back to showcase overview</a></p>
+      <h1>{html.escape(page_title)}</h1>
+      <p>{html.escape(page_summary)}</p>
+      <div class="meta-row">
+        <span>Generated: {html.escape(generated_at)}</span>
+        <span>Commit: {commit_html or 'local'}</span>
+        <span>{run_html}</span>
+      </div>
+    </section>
+    {body_html}
+  </main>
+  {viewer_loader_script(viewer_module_path)}
+</body>
+</html>'''
+
+
 def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: Path) -> None:
     generated_at = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
     sha = os.environ.get("GITHUB_SHA", "")
@@ -1106,7 +1420,15 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
     run_id = os.environ.get("GITHUB_RUN_ID", "")
     commit_link = f"{server}/{repo}/commit/{sha}" if sha and repo else ""
     run_link = f"{server}/{repo}/actions/runs/{run_id}" if run_id and repo else ""
-    viewer_assets = vendor_rerun_web_viewer(repo_root, output_dir)
+    vendor_rerun_web_viewer(repo_root, output_dir)
+    index_path = output_dir / "index.html"
+    (output_dir / "policies").mkdir(parents=True, exist_ok=True)
+    commit_html = (
+        f'<a href="{html.escape(commit_link)}">{html.escape(sha[:12])}</a>'
+        if commit_link
+        else html.escape(sha[:12])
+    )
+    run_html = f'<a href="{html.escape(run_link)}">Actions run</a>' if run_link else ""
 
     overview_rows: list[str] = []
     velocity_cards: list[str] = []
@@ -1124,13 +1446,22 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
     for entry in sorted_entries:
         card_id = entry_card_id(entry)
         policy_family = entry_policy_family(entry)
+        detail_path = detail_page_path(output_dir, card_id)
+        detail_href = relative_href(index_path, detail_path)
+        back_href = relative_href(detail_path, index_path)
+        viewer_module_path = relative_href(
+            detail_path,
+            output_dir / RERUN_WEB_VIEWER_DIR / "index.js",
+        )
         meta = dict(entry["_meta"])
         meta.setdefault("card_id", card_id)
         meta.setdefault("policy_family", policy_family)
+        meta["detail_page"] = detail_href
         normalized_entry = dict(entry)
         normalized_entry["card_id"] = card_id
         normalized_entry["policy_name"] = policy_family
         normalized_entry["_meta"] = meta
+        normalized_entry["detail_page"] = detail_href
         normalized_entries.append(normalized_entry)
 
         status = normalized_entry.get("status", "ok")
@@ -1166,9 +1497,12 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
             f"{metrics['achieved_frequency_hz']:.2f} Hz" if metrics else "-"
         )
         dropped_frames = metrics.get("dropped_frames", "-")
+        overview_links = render_overview_links(meta, detail_href)
 
         overview_rows.append(
-            f"<tr><td><strong>{html.escape(str(meta['title']))}</strong><div class=\"muted\">{html.escape(identity_label)}</div></td>"
+            f"<tr><td><strong><a href=\"{html.escape(detail_href)}\">{html.escape(str(meta['title']))}</a></strong>"
+            f"<div class=\"muted\">{html.escape(identity_label)}</div>"
+            f"<p class=\"links\">{overview_links}</p></td>"
             f"<td>{status_html}</td>"
             f"<td>{quality_html}</td>"
             f"<td>{provenance_html}</td>"
@@ -1196,20 +1530,27 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
             ]
         )
         badge_row = " ".join(badge_bits)
+        detail_meta = rebase_meta_artifact_paths(meta, detail_path, output_dir)
+        detail_summary = (
+            f"{str(meta['summary'])} This page records the exact blocker and any missing assets."
+            if status != "ok"
+            else f"{str(meta['summary'])} This page keeps the full charts, playback, and downloadable artifacts."
+        )
+        overview_card = render_policy_link_card(normalized_entry, detail_href, quality_html)
 
         if status != "ok":
             missing_paths = meta.get("missing_paths", [])
             missing_html = "<br />".join(f"<code>{html.escape(path)}</code>" for path in missing_paths)
-            card_html = f'''<section class="card blocked-card" id="policy-{html.escape(card_id)}">
+            detail_body_html = f'''<section class="card blocked-card" id="policy-{html.escape(card_id)}">
   <div class="card-header">
     <div>
-      <h2>{html.escape(str(meta['title']))}</h2>
-      <p class="muted">{html.escape(str(meta['source']))} · {html.escape(str(meta['coverage']))}</p>
+      <h2>{html.escape(str(detail_meta['title']))}</h2>
+      <p class="muted">{html.escape(str(detail_meta['source']))} · {html.escape(str(detail_meta['coverage']))}</p>
       <p class="muted">{html.escape(identity_label)}</p>
     </div>
     <div class="badge-row">{badge_row}</div>
   </div>
-  <p>{html.escape(str(meta['summary']))}</p>
+  <p>{html.escape(str(detail_meta['summary']))}</p>
   <div class="details-grid">
     <div>
       <span>Case key</span>
@@ -1225,7 +1566,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
     </div>
     <div>
       <span>Expected behavior</span>
-      <strong>{html.escape(str(meta['coverage']))}</strong>
+      <strong>{html.escape(str(detail_meta['coverage']))}</strong>
     </div>
     <div>
       <span>Status</span>
@@ -1237,7 +1578,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
     </div>
     <div>
       <span>Embodiment</span>
-      <code>{html.escape(str(meta['showcase_model_path'] or '-'))}</code>
+      <code>{html.escape(str(detail_meta['showcase_model_path'] or '-'))}</code>
     </div>
     <div>
       <span>MuJoCo model variant</span>
@@ -1245,37 +1586,50 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
     </div>
     <div>
       <span>Checkpoint source</span>
-      <code>{html.escape(str(meta['checkpoint_source']))}</code>
+      <code>{html.escape(str(detail_meta['checkpoint_source']))}</code>
     </div>
     <div>
       <span>Demo family</span>
-      <strong>{html.escape(str(meta['demo_family']))}</strong>
+      <strong>{html.escape(str(detail_meta['demo_family']))}</strong>
     </div>
     <div>
       <span>Demo sequence</span>
-      <strong>{html.escape(str(meta['demo_sequence']))}</strong>
+      <strong>{html.escape(str(detail_meta['demo_sequence']))}</strong>
     </div>
     <div>
       <span>Model artifact</span>
-      <code>{html.escape(str(meta['model_artifact']))}</code>
+      <code>{html.escape(str(detail_meta['model_artifact']))}</code>
     </div>
     <div>
       <span>Config</span>
-      <code>{html.escape(str(meta['config_path']))}</code>
+      <code>{html.escape(str(detail_meta['config_path']))}</code>
     </div>
   </div>
   <div class="blocked-reason">
-    <strong>Why blocked:</strong> {html.escape(str(meta['blocked_reason']))}
+    <strong>Why blocked:</strong> {html.escape(str(detail_meta['blocked_reason']))}
   </div>
   <div class="blocked-paths">
     <span>Missing required paths</span>
     <div>{missing_html or '<span class="muted">None</span>'}</div>
   </div>
 </section>'''
+            detail_path.write_text(
+                render_policy_detail_page(
+                    page_title=str(detail_meta["title"]),
+                    page_summary=detail_summary,
+                    body_html=detail_body_html,
+                    back_href=back_href,
+                    generated_at=generated_at,
+                    commit_html=commit_html,
+                    run_html=run_html,
+                    viewer_module_path=viewer_module_path,
+                ),
+                encoding="utf-8",
+            )
             if str(meta["demo_family"]) == "Velocity tracking":
-                velocity_cards.append(card_html)
+                velocity_cards.append(overview_card)
             else:
-                tracking_cards.append(card_html)
+                tracking_cards.append(overview_card)
             continue
 
         metrics = normalized_entry["metrics"]
@@ -1451,12 +1805,12 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
             verdict_details = ""
 
         proof_pack_links: list[str] = []
-        proof_pack_html_file = meta.get("proof_pack_html_file")
+        proof_pack_html_file = detail_meta.get("proof_pack_html_file")
         if proof_pack_html_file:
             proof_pack_links.append(
                 f'<a href="{html.escape(str(proof_pack_html_file))}">Proof pack</a>'
             )
-        proof_pack_manifest_file = meta.get("proof_pack_manifest_file")
+        proof_pack_manifest_file = detail_meta.get("proof_pack_manifest_file")
         if proof_pack_manifest_file:
             proof_pack_links.append(
                 f'<a href="{html.escape(str(proof_pack_manifest_file))}">Proof-pack manifest</a>'
@@ -1465,16 +1819,16 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
             " · " + " · ".join(proof_pack_links) if proof_pack_links else ""
         )
 
-        card_html = f'''<section class="card" id="policy-{html.escape(card_id)}">
+        detail_body_html = f'''<section class="card" id="policy-{html.escape(card_id)}">
   <div class="card-header">
     <div>
-      <h2>{html.escape(str(meta['title']))}</h2>
-      <p class="muted">{html.escape(str(meta['source']))} · {html.escape(str(meta['coverage']))}</p>
+      <h2>{html.escape(str(detail_meta['title']))}</h2>
+      <p class="muted">{html.escape(str(detail_meta['source']))} · {html.escape(str(detail_meta['coverage']))}</p>
       <p class="muted">{html.escape(identity_label)}</p>
     </div>
     <div class="badge-row">{badge_row}</div>
   </div>
-  <p>{html.escape(str(meta['summary']))}</p>
+  <p>{html.escape(str(detail_meta['summary']))}</p>
   <div class="stats">
     <div><span>Robot</span><strong>{html.escape(str(normalized_entry['robot_name']))}</strong></div>
     <div><span>Ticks</span><strong>{metrics['ticks']}</strong></div>
@@ -1502,9 +1856,9 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
   <div class="rerun-block">
     <div class="rerun-block-header">
       <strong>Embedded Rerun viewer</strong>
-      <span class="muted">Fetches <code>{html.escape(str(meta['rrd_file']))}</code> lazily when the card enters the viewport.</span>
+      <span class="muted">Fetches <code>{html.escape(str(detail_meta['rrd_file']))}</code> lazily when the viewer enters the viewport.</span>
     </div>
-    <div class="rerun-stage" data-rerun-policy="{html.escape(card_id)}" data-rrd-file="{html.escape(str(meta['rrd_file']))}">
+    <div class="rerun-stage" data-rerun-policy="{html.escape(card_id)}" data-rrd-file="{html.escape(str(detail_meta['rrd_file']))}">
       <div class="rerun-stage-placeholder">
         <strong>Preparing interactive view</strong>
         <span>Loads the viewer runtime and recording on demand when visible.</span>
@@ -1526,7 +1880,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
     </div>
     <div>
       <span>Expected behavior</span>
-      <strong>{html.escape(str(meta['coverage']))}</strong>
+      <strong>{html.escape(str(detail_meta['coverage']))}</strong>
     </div>
     <div>
       <span>Showcase transport</span>
@@ -1534,7 +1888,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
     </div>
     <div>
       <span>Embodiment</span>
-      <code>{html.escape(str(meta['showcase_model_path'] or '-'))}</code>
+      <code>{html.escape(str(detail_meta['showcase_model_path'] or '-'))}</code>
     </div>
     <div>
       <span>MuJoCo model variant</span>
@@ -1546,23 +1900,23 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
     </div>
     <div>
       <span>Checkpoint source</span>
-      <code>{html.escape(str(meta['checkpoint_source']))}</code>
+      <code>{html.escape(str(detail_meta['checkpoint_source']))}</code>
     </div>
     <div>
       <span>Demo family</span>
-      <strong>{html.escape(str(meta['demo_family']))}</strong>
+      <strong>{html.escape(str(detail_meta['demo_family']))}</strong>
     </div>
     <div>
       <span>Demo sequence</span>
-      <strong>{html.escape(str(meta['demo_sequence']))}</strong>
+      <strong>{html.escape(str(detail_meta['demo_sequence']))}</strong>
     </div>
     <div>
       <span>Model artifact</span>
-      <code>{html.escape(str(meta['model_artifact']))}</code>
+      <code>{html.escape(str(detail_meta['model_artifact']))}</code>
     </div>
     <div>
       <span>Command source</span>
-      <code>{html.escape(str(meta['command_source']))}</code>
+      <code>{html.escape(str(detail_meta['command_source']))}</code>
     </div>
     <div>
       <span>First target frame</span>
@@ -1576,19 +1930,30 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
     {target_tracking_details}
     {velocity_tracking_details}
   </div>
-  <p class="links"><a href="{html.escape(str(meta['rrd_file']))}">Rerun recording</a> · <a href="{html.escape(str(meta['json_file']))}">JSON summary</a> · <a href="{html.escape(str(meta['log_file']))}">run log</a>{proof_pack_links_html} · <code>{html.escape(str(meta['config_path']))}</code></p>
+  <p class="links"><a href="{html.escape(str(detail_meta['rrd_file']))}">Rerun recording</a> · <a href="{html.escape(str(detail_meta['json_file']))}">JSON summary</a> · <a href="{html.escape(str(detail_meta['log_file']))}">run log</a>{proof_pack_links_html} · <code>{html.escape(str(detail_meta['config_path']))}</code></p>
 </section>'''
+        detail_path.write_text(
+            render_policy_detail_page(
+                page_title=str(detail_meta["title"]),
+                page_summary=detail_summary,
+                body_html=detail_body_html,
+                back_href=back_href,
+                generated_at=generated_at,
+                commit_html=commit_html,
+                run_html=run_html,
+                viewer_module_path=viewer_module_path,
+            ),
+            encoding="utf-8",
+        )
         if str(meta["demo_family"]) == "Velocity tracking":
-            velocity_cards.append(card_html)
+            velocity_cards.append(overview_card)
         else:
-            tracking_cards.append(card_html)
+            tracking_cards.append(overview_card)
 
     excluded = "".join(
         f"<li><strong>{html.escape(item['name'])}</strong>: {html.escape(item['reason'])}</li>"
         for item in NOT_YET_SHOWCASED
     )
-    commit_html = f'<a href="{html.escape(commit_link)}">{html.escape(sha[:12])}</a>' if commit_link else html.escape(sha[:12])
-    run_html = f'<a href="{html.escape(run_link)}">Actions run</a>' if run_link else ""
 
     html_doc = f'''<!DOCTYPE html>
 <html lang="en">
@@ -1597,107 +1962,18 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>RoboWBC Policy Showcase</title>
   <style>
-    :root {{
-      color-scheme: light;
-      --bg: #f5f7fb;
-      --panel: #ffffff;
-      --text: #142033;
-      --muted: #5f6f85;
-      --border: #d9e0ea;
-      --shadow: 0 18px 50px rgba(20, 32, 51, 0.08);
-      --real-bg: #e7f7ef;
-      --real-fg: #11643a;
-      --experimental-bg: #fff4e5;
-      --experimental-fg: #9a3412;
-      --fixture-bg: #e7f0ff;
-      --fixture-fg: #1146a6;
-      --blocked-bg: #fff1f2;
-      --blocked-fg: #b42318;
-      --command-bg: #fff6db;
-      --command-fg: #8a5b00;
-      --meta-bg: #edf2f7;
-      --meta-fg: #334155;
-      --transport-bg: #e8f1ff;
-      --transport-fg: #1d4ed8;
-      --good-bg: #e7f7ef;
-      --good-fg: #11643a;
-      --bad-bg: #fff1f2;
-      --bad-fg: #b42318;
-      --unknown-bg: #fff6db;
-      --unknown-fg: #8a5b00;
-    }}
-    * {{ box-sizing: border-box; }}
-    body {{ margin: 0; font-family: "IBM Plex Sans", "Segoe UI", sans-serif; background: radial-gradient(circle at top, #eef7ff, var(--bg) 45%); color: var(--text); }}
-    main {{ width: min(1180px, calc(100% - 32px)); margin: 0 auto; padding: 40px 0 64px; }}
-    h1, h2, h3, p {{ margin-top: 0; }}
-    a {{ color: #0f5bd3; }}
-    .hero {{ background: linear-gradient(135deg, #ffffff, #ecf4ff); border: 1px solid var(--border); border-radius: 28px; box-shadow: var(--shadow); padding: 32px; margin-bottom: 28px; }}
-    .hero p {{ max-width: 80ch; line-height: 1.6; }}
-    .meta-row {{ display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: 0.95rem; }}
-    .overview, .footer-panel {{ background: var(--panel); border: 1px solid var(--border); border-radius: 24px; box-shadow: var(--shadow); padding: 24px; margin-bottom: 28px; }}
-    .demo-section {{ margin-bottom: 28px; }}
-    .section-header {{ margin-bottom: 16px; }}
-    .section-header p {{ max-width: 80ch; }}
-    table {{ width: 100%; border-collapse: collapse; }}
-    th, td {{ text-align: left; padding: 12px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }}
-    th {{ font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }}
-    .cards {{ display: grid; gap: 20px; }}
-    .card {{ background: var(--panel); border: 1px solid var(--border); border-radius: 24px; box-shadow: var(--shadow); padding: 24px; }}
-    .blocked-card {{ border-color: #f5c2c7; }}
-    .card-header {{ display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }}
-    .badge-row {{ display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }}
-    .pill {{ border-radius: 999px; padding: 8px 12px; font-size: 0.82rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; display: inline-flex; align-items: center; }}
-    .pill.real {{ background: var(--real-bg); color: var(--real-fg); }}
-    .pill.experimental {{ background: var(--experimental-bg); color: var(--experimental-fg); }}
-    .pill.fixture {{ background: var(--fixture-bg); color: var(--fixture-fg); }}
-    .pill.blocked {{ background: var(--blocked-bg); color: var(--blocked-fg); }}
-    .pill.ok {{ background: var(--real-bg); color: var(--real-fg); }}
-    .pill.good {{ background: var(--good-bg); color: var(--good-fg); }}
-    .pill.bad {{ background: var(--bad-bg); color: var(--bad-fg); }}
-    .pill.unknown {{ background: var(--unknown-bg); color: var(--unknown-fg); }}
-    .pill.command {{ background: var(--command-bg); color: var(--command-fg); }}
-    .pill.meta {{ background: var(--meta-bg); color: var(--meta-fg); text-transform: none; }}
-    .pill.transport {{ background: var(--transport-bg); color: var(--transport-fg); }}
-    .muted {{ color: var(--muted); }}
-    .stats {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin: 16px 0 20px; }}
-    .stats div, .details-grid div {{ background: #f7f9fc; border: 1px solid var(--border); border-radius: 16px; padding: 12px 14px; }}
-    .stats span, .details-grid span, .blocked-paths span {{ display: block; color: var(--muted); font-size: 0.82rem; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.05em; }}
-    .stats strong {{ font-size: 1.05rem; }}
-    .charts-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-bottom: 18px; }}
-    figure {{ margin: 0; }}
-    figcaption {{ margin-bottom: 10px; font-weight: 700; }}
-    .chart {{ width: 100%; height: auto; display: block; }}
-    .chart rect {{ fill: #fbfdff; stroke: var(--border); }}
-    .chart .baseline {{ stroke: #d4dae3; stroke-width: 1; }}
-    .details-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }}
-    .rerun-block {{ margin: 0 0 18px; }}
-    .rerun-block-header {{ display: flex; justify-content: space-between; gap: 12px; align-items: baseline; margin-bottom: 10px; flex-wrap: wrap; }}
-    .rerun-stage {{ min-height: 420px; border-radius: 18px; border: 1px solid var(--border); background: linear-gradient(180deg, #0f172a, #111827); overflow: hidden; position: relative; }}
-    .rerun-stage canvas {{ display: block; width: 100%; height: 420px; }}
-    .rerun-stage-placeholder, .rerun-stage-error {{ position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 20px; text-align: center; color: #e5edf8; font-size: 0.95rem; }}
-    .rerun-stage-placeholder strong, .rerun-stage-error strong {{ color: #ffffff; }}
-    .rerun-stage-error {{ background: linear-gradient(180deg, rgba(127, 29, 29, 0.95), rgba(69, 10, 10, 0.96)); }}
-    .blocked-reason, .blocked-paths {{ margin-top: 18px; background: #fff7f7; border: 1px solid #f5c2c7; border-radius: 16px; padding: 14px; }}
-    code {{ font-family: "IBM Plex Mono", "SFMono-Regular", monospace; font-size: 0.9rem; word-break: break-word; }}
-    .links {{ margin-top: 16px; }}
-    ul {{ margin-bottom: 0; }}
-    @media (max-width: 720px) {{
-      main {{ width: min(100% - 20px, 1180px); padding-top: 20px; }}
-      .hero, .overview, .card, .footer-panel {{ padding: 20px; border-radius: 20px; }}
-      .card-header {{ flex-direction: column; }}
-      .badge-row {{ justify-content: flex-start; }}
-    }}
+{showcase_styles()}
   </style>
 </head>
 <body>
   <main>
     <section class="hero">
       <h1>RoboWBC Policy Showcase</h1>
-      <p>This artifact is generated automatically in CI from the set of real policy integrations that are wired today. Successful cards run real checkpoints through the MuJoCo transport and save the resulting 3D Rerun scene; when assets are unavailable, the page degrades to a visible blocked card instead of pretending the integration exists.</p>
-      <p class="muted">The showcase is now split into explicit velocity-tracking demos and reference or pose-tracking demos. Velocity cards use a staged command profile instead of a single constant command, while upper-body or reference demos stay blocked unless a verified official asset and runtime path actually exist.</p>
-      <p class="muted">Each successful card now also carries a heuristic quality verdict. Velocity cards use the plan's RMSE, heading, distance, and timing gates; reference or pose cards only use generic joint-target and base-height heuristics until a stronger policy-specific oracle exists.</p>
+      <p>This artifact is generated automatically in CI from the set of policy integrations that are wired today. The root page is now comparison-first: use it to cross-check status, quality, provenance, and demo coverage quickly, then open each policy page for the heavy charts, Rerun playback, logs, and proof-pack overlays.</p>
+      <p class="muted">Velocity cards use staged command profiles instead of a single constant command. Reference or pose-tracking cases stay explicitly blocked unless a verified official asset and runtime path actually exist, so the showcase does not silently drift into mock output.</p>
+      <p class="muted">Each successful run carries a heuristic quality verdict. Velocity pages use RMSE, heading, distance, and timing gates; reference or pose pages currently use joint-target and base-height heuristics until a stronger policy-specific oracle exists.</p>
       <p class="muted">The public G1 cards currently load a meshless MuJoCo MJCF variant because this repository does not redistribute Unitree's upstream STL mesh bundle. The dynamics stay MuJoCo-backed, while the Rerun robot scene is reconstructed from the same open MJCF kinematic tree.</p>
-      <p class="muted">Each successful card lazy-loads its saved Rerun recording when visible. The raw <code>.rrd</code> files are still available for download, and serving the folder over HTTP remains the most reliable way to open the interactive viewer locally.</p>
+      <p class="muted">Serve the generated folder over HTTP for reliable playback. Each detail page lazy-loads the saved <code>.rrd</code> recording and can still be published directly through CI artifacts or GitHub Pages.</p>
       <div class="meta-row">
         <span>Generated: {html.escape(generated_at)}</span>
         <span>Commit: {commit_html or 'local'}</span>
@@ -1707,7 +1983,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
 
     <section class="overview">
       <h2>Compared policies</h2>
-      <p class="muted">Successful cards use real checkpoints or public asset bundles cached by CI and must activate the requested showcase transport. Blocked cards surface the exact missing files or unavailable upstream artifacts instead of falling back to mock output.</p>
+      <p class="muted">Successful entries use real checkpoints or public asset bundles cached by CI and must activate the requested showcase transport. The links in each row jump straight to the per-policy page and raw assets. Blocked entries surface the exact missing files or unavailable upstream artifacts instead of falling back to mock output.</p>
       <table>
         <thead>
           <tr><th>Policy</th><th>Status</th><th>Quality</th><th>Run path</th><th>Demo family</th><th>Coverage</th><th>Ticks</th><th>Avg inference</th><th>Achieved rate</th><th>Dropped frames</th></tr>
@@ -1726,100 +2002,10 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
       <ul>{excluded}</ul>
     </section>
   </main>
-  <script type="module">
-    let webViewerCtor = null;
-    const viewers = new Map();
-
-    async function getWebViewerCtor() {{
-      if (webViewerCtor === null) {{
-        const module = await import("{viewer_assets['module_path']}");
-        webViewerCtor = module.WebViewer;
-      }}
-      return webViewerCtor;
-    }}
-
-    function recordingUrl(stage) {{
-      const rrdFile = stage.dataset.rrdFile;
-      if (!rrdFile) {{
-        throw new Error("missing data-rrd-file attribute");
-      }}
-      return new URL(rrdFile, window.location.href).toString();
-    }}
-
-    function showStageError(stage, message) {{
-      stage.dataset.loading = "false";
-      stage.replaceChildren();
-      const errorNode = document.createElement("div");
-      errorNode.className = "rerun-stage-error";
-      const title = document.createElement("strong");
-      title.textContent = "Viewer failed to start";
-      const body = document.createElement("span");
-      body.textContent = message;
-      errorNode.append(title, body);
-      stage.append(errorNode);
-    }}
-
-    function showFileProtocolMessage(stage) {{
-      showStageError(
-        stage,
-        "This report was opened via file://. Serve the folder over HTTP, for example with `python scripts/serve_showcase.py --dir ./artifacts/policy-showcase`."
-      );
-    }}
-
-    async function mountStage(stage) {{
-      const policyId = stage.dataset.rerunPolicy;
-      if (!policyId || viewers.has(policyId)) {{
-        return;
-      }}
-
-      stage.dataset.loading = "true";
-      stage.replaceChildren();
-      try {{
-        const WebViewer = await getWebViewerCtor();
-        const viewer = new WebViewer();
-        await viewer.start(recordingUrl(stage), stage, {{
-          width: "100%",
-          height: "420px",
-          hide_welcome_screen: true,
-          theme: "light",
-          render_backend: "webgl",
-        }});
-        viewers.set(policyId, viewer);
-        stage.dataset.loading = "false";
-      }} catch (error) {{
-        console.error(`failed to mount rerun viewer for ${{policyId}}`, error);
-        showStageError(stage, error instanceof Error ? error.message : String(error));
-      }}
-    }}
-
-    const observer = new IntersectionObserver((entries) => {{
-      for (const entry of entries) {{
-        if (!entry.isIntersecting) {{
-          continue;
-        }}
-        observer.unobserve(entry.target);
-        void mountStage(entry.target);
-      }}
-    }}, {{ rootMargin: "180px 0px" }});
-
-    const stages = [...document.querySelectorAll(".rerun-stage[data-rerun-policy]")];
-    if (window.location.protocol === "file:") {{
-      for (const stage of stages) {{
-        showFileProtocolMessage(stage);
-      }}
-    }} else {{
-      if (stages.length > 0) {{
-        void mountStage(stages[0]);
-      }}
-      for (const stage of stages.slice(1)) {{
-        observer.observe(stage);
-      }}
-    }}
-  </script>
 </body>
 </html>'''
 
-    (output_dir / "index.html").write_text(html_doc, encoding="utf-8")
+    index_path.write_text(html_doc, encoding="utf-8")
     (output_dir / "manifest.json").write_text(
         json.dumps(normalized_entries, indent=2),
         encoding="utf-8",
