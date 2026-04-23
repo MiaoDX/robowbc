@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import math
 import os
 import re
 import subprocess
@@ -232,6 +233,7 @@ def ensure_showcase_sim_section(base_toml: str, showcase_context: dict[str, Any]
 def compose_run_config(
     base_toml: str,
     json_path: Path,
+    replay_path: Path,
     rrd_path: Path,
     showcase_context: dict[str, Any],
     max_ticks: int | None = None,
@@ -250,6 +252,7 @@ def compose_run_config(
                 "[report]",
                 f'output_path = "{json_path.as_posix()}"',
                 "max_frames = 200",
+                f'replay_output_path = "{replay_path.as_posix()}"',
             ]
         )
     )
@@ -298,11 +301,19 @@ def run_robowbc(
     base_config = config_path.read_text(encoding="utf-8")
     temp_config = output_dir / "roboharness_run.toml"
     json_path = output_dir / "run_report.json"
+    replay_path = derive_replay_trace_path(json_path)
     rrd_path = output_dir / "run_recording.rrd"
     log_path = output_dir / "run.log"
 
     temp_config.write_text(
-        compose_run_config(base_config, json_path, rrd_path, showcase_context, max_ticks),
+        compose_run_config(
+            base_config,
+            json_path,
+            replay_path,
+            rrd_path,
+            showcase_context,
+            max_ticks,
+        ),
         encoding="utf-8",
     )
 
@@ -327,19 +338,33 @@ def run_robowbc(
         )
 
     report = json.loads(json_path.read_text(encoding="utf-8"))
+    replay_trace = None
+    if replay_path.exists():
+        replay_trace = json.loads(replay_path.read_text(encoding="utf-8"))
+
     report["_meta"] = {
         "log_path": str(log_path),
         "rrd_path": str(rrd_path),
         "json_path": str(json_path),
+        "replay_trace_path": str(replay_path),
+        "replay_trace_present": replay_trace is not None,
         "temp_config": str(temp_config),
         "showcase_context": showcase_context,
     }
+    if replay_trace is not None:
+        report["_replay_trace"] = replay_trace
     return report
 
 
 # ---------------------------------------------------------------------------
 # MuJoCo frame capture (replay trajectory)
 # ---------------------------------------------------------------------------
+
+
+def derive_replay_trace_path(report_path: Path) -> Path:
+    stem = report_path.stem or "run_report"
+    suffix = report_path.suffix or ".json"
+    return report_path.with_name(f"{stem}_replay_trace{suffix}")
 
 
 def load_meshless_mujoco_model(model_path: Path) -> tuple[Any, Any]:
@@ -379,6 +404,275 @@ def load_meshless_mujoco_model(model_path: Path) -> tuple[Any, Any]:
     return model, data
 
 
+def replay_payload(report: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
+    replay_trace = report.get("_replay_trace")
+    if isinstance(replay_trace, dict):
+        frames = replay_trace.get("frames")
+        if isinstance(frames, list) and frames:
+            return replay_trace, frames, "canonical_replay_trace"
+
+    frames = report.get("frames", [])
+    if isinstance(frames, list):
+        return report, frames, "run_report_frames"
+
+    return report, [], "run_report_frames"
+
+
+def frame_sim_time_secs(frame: dict[str, Any], control_frequency_hz: int) -> float:
+    sim_time_secs = frame.get("sim_time_secs")
+    if isinstance(sim_time_secs, (int, float)):
+        return float(sim_time_secs)
+
+    tick = int(frame.get("tick", 0) or 0)
+    if control_frequency_hz <= 0:
+        return float(tick)
+    return tick / float(control_frequency_hz)
+
+
+def planar_position(frame: dict[str, Any]) -> tuple[float, float] | None:
+    base_pose = frame.get("base_pose")
+    if isinstance(base_pose, dict):
+        position_world = base_pose.get("position_world")
+        if isinstance(position_world, list) and len(position_world) >= 2:
+            return float(position_world[0]), float(position_world[1])
+
+    qpos = frame.get("mujoco_qpos")
+    if isinstance(qpos, list) and len(qpos) >= 2:
+        return float(qpos[0]), float(qpos[1])
+
+    return None
+
+
+def planar_displacement(reference: dict[str, Any], frame: dict[str, Any]) -> float | None:
+    reference_position = planar_position(reference)
+    current_position = planar_position(frame)
+    if reference_position is None or current_position is None:
+        return None
+
+    return math.hypot(
+        current_position[0] - reference_position[0],
+        current_position[1] - reference_position[1],
+    )
+
+
+def mean_joint_delta(reference: dict[str, Any], frame: dict[str, Any]) -> float | None:
+    reference_positions = reference.get("actual_positions")
+    current_positions = frame.get("actual_positions")
+    if not (
+        isinstance(reference_positions, list)
+        and isinstance(current_positions, list)
+        and reference_positions
+        and len(reference_positions) == len(current_positions)
+    ):
+        return None
+
+    total = 0.0
+    for reference_position, current_position in zip(reference_positions, current_positions):
+        total += abs(float(current_position) - float(reference_position))
+    return total / len(reference_positions)
+
+
+def select_checkpoint_specs(
+    frames: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not frames:
+        return []
+
+    target_checkpoint_count = 5
+    first_frame = frames[0]
+    last_index = len(frames) - 1
+    candidates: list[dict[str, Any]] = [
+        {
+            "name": "start",
+            "index": 0,
+            "reason": "initial state before meaningful motion",
+        }
+    ]
+
+    first_motion: dict[str, Any] | None = None
+    for index, frame in enumerate(frames[1:], start=1):
+        displacement = planar_displacement(first_frame, frame)
+        if displacement is not None and displacement >= 0.05:
+            first_motion = {
+                "name": "first_motion",
+                "index": index,
+                "reason": f"first floating-base displacement >= 0.05 m ({displacement:.3f} m)",
+            }
+            break
+
+        joint_delta = mean_joint_delta(first_frame, frame)
+        if joint_delta is not None and joint_delta >= 0.08:
+            first_motion = {
+                "name": "first_motion",
+                "index": index,
+                "reason": f"first mean joint delta >= 0.08 rad ({joint_delta:.3f} rad)",
+            }
+            break
+
+    if first_motion is not None:
+        candidates.append(first_motion)
+
+    peak_latency_index = max(
+        range(len(frames)),
+        key=lambda index: float(frames[index].get("inference_latency_ms", 0.0) or 0.0),
+    )
+    peak_latency_ms = float(
+        frames[peak_latency_index].get("inference_latency_ms", 0.0) or 0.0
+    )
+    candidates.append(
+        {
+            "name": "peak_latency",
+            "index": peak_latency_index,
+            "reason": f"highest inference latency ({peak_latency_ms:.3f} ms)",
+        }
+    )
+
+    furthest_progress: dict[str, Any] | None = None
+    best_planar_displacement = -1.0
+    for index, frame in enumerate(frames[1:], start=1):
+        displacement = planar_displacement(first_frame, frame)
+        if displacement is not None and displacement > best_planar_displacement:
+            best_planar_displacement = displacement
+            furthest_progress = {
+                "name": "furthest_progress",
+                "index": index,
+                "reason": f"largest planar displacement from start ({displacement:.3f} m)",
+            }
+
+    if furthest_progress is None:
+        best_joint_delta = -1.0
+        for index, frame in enumerate(frames[1:], start=1):
+            joint_delta = mean_joint_delta(first_frame, frame)
+            if joint_delta is not None and joint_delta > best_joint_delta:
+                best_joint_delta = joint_delta
+                furthest_progress = {
+                    "name": "furthest_progress",
+                    "index": index,
+                    "reason": f"largest mean joint delta from start ({joint_delta:.3f} rad)",
+                }
+
+    if furthest_progress is not None:
+        candidates.append(furthest_progress)
+
+    candidates.append(
+        {
+            "name": "final",
+            "index": last_index,
+            "reason": "final recorded simulator state",
+        }
+    )
+
+    selected: list[dict[str, Any]] = []
+    used_indices: set[int] = set()
+    for candidate in candidates:
+        index = int(candidate["index"])
+        if index in used_indices:
+            continue
+        selected.append(candidate)
+        used_indices.add(index)
+
+    fallback_specs = [
+        ("fallback_mid_25", 0.25),
+        ("fallback_mid_50", 0.50),
+        ("fallback_mid_75", 0.75),
+    ]
+    for name, fraction in fallback_specs:
+        if len(selected) >= target_checkpoint_count or last_index <= 0:
+            break
+        index = int(round(fraction * last_index))
+        if index in used_indices:
+            continue
+        selected.append(
+            {
+                "name": name,
+                "index": index,
+                "reason": (
+                    f"deterministic fallback at {int(fraction * 100)}% of the replay "
+                    "because the evidence checkpoints collapsed to the same frame"
+                ),
+            }
+        )
+        used_indices.add(index)
+
+    return sorted(selected, key=lambda checkpoint: (int(checkpoint["index"]), checkpoint["name"]))
+
+
+def restore_frame_state(
+    model: Any,
+    data: Any,
+    frame: dict[str, Any],
+    joint_names: list[str],
+    default_pose: list[float],
+    joint_qpos_map: dict[str, int],
+    joint_qvel_map: dict[str, int],
+    floating_base_state: dict[str, int] | None,
+) -> None:
+    import mujoco
+
+    mujoco.mj_resetData(model, data)
+
+    qpos = frame.get("mujoco_qpos")
+    qvel = frame.get("mujoco_qvel")
+    if (
+        isinstance(qpos, list)
+        and isinstance(qvel, list)
+        and len(qpos) == model.nq
+        and len(qvel) == model.nv
+    ):
+        data.qpos[:] = qpos
+        data.qvel[:] = qvel
+    else:
+        for jnt_id in range(model.njnt):
+            qpos_adr = int(model.jnt_qposadr[jnt_id])
+            name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, jnt_id)
+            if name in joint_names:
+                default_index = joint_names.index(name)
+                data.qpos[qpos_adr] = default_pose[default_index]
+
+        if floating_base_state is not None:
+            base_pose = frame.get("base_pose")
+            if isinstance(base_pose, dict):
+                position_world = base_pose.get("position_world")
+                rotation_xyzw = base_pose.get("rotation_xyzw")
+                if (
+                    isinstance(position_world, list)
+                    and len(position_world) >= 3
+                    and isinstance(rotation_xyzw, list)
+                    and len(rotation_xyzw) == 4
+                ):
+                    base_qpos = [
+                        float(position_world[0]),
+                        float(position_world[1]),
+                        float(position_world[2]),
+                        float(rotation_xyzw[3]),
+                        float(rotation_xyzw[0]),
+                        float(rotation_xyzw[1]),
+                        float(rotation_xyzw[2]),
+                    ]
+                    qpos_adr = floating_base_state["qpos_adr"]
+                    data.qpos[qpos_adr : qpos_adr + 7] = base_qpos
+                    qvel_adr = floating_base_state["qvel_adr"]
+                    data.qvel[qvel_adr : qvel_adr + 6] = [0.0] * 6
+
+        positions = frame.get("actual_positions", [])
+        if isinstance(positions, list):
+            for joint_name, joint_position in zip(joint_names, positions):
+                if joint_name in joint_qpos_map:
+                    data.qpos[joint_qpos_map[joint_name]] = float(joint_position)
+
+        velocities = frame.get("actual_velocities", [])
+        if isinstance(velocities, list):
+            for joint_name, joint_velocity in zip(joint_names, velocities):
+                if joint_name in joint_qvel_map:
+                    data.qvel[joint_qvel_map[joint_name]] = float(joint_velocity)
+
+    sim_time_secs = frame.get("sim_time_secs")
+    if isinstance(sim_time_secs, (int, float)):
+        data.time = float(sim_time_secs)
+
+    mujoco.mj_forward(model, data)
+
+
 def capture_frames_from_report(
     repo_root: Path,
     report: dict[str, Any],
@@ -400,26 +694,32 @@ def capture_frames_from_report(
 
     model, data = load_meshless_mujoco_model(model_path)
     renderer = mujoco.Renderer(model, height=480, width=640)
+    replay_root, frames, frame_source = replay_payload(report)
+    control_frequency_hz = int(replay_root.get("control_frequency_hz", 50) or 50)
 
     # Build joint name -> qpos address mapping
     joint_qpos_map: dict[str, int] = {}
+    joint_qvel_map: dict[str, int] = {}
+    floating_base_state: dict[str, int] | None = None
     for jnt_id in range(model.njnt):
         name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, jnt_id)
         qpos_adr = model.jnt_qposadr[jnt_id]
+        qvel_adr = model.jnt_dofadr[jnt_id]
         joint_qpos_map[name] = int(qpos_adr)
+        joint_qvel_map[name] = int(qvel_adr)
+        if (
+            floating_base_state is None
+            and model.jnt_type[jnt_id] == mujoco.mjtJoint.mjJNT_FREE
+        ):
+            floating_base_state = {
+                "qpos_adr": int(qpos_adr),
+                "qvel_adr": int(qvel_adr),
+            }
 
-    frames = report.get("frames", [])
     if not frames:
         return []
 
-    # Select checkpoint frames: start, 25%, 50%, 75%, end
-    indices = [0]
-    for p in (0.25, 0.5, 0.75):
-        idx = int(round(p * (len(frames) - 1)))
-        if idx != indices[-1]:
-            indices.append(idx)
-    if indices[-1] != len(frames) - 1:
-        indices.append(len(frames) - 1)
+    checkpoint_specs = select_checkpoint_specs(frames)
 
     # roboharness expects: output_dir / task_name / trial_name / checkpoint_name
     capture_dir = output_dir / "roboharness_run" / "trial_001"
@@ -434,36 +734,32 @@ def capture_frames_from_report(
         ("top", _top_camera()),
     ]
 
-    for idx in indices:
-        frame = frames[idx]
-        positions = frame.get("actual_positions", [])
+    for checkpoint in checkpoint_specs:
+        frame_index = int(checkpoint["index"])
+        frame = frames[frame_index]
+        restore_frame_state(
+            model,
+            data,
+            frame,
+            joint_names,
+            default_pose,
+            joint_qpos_map,
+            joint_qvel_map,
+            floating_base_state,
+        )
 
-        # Reset data and set default pose
-        mujoco.mj_resetData(model, data)
-        for jnt_id in range(model.njnt):
-            qpos_adr = model.jnt_qposadr[jnt_id]
-            name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, jnt_id)
-            if name == "floating_base_joint":
-                # Keep default floating base pose (upright at origin)
-                data.qpos[qpos_adr : qpos_adr + 7] = [0, 0, 0.78, 1, 0, 0, 0]
-            else:
-                default = default_pose[joint_names.index(name)] if name in joint_names else 0.0
-                data.qpos[qpos_adr] = default
-
-        # Apply recorded positions
-        for j_name, j_pos in zip(joint_names, positions):
-            if j_name in joint_qpos_map:
-                data.qpos[joint_qpos_map[j_name]] = j_pos
-
-        mujoco.mj_forward(model, data)
-
-        cp_name = f"tick_{frame['tick']:04d}"
+        cp_name = f"{checkpoint['name']}_tick_{int(frame['tick']):04d}"
         cp_dir = capture_dir / cp_name
         cp_dir.mkdir(parents=True, exist_ok=True)
+        sim_time_secs = frame_sim_time_secs(frame, control_frequency_hz)
 
         meta = {
-            "tick": frame["tick"],
-            "inference_latency_ms": frame.get("inference_latency_ms", 0.0),
+            "tick": int(frame["tick"]),
+            "frame_index": frame_index,
+            "sim_time_secs": sim_time_secs,
+            "inference_latency_ms": float(frame.get("inference_latency_ms", 0.0) or 0.0),
+            "selection_reason": str(checkpoint["reason"]),
+            "frame_source": frame_source,
             "cameras": [],
         }
 
@@ -482,9 +778,11 @@ def capture_frames_from_report(
             json.dumps(
                 {
                     "step": frame["tick"],
-                    "sim_time": frame["tick"] * 0.02,  # approx 50 Hz
+                    "sim_time": sim_time_secs,
                     "cameras": meta["cameras"],
                     "camera_capability": "rgb",
+                    "selection_reason": meta["selection_reason"],
+                    "frame_source": frame_source,
                 }
             ),
             encoding="utf-8",
@@ -495,6 +793,7 @@ def capture_frames_from_report(
                 "name": cp_name,
                 "dir": cp_dir,
                 "meta": meta,
+                "relative_dir": cp_dir.relative_to(output_dir).as_posix(),
             }
         )
 
@@ -603,6 +902,65 @@ def generate_report(
     return report_path
 
 
+def relative_output_artifact(output_dir: Path, artifact_path: str | None) -> str | None:
+    if not artifact_path:
+        return None
+
+    path = Path(artifact_path)
+    try:
+        return path.relative_to(output_dir).as_posix()
+    except ValueError:
+        if path.is_absolute():
+            return path.name if path.parent == output_dir else str(path)
+        return path.as_posix()
+
+
+def write_proof_pack_manifest(
+    output_dir: Path,
+    report: dict[str, Any],
+    checkpoints: list[dict[str, Any]],
+    report_path: Path,
+) -> Path:
+    replay_root, _, frame_source = replay_payload(report)
+    meta = report.get("_meta", {})
+    manifest_path = output_dir / "proof_pack_manifest.json"
+    payload = {
+        "schema_version": 1,
+        "generated_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ"),
+        "policy_name": report.get("policy_name"),
+        "robot_name": report.get("robot_name"),
+        "command_kind": report.get("command_kind"),
+        "command_data": report.get("command_data", []),
+        "control_frequency_hz": replay_root.get("control_frequency_hz"),
+        "html_entrypoint": relative_output_artifact(output_dir, str(report_path)),
+        "metrics_source": "run_report.json",
+        "frame_source": frame_source,
+        "transport": replay_root.get("transport"),
+        "raw_artifacts": {
+            "run_report": relative_output_artifact(output_dir, meta.get("json_path")),
+            "replay_trace": relative_output_artifact(output_dir, meta.get("replay_trace_path")),
+            "rerun_recording": relative_output_artifact(output_dir, meta.get("rrd_path")),
+            "run_log": relative_output_artifact(output_dir, meta.get("log_path")),
+            "temp_config": relative_output_artifact(output_dir, meta.get("temp_config")),
+        },
+        "checkpoints": [
+            {
+                "name": checkpoint["name"],
+                "relative_dir": checkpoint["relative_dir"],
+                "tick": checkpoint["meta"]["tick"],
+                "frame_index": checkpoint["meta"]["frame_index"],
+                "sim_time_secs": checkpoint["meta"]["sim_time_secs"],
+                "selection_reason": checkpoint["meta"]["selection_reason"],
+                "frame_source": checkpoint["meta"]["frame_source"],
+                "cameras": checkpoint["meta"]["cameras"],
+            }
+            for checkpoint in checkpoints
+        ],
+    }
+    manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return manifest_path
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -639,6 +997,8 @@ def main() -> int:
     print("Generating HTML report...")
     report_path = generate_report(output_dir, report, checkpoints)
     print(f"Report written to: {report_path}")
+    manifest_path = write_proof_pack_manifest(output_dir, report, checkpoints, report_path)
+    print(f"Proof-pack manifest written to: {manifest_path}")
     return 0
 
 

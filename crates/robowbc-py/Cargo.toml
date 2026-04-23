@@ -17,7 +17,10 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.28", features = ["extension-module"] }
+robowbc-comm = { path = "../robowbc-comm" }
 robowbc-core = { path = "../robowbc-core" }
 robowbc-ort = { path = "../robowbc-ort" }
 robowbc-registry = { path = "../robowbc-registry" }
+robowbc-sim = { path = "../robowbc-sim", features = ["mujoco-auto-download"] }
+serde = { version = "1", features = ["derive"] }
 toml = "0.8"

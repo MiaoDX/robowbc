@@ -473,6 +473,45 @@ def detect_mujoco_model_variant(log_text: str) -> str | None:
     return match.group(1) if match else None
 
 
+def discover_proof_pack_artifacts(
+    output_dir: Path,
+    policy_id: str,
+) -> dict[str, str] | None:
+    manifest_candidates = [
+        output_dir / f"{policy_id}_proof_pack" / "proof_pack_manifest.json",
+        output_dir / f"{policy_id}.proof_pack" / "proof_pack_manifest.json",
+        output_dir / f"{policy_id}.proof_pack_manifest.json",
+    ]
+
+    for manifest_path in manifest_candidates:
+        if not manifest_path.exists():
+            continue
+
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+
+        html_entrypoint = manifest.get("html_entrypoint")
+        if isinstance(html_entrypoint, str) and html_entrypoint:
+            html_path = manifest_path.parent / html_entrypoint
+        else:
+            html_path = manifest_path.parent / "roboharness_run_report.html"
+
+        try:
+            manifest_file = manifest_path.relative_to(output_dir).as_posix()
+            html_file = html_path.relative_to(output_dir).as_posix()
+        except ValueError:
+            continue
+
+        return {
+            "proof_pack_manifest_file": manifest_file,
+            "proof_pack_html_file": html_file,
+        }
+
+    return None
+
+
 def policy_meta(
     policy: dict[str, object],
     showcase_context: dict[str, object],
@@ -481,6 +520,7 @@ def policy_meta(
     json_path: Path | None = None,
     rrd_path: Path | None = None,
     log_path: Path | None = None,
+    proof_pack_artifacts: dict[str, str] | None = None,
 ) -> dict[str, object]:
     meta = {
         "card_id": policy["id"],
@@ -510,6 +550,8 @@ def policy_meta(
         meta["rrd_file"] = rrd_path.name
     if log_path is not None:
         meta["log_file"] = log_path.name
+    if proof_pack_artifacts is not None:
+        meta.update(proof_pack_artifacts)
     return meta
 
 
@@ -589,6 +631,7 @@ def run_policy(
 
     actual_transport = detect_transport(log_text)
     actual_model_variant = detect_mujoco_model_variant(log_text)
+    proof_pack_artifacts = discover_proof_pack_artifacts(output_dir, policy_id)
     if showcase_context["transport"] == "mujoco" and actual_transport != "mujoco":
         raise SystemExit(
             f"policy showcase run for {policy_id} did not activate MuJoCo transport; "
@@ -607,6 +650,7 @@ def run_policy(
         json_path=json_path,
         rrd_path=rrd_path,
         log_path=log_path,
+        proof_pack_artifacts=proof_pack_artifacts,
     )
     return report
 
@@ -1406,6 +1450,21 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
         else:
             verdict_details = ""
 
+        proof_pack_links: list[str] = []
+        proof_pack_html_file = meta.get("proof_pack_html_file")
+        if proof_pack_html_file:
+            proof_pack_links.append(
+                f'<a href="{html.escape(str(proof_pack_html_file))}">Proof pack</a>'
+            )
+        proof_pack_manifest_file = meta.get("proof_pack_manifest_file")
+        if proof_pack_manifest_file:
+            proof_pack_links.append(
+                f'<a href="{html.escape(str(proof_pack_manifest_file))}">Proof-pack manifest</a>'
+            )
+        proof_pack_links_html = (
+            " · " + " · ".join(proof_pack_links) if proof_pack_links else ""
+        )
+
         card_html = f'''<section class="card" id="policy-{html.escape(card_id)}">
   <div class="card-header">
     <div>
@@ -1517,7 +1576,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
     {target_tracking_details}
     {velocity_tracking_details}
   </div>
-  <p class="links"><a href="{html.escape(str(meta['rrd_file']))}">Rerun recording</a> · <a href="{html.escape(str(meta['json_file']))}">JSON summary</a> · <a href="{html.escape(str(meta['log_file']))}">run log</a> · <code>{html.escape(str(meta['config_path']))}</code></p>
+  <p class="links"><a href="{html.escape(str(meta['rrd_file']))}">Rerun recording</a> · <a href="{html.escape(str(meta['json_file']))}">JSON summary</a> · <a href="{html.escape(str(meta['log_file']))}">run log</a>{proof_pack_links_html} · <code>{html.escape(str(meta['config_path']))}</code></p>
 </section>'''
         if str(meta["demo_family"]) == "Velocity tracking":
             velocity_cards.append(card_html)
