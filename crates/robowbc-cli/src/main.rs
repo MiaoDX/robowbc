@@ -1562,9 +1562,10 @@ mod tests {
         command_data: Vec<f32>,
         base_pose: Option<ReportBasePose>,
     ) -> ReplayFrame {
+        let tick_u32 = u32::try_from(tick).expect("test tick must fit into u32");
         ReplayFrame {
             tick,
-            sim_time_secs: tick as f64 * 0.02,
+            sim_time_secs: f64::from(tick_u32) * 0.02,
             command_data,
             base_pose,
             actual_positions: vec![],

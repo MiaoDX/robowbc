@@ -22,6 +22,9 @@ transports.
 RoboWBC is a Linux-only project. The runtime backends fail fast on non-Linux
 targets instead of carrying partial or unverified platform fallbacks.
 
+Run `make help` to see the repo-level commands for build, validation,
+benchmarks, site generation, and local serving.
+
 ![RoboWBC architecture](docs/assets/architecture.svg)
 
 ## What ships today
@@ -51,10 +54,9 @@ The generated HTML report includes every currently working public-asset policy:
 ## Quick start
 
 ```bash
-rustc --version
-cargo --version
-cargo build
-cargo run --bin robowbc -- run --config configs/decoupled_smoke.toml
+make toolchain
+make build
+make smoke
 ```
 
 `configs/decoupled_smoke.toml` uses the checked-in dynamic identity ONNX
@@ -93,17 +95,19 @@ The same site builder powers both the local static bundle and the published
 GitHub Pages site.
 
 ```bash
-python scripts/build_site.py
-python scripts/serve_showcase.py --dir /tmp/robowbc-site --port 8000 --open
+make site
+make site-serve SITE_OPEN=1
 ```
 
-`scripts/build_site.py` now owns the full local/CI site build. It picks
-`./.cache/mujoco` by default, downloads MuJoCo there when needed, rebuilds the
-`robowbc` binary with `robowbc-cli/sim-auto-download,robowbc-cli/vis`, runs the
-benchmark generators, and assembles the final static bundle into
-`/tmp/robowbc-site`. Set `MUJOCO_DOWNLOAD_DIR` only if you want a different
-cache location, or pass `--output-dir` if you want the site somewhere other
-than `/tmp/robowbc-site`.
+`make site` wraps `scripts/build_site.py` and now owns the full local/CI site
+build. It picks `./.cache/mujoco` by default, downloads MuJoCo there when
+needed, rebuilds the `robowbc` binary with
+`robowbc-cli/sim-auto-download,robowbc-cli/vis`, runs the benchmark
+generators, and assembles the final static bundle into `/tmp/robowbc-site`.
+Set `MUJOCO_DOWNLOAD_DIR=/your/cache make site` if you want a different cache
+location, or override `SITE_OUTPUT_DIR=/your/output make site` if you want the
+site somewhere else. `make site-smoke` validates the generated bundle layout
+without serving it.
 
 The output folder contains `index.html`, `manifest.json`, `policies/<policy>/`
 folders with per-policy HTML plus raw run artifacts, `benchmarks/nvidia/` with
