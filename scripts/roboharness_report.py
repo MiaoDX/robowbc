@@ -86,20 +86,78 @@ def parse_args() -> argparse.Namespace:
 
 
 def ensure_headless_mujoco_env() -> None:
-    """Default MuJoCo to EGL for headless Linux report generation.
+    """Default MuJoCo to an explicit offscreen backend for headless Linux runs.
 
     CI and most developer shells that render proof-pack screenshots do not have
     a windowing session. MuJoCo's Python renderer needs an explicit offscreen
     backend there or `mujoco.Renderer(...)` fails while creating the GL
     context.
     """
-    if sys.platform != "linux":
+    backend = os.environ.get("MUJOCO_GL")
+    if backend:
+        backend = backend.strip().lower()
+        if backend in {"egl", "osmesa"} and not os.environ.get("PYOPENGL_PLATFORM"):
+            os.environ["PYOPENGL_PLATFORM"] = backend
         return
-    if os.environ.get("MUJOCO_GL"):
+
+    if sys.platform != "linux":
         return
     if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
         return
+
     os.environ["MUJOCO_GL"] = "egl"
+    os.environ.setdefault("PYOPENGL_PLATFORM", "egl")
+
+
+def _iter_exception_chain(exc: BaseException) -> list[BaseException]:
+    chain: list[BaseException] = []
+    current: BaseException | None = exc
+    while current is not None and current not in chain:
+        chain.append(current)
+        if current.__cause__ is not None:
+            current = current.__cause__
+        elif current.__context__ is not None and not current.__suppress_context__:
+            current = current.__context__
+        else:
+            current = None
+    return chain
+
+
+def is_headless_render_backend_error(exc: BaseException) -> bool:
+    """Return True for environment-specific GL bootstrap failures.
+
+    These failures happen on some headless runners when MuJoCo's Python
+    renderer cannot initialize the configured offscreen backend. They are
+    different from deterministic logic bugs in the replay or image-writing
+    code, which should still fail loudly.
+    """
+
+    markers = (
+        "eglquerystring",
+        "pyopengl_platform",
+        "opengl platform",
+        "failed to initialize glfw",
+        "glfwerror",
+        "glcontext",
+        "osmesa",
+        "no display name and no $display",
+        "cannot create opengl context",
+        "failed to create opengl context",
+    )
+    for candidate in _iter_exception_chain(exc):
+        text = f"{type(candidate).__name__}: {candidate}".lower()
+        if any(marker in text for marker in markers):
+            return True
+    return False
+
+
+def frame_capture_warning(exc: BaseException) -> str:
+    backend = os.environ.get("MUJOCO_GL", "auto")
+    return (
+        "Skipped proof-pack screenshots because the MuJoCo offscreen renderer "
+        f"could not initialize the configured backend ({backend}). The raw run "
+        "report, replay trace, and Rerun recording are still available."
+    )
 
 
 def preflight_checks(repo_root: Path, binary: Path, config_path: Path) -> dict[str, str]:
@@ -734,99 +792,84 @@ def capture_frames_from_report(
     Returns a list of checkpoint metadata dicts for the HTML report.
     """
     ensure_headless_mujoco_env()
-    import mujoco
-    showcase_context = report["_meta"]["showcase_context"]
-    model_path = repo_root / showcase_context["model_path"]
-    robot_cfg_path = repo_root / showcase_context["robot_config_path"]
-    robot_cfg = tomllib.loads(robot_cfg_path.read_text(encoding="utf-8"))
-    joint_names = robot_cfg.get("joint_names", [])
-    default_pose = robot_cfg.get("default_pose", [0.0] * len(joint_names))
+    renderer = None
+    try:
+        import mujoco
 
-    model, data = load_meshless_mujoco_model(model_path)
-    renderer = mujoco.Renderer(model, height=480, width=640)
-    replay_root, frames, frame_source = replay_payload(report)
-    control_frequency_hz = int(replay_root.get("control_frequency_hz", 50) or 50)
+        showcase_context = report["_meta"]["showcase_context"]
+        model_path = repo_root / showcase_context["model_path"]
+        robot_cfg_path = repo_root / showcase_context["robot_config_path"]
+        robot_cfg = tomllib.loads(robot_cfg_path.read_text(encoding="utf-8"))
+        joint_names = robot_cfg.get("joint_names", [])
+        default_pose = robot_cfg.get("default_pose", [0.0] * len(joint_names))
 
-    # Build joint name -> qpos address mapping
-    joint_qpos_map: dict[str, int] = {}
-    joint_qvel_map: dict[str, int] = {}
-    floating_base_state: dict[str, int] | None = None
-    for jnt_id in range(model.njnt):
-        name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, jnt_id)
-        qpos_adr = model.jnt_qposadr[jnt_id]
-        qvel_adr = model.jnt_dofadr[jnt_id]
-        joint_qpos_map[name] = int(qpos_adr)
-        joint_qvel_map[name] = int(qvel_adr)
-        if (
-            floating_base_state is None
-            and model.jnt_type[jnt_id] == mujoco.mjtJoint.mjJNT_FREE
-        ):
-            floating_base_state = {
-                "qpos_adr": int(qpos_adr),
-                "qvel_adr": int(qvel_adr),
+        model, data = load_meshless_mujoco_model(model_path)
+        renderer = mujoco.Renderer(model, height=480, width=640)
+        replay_root, frames, frame_source = replay_payload(report)
+        control_frequency_hz = int(replay_root.get("control_frequency_hz", 50) or 50)
+
+        # Build joint name -> qpos address mapping
+        joint_qpos_map: dict[str, int] = {}
+        joint_qvel_map: dict[str, int] = {}
+        floating_base_state: dict[str, int] | None = None
+        for jnt_id in range(model.njnt):
+            name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, jnt_id)
+            qpos_adr = model.jnt_qposadr[jnt_id]
+            qvel_adr = model.jnt_dofadr[jnt_id]
+            joint_qpos_map[name] = int(qpos_adr)
+            joint_qvel_map[name] = int(qvel_adr)
+            if (
+                floating_base_state is None
+                and model.jnt_type[jnt_id] == mujoco.mjtJoint.mjJNT_FREE
+            ):
+                floating_base_state = {
+                    "qpos_adr": int(qpos_adr),
+                    "qvel_adr": int(qvel_adr),
+                }
+
+        if not frames:
+            return []
+
+        checkpoint_specs = select_checkpoint_specs(frames)
+
+        # roboharness expects: output_dir / task_name / trial_name / checkpoint_name
+        capture_dir = output_dir / "roboharness_run" / "trial_001"
+        capture_dir.mkdir(parents=True, exist_ok=True)
+
+        checkpoints: list[dict[str, Any]] = []
+
+        # Camera configurations: track + a few fixed angles
+        camera_configs = [
+            ("track", _track_camera()),
+            ("side", _side_camera()),
+            ("top", _top_camera()),
+        ]
+
+        for checkpoint in checkpoint_specs:
+            frame_index = int(checkpoint["index"])
+            frame = frames[frame_index]
+            target_frame = _target_pose_frame(frame)
+
+            cp_name = f"{checkpoint['name']}_tick_{int(frame['tick']):04d}"
+            cp_dir = capture_dir / cp_name
+            cp_dir.mkdir(parents=True, exist_ok=True)
+            sim_time_secs = frame_sim_time_secs(frame, control_frequency_hz)
+
+            meta = {
+                "tick": int(frame["tick"]),
+                "frame_index": frame_index,
+                "sim_time_secs": sim_time_secs,
+                "inference_latency_ms": float(frame.get("inference_latency_ms", 0.0) or 0.0),
+                "selection_reason": str(checkpoint["reason"]),
+                "frame_source": frame_source,
+                "cameras": [],
             }
 
-    if not frames:
-        return []
-
-    checkpoint_specs = select_checkpoint_specs(frames)
-
-    # roboharness expects: output_dir / task_name / trial_name / checkpoint_name
-    capture_dir = output_dir / "roboharness_run" / "trial_001"
-    capture_dir.mkdir(parents=True, exist_ok=True)
-
-    checkpoints: list[dict[str, Any]] = []
-
-    # Camera configurations: track + a few fixed angles
-    camera_configs = [
-        ("track", _track_camera()),
-        ("side", _side_camera()),
-        ("top", _top_camera()),
-    ]
-
-    for checkpoint in checkpoint_specs:
-        frame_index = int(checkpoint["index"])
-        frame = frames[frame_index]
-        target_frame = _target_pose_frame(frame)
-
-        cp_name = f"{checkpoint['name']}_tick_{int(frame['tick']):04d}"
-        cp_dir = capture_dir / cp_name
-        cp_dir.mkdir(parents=True, exist_ok=True)
-        sim_time_secs = frame_sim_time_secs(frame, control_frequency_hz)
-
-        meta = {
-            "tick": int(frame["tick"]),
-            "frame_index": frame_index,
-            "sim_time_secs": sim_time_secs,
-            "inference_latency_ms": float(frame.get("inference_latency_ms", 0.0) or 0.0),
-            "selection_reason": str(checkpoint["reason"]),
-            "frame_source": frame_source,
-            "cameras": [],
-        }
-
-        for cam_name, cam_obj in camera_configs:
-            restore_frame_state(
-                model,
-                data,
-                frame,
-                joint_names,
-                default_pose,
-                joint_qpos_map,
-                joint_qvel_map,
-                floating_base_state,
-            )
-            renderer.update_scene(data, camera=cam_obj)
-            actual_rgb = renderer.render()
-
-            img_path = cp_dir / f"{cam_name}_rgb.png"
-            _save_png(cp_dir / f"{cam_name}_actual_rgb.png", actual_rgb)
-            if target_frame is None:
-                _save_png(img_path, actual_rgb)
-            else:
+            for cam_name, cam_obj in camera_configs:
                 restore_frame_state(
                     model,
                     data,
-                    target_frame,
+                    frame,
                     joint_names,
                     default_pose,
                     joint_qpos_map,
@@ -834,40 +877,76 @@ def capture_frames_from_report(
                     floating_base_state,
                 )
                 renderer.update_scene(data, camera=cam_obj)
-                target_rgb = renderer.render()
-                _save_png(cp_dir / f"{cam_name}_target_rgb.png", target_rgb)
-                _save_comparison_png(img_path, actual_rgb, target_rgb)
-            meta["cameras"].append(cam_name)
+                actual_rgb = renderer.render()
 
-        # Write metadata.json for roboharness reporting compatibility
-        meta_path = cp_dir / "metadata.json"
-        meta_path.write_text(
-            json.dumps(
+                img_path = cp_dir / f"{cam_name}_rgb.png"
+                _save_png(cp_dir / f"{cam_name}_actual_rgb.png", actual_rgb)
+                if target_frame is None:
+                    _save_png(img_path, actual_rgb)
+                else:
+                    restore_frame_state(
+                        model,
+                        data,
+                        target_frame,
+                        joint_names,
+                        default_pose,
+                        joint_qpos_map,
+                        joint_qvel_map,
+                        floating_base_state,
+                    )
+                    renderer.update_scene(data, camera=cam_obj)
+                    target_rgb = renderer.render()
+                    _save_png(cp_dir / f"{cam_name}_target_rgb.png", target_rgb)
+                    _save_comparison_png(img_path, actual_rgb, target_rgb)
+                meta["cameras"].append(cam_name)
+
+            # Write metadata.json for roboharness reporting compatibility
+            meta_path = cp_dir / "metadata.json"
+            meta_path.write_text(
+                json.dumps(
+                    {
+                        "step": frame["tick"],
+                        "sim_time": sim_time_secs,
+                        "cameras": meta["cameras"],
+                        "camera_capability": "rgb",
+                        "comparison_mode": "target_vs_actual_overlay"
+                        if target_frame is not None
+                        else "actual_only",
+                        "selection_reason": meta["selection_reason"],
+                        "frame_source": frame_source,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            checkpoints.append(
                 {
-                    "step": frame["tick"],
-                    "sim_time": sim_time_secs,
-                    "cameras": meta["cameras"],
-                    "camera_capability": "rgb",
-                    "comparison_mode": "target_vs_actual_overlay"
-                    if target_frame is not None
-                    else "actual_only",
-                    "selection_reason": meta["selection_reason"],
-                    "frame_source": frame_source,
+                    "name": cp_name,
+                    "dir": cp_dir,
+                    "meta": meta,
+                    "relative_dir": cp_dir.relative_to(output_dir).as_posix(),
                 }
-            ),
-            encoding="utf-8",
-        )
+            )
 
-        checkpoints.append(
-            {
-                "name": cp_name,
-                "dir": cp_dir,
-                "meta": meta,
-                "relative_dir": cp_dir.relative_to(output_dir).as_posix(),
-            }
-        )
-
-    return checkpoints
+        return checkpoints
+    except Exception as exc:
+        if not is_headless_render_backend_error(exc):
+            raise
+        warning = frame_capture_warning(exc)
+        report["_proof_pack_capture"] = {
+            "status": "skipped",
+            "backend": os.environ.get("MUJOCO_GL", "auto"),
+            "warning": warning,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+        print(f"warning: {warning}", file=sys.stderr)
+        print(f"warning: frame capture error detail: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return []
+    finally:
+        if renderer is not None:
+            close = getattr(renderer, "close", None)
+            if callable(close):
+                close()
 
 
 def _track_camera() -> Any:
