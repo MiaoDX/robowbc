@@ -48,35 +48,33 @@ If an ONNX-backed run stalls before the first tick on Linux/x86_64, set
 
 ## Generate a local policy showcase
 
-The repository includes a mixed-source showcase generator that compares the
-currently runnable policy integrations and emits one static HTML report.
+The repository includes a single site builder that assembles the policy pages,
+visual checkpoints, and benchmark pages into one static bundle.
 
 ```bash
-export MUJOCO_DOWNLOAD_DIR="$(pwd)/.cache/mujoco"
-cargo build --bin robowbc --features robowbc-cli/sim-auto-download,robowbc-cli/vis
-# npm is used once to vendor the Rerun web viewer beside the report.
-python scripts/generate_policy_showcase.py \
-  --repo-root . \
-  --robowbc-binary ./target/debug/robowbc \
-  --output-dir ./artifacts/policy-showcase
+python scripts/build_site.py
 ```
 
-On Linux, the first `sim-auto-download` build unpacks MuJoCo into
-`MUJOCO_DOWNLOAD_DIR`. If you already manage a system MuJoCo install, the base
-`robowbc-cli/sim` feature path still works too.
+The builder is now the single entrypoint for local and CI site generation. It
+defaults `MUJOCO_DOWNLOAD_DIR` to `./.cache/mujoco`, downloads MuJoCo there if
+the runtime is missing, rebuilds `./target/debug/robowbc` with
+`robowbc-cli/sim-auto-download,robowbc-cli/vis`, and writes the finished site
+bundle to `/tmp/robowbc-site`. Set `MUJOCO_DOWNLOAD_DIR` only if you want a
+different cache location, or pass `--output-dir` to place the site elsewhere.
 
 The output folder contains:
 
-- `index.html`, a comparison-first overview page linking to each policy report
-- `policies/*.html`, one detail page per policy with the interactive Rerun pane
-- raw `*.rrd`, `*.json`, and `*.log` files per policy
-- `_rerun_web_viewer/`, the vendored web runtime used by those panes
+- `index.html`, the site home page
+- `policies/<policy>/`, one folder per policy with `index.html`, `run.json`,
+  `run.rrd`, `run.log`, the replay trace, and inline visual checkpoints
+- `benchmarks/nvidia/`, the NVIDIA comparison page plus normalized JSON inputs
+- `assets/rerun-web-viewer/`, the vendored web runtime used by the policy pages
 
 For the most reliable local viewing path, serve that folder over HTTP:
 
 ```bash
 python scripts/serve_showcase.py \
-  --dir ./artifacts/policy-showcase \
+  --dir /tmp/robowbc-site \
   --port 8000 \
   --open
 ```
@@ -84,15 +82,16 @@ python scripts/serve_showcase.py \
 Then open `http://127.0.0.1:8000`. Do not open the generated `index.html`
 directly via `file://`; the interactive viewer expects an HTTP-served folder.
 The helper script also accepts `--bind` if you want to expose the local preview
-to another machine on the same network. If the public checkpoints are present, the report includes MuJoCo-backed
-`gear_sonic`, `decoupled_wbc`, `wbc_agile`, and `bfm_zero` cards; otherwise
-missing integrations are rendered as blocked with explicit missing-path
-reasons. On the public G1 path the loader uses a meshless MJCF fallback because
-this repo does not ship Unitree's STL mesh bundle. `wbc_agile` currently
-reuses the public 29-DOF G1 embodiment for its scene, so the extra finger
-joints stay at their default pose. Each detail page lazy-loads its `.rrd`
-recording when the viewer becomes visible, which keeps the same static bundle
-usable in CI artifacts and on the `main`-branch GitHub Pages site.
+to another machine on the same network. If the public checkpoints are present,
+the site includes MuJoCo-backed `gear_sonic`, `decoupled_wbc`, `wbc_agile`, and
+`bfm_zero` folders; otherwise missing integrations are rendered as blocked with
+explicit missing-path reasons. On the public G1 path the loader uses a meshless
+MJCF fallback because this repo does not ship Unitree's STL mesh bundle.
+`wbc_agile` currently reuses the public 29-DOF G1 embodiment for its scene, so
+the extra finger joints stay at their default pose. Each policy page lazy-loads
+its `.rrd` recording when the viewer becomes visible and keeps the visual
+checkpoint overlays inline, which makes the same static bundle usable in CI
+artifacts and on the `main`-branch GitHub Pages site.
 
 ## Run GEAR-SONIC with real checkpoints
 

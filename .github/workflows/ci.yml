@@ -94,8 +94,8 @@ jobs:
             models/bfm_zero
           key: live-policy-models-${{ runner.os }}-v3
 
-      - name: Install showcase and benchmark Python dependencies
-        run: pip install numpy joblib onnxruntime==1.24.4 pyyaml
+      - name: Install site-build Python dependencies
+        run: pip install numpy joblib onnxruntime==1.24.4 pyyaml mujoco Pillow
 
       - name: Warm live policy checkpoint cache
         run: |
@@ -104,108 +104,57 @@ jobs:
           bash scripts/download_wbc_agile_models.sh models/wbc-agile
           bash scripts/download_bfm_zero_models.sh models/bfm_zero
 
-      - name: Ensure MuJoCo runtime is present for cached sim builds
+      - name: Build RoboWBC site
         run: |
-          set -euxo pipefail
-          mujoco_version="3.6.0"
-          case "$(uname -m)" in
-            x86_64|amd64) mujoco_arch="x86_64" ;;
-            aarch64|arm64) mujoco_arch="aarch64" ;;
-            *)
-              echo "unsupported runner architecture: $(uname -m)" >&2
-              exit 1
-              ;;
-          esac
-
-          mujoco_root="${MUJOCO_DOWNLOAD_DIR}/mujoco-${mujoco_version}"
-          mujoco_lib="${mujoco_root}/lib/libmujoco.so"
-          if [ -f "${mujoco_lib}" ]; then
-            exit 0
-          fi
-
-          archive="mujoco-${mujoco_version}-linux-${mujoco_arch}.tar.gz"
-          archive_path="/tmp/${archive}"
-          checksum_path="${archive_path}.sha256"
-          base_url="https://github.com/google-deepmind/mujoco/releases/download/${mujoco_version}"
-
-          mkdir -p "${MUJOCO_DOWNLOAD_DIR}"
-          curl -fsSL "${base_url}/${archive}" -o "${archive_path}"
-          curl -fsSL "${base_url}/${archive}.sha256" -o "${checksum_path}"
-
-          expected_sha="$(cut -d' ' -f1 < "${checksum_path}")"
-          actual_sha="$(sha256sum "${archive_path}" | cut -d' ' -f1)"
-          if [ "${expected_sha}" != "${actual_sha}" ]; then
-            echo "MuJoCo archive checksum mismatch" >&2
-            exit 1
-          fi
-
-          tar -xzf "${archive_path}" -C "${MUJOCO_DOWNLOAD_DIR}"
-          test -f "${mujoco_lib}"
-
-      - name: Build robowbc with sim + vis showcase features
-        run: cargo build --bin robowbc --features robowbc-cli/sim-auto-download,robowbc-cli/vis
-
-      - name: Generate mixed-source policy showcase
-        run: |
-          python scripts/generate_policy_showcase.py \
+          python scripts/build_site.py \
             --repo-root . \
             --robowbc-binary ./target/debug/robowbc \
-            --output-dir /tmp/policy-showcase
+            --output-dir /tmp/robowbc-site
 
-      - name: Generate NVIDIA comparison HTML
+      - name: Smoke-check generated site bundle
         run: |
-          python3 scripts/bench_robowbc_compare.py --all
-          python scripts/bench_nvidia_official.py --all
-          mkdir -p /tmp/policy-showcase/benchmarks
-          cp -R artifacts/benchmarks/nvidia /tmp/policy-showcase/benchmarks/nvidia
-          python scripts/render_nvidia_benchmark_summary.py \
-            --root /tmp/policy-showcase/benchmarks/nvidia \
-            --output /tmp/policy-showcase/benchmarks/nvidia/SUMMARY.md \
-            --html-output /tmp/policy-showcase/benchmarks/nvidia/index.html
-
-      - name: Smoke-check generated showcase bundle
-        run: |
-          test -f /tmp/policy-showcase/index.html
-          test -f /tmp/policy-showcase/manifest.json
-          test -f /tmp/policy-showcase/.nojekyll
-          test -f /tmp/policy-showcase/_rerun_web_viewer/index.js
-          test -f /tmp/policy-showcase/benchmarks/nvidia/index.html
+          test -f /tmp/robowbc-site/index.html
+          test -f /tmp/robowbc-site/manifest.json
+          test -f /tmp/robowbc-site/assets/rerun-web-viewer/index.js
+          test -f /tmp/robowbc-site/policies/gear_sonic/index.html
+          test -f /tmp/robowbc-site/benchmarks/nvidia/index.html
           python3 - <<'PY'
           import json
           from pathlib import Path
 
-          root = Path("/tmp/policy-showcase")
+          root = Path("/tmp/robowbc-site")
           manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
-          assert manifest, "showcase manifest is empty"
+          assert manifest, "site manifest is empty"
           assert all("detail_page" in entry for entry in manifest), "detail_page missing from manifest"
 
-          detail_pages = [root / entry["detail_page"] for entry in manifest]
-          assert all(path.is_file() for path in detail_pages), "missing policy detail page"
+          detail_dirs = [root / entry["detail_page"] for entry in manifest]
+          assert all((path / "index.html").is_file() for path in detail_dirs), "missing policy detail page"
 
           ok_entries = [entry for entry in manifest if entry.get("status") == "ok"]
-          assert ok_entries, "expected at least one successful showcase entry"
+          assert ok_entries, "expected at least one successful policy entry"
 
-          detail_text = (root / ok_entries[0]["detail_page"]).read_text(encoding="utf-8")
-          assert "../_rerun_web_viewer/index.js" in detail_text, "detail page missing rebased viewer path"
+          detail_dir = root / ok_entries[0]["detail_page"]
+          detail_text = (detail_dir / "index.html").read_text(encoding="utf-8")
+          assert "../../assets/rerun-web-viewer/index.js" in detail_text, "detail page missing rebased viewer path"
+          assert 'data-rrd-file="run.rrd"' in detail_text, "detail page missing local run recording path"
+          assert "proof_pack_manifest.json" in detail_text, "detail page missing proof-pack manifest reference"
 
-          rrd_file = ok_entries[0]["_meta"].get("rrd_file")
-          assert isinstance(rrd_file, str) and rrd_file, "successful showcase entry missing rrd_file"
-          expected_rrd = f"../{rrd_file}"
-          assert expected_rrd in detail_text, "detail page missing rebased rrd path"
+          benchmark_text = (root / "index.html").read_text(encoding="utf-8")
+          assert "benchmarks/nvidia/index.html" in benchmark_text, "site home missing benchmark link"
           PY
 
       - name: Upload NVIDIA benchmark comparison artifact
         uses: actions/upload-artifact@v4
         with:
           name: nvidia-benchmark-comparison
-          path: /tmp/policy-showcase/benchmarks/nvidia
+          path: /tmp/robowbc-site/benchmarks/nvidia
           retention-days: 30
 
-      - name: Upload policy showcase artifact
+      - name: Upload RoboWBC site artifact
         uses: actions/upload-artifact@v4
         with:
-          name: policy-showcase
-          path: /tmp/policy-showcase
+          name: robowbc-site
+          path: /tmp/robowbc-site
           retention-days: 30
 
       - name: Configure GitHub Pages
@@ -216,7 +165,7 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v4
         with:
-          path: /tmp/policy-showcase
+          path: /tmp/robowbc-site
 
   deploy-showcase:
     name: Deploy showcase to GitHub Pages

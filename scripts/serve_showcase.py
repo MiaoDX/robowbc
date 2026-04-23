@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Serve a generated RoboWBC showcase bundle over HTTP for local debugging."""
+"""Serve a generated RoboWBC site bundle over HTTP for local debugging."""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dir",
         default=".",
-        help="Directory containing the generated showcase bundle and index.html",
+        help="Directory containing the generated site bundle and index.html",
     )
     parser.add_argument("--bind", default="127.0.0.1", help="Address to bind the local server")
     parser.add_argument("--port", type=int, default=8000, help="Port to bind the local server")
@@ -45,14 +45,14 @@ def main() -> int:
     args = parse_args()
     root = Path(args.dir).resolve()
     if not root.is_dir():
-        raise SystemExit(f"showcase directory not found: {root}")
+        raise SystemExit(f"site directory not found: {root}")
     if not (root / "index.html").is_file():
         raise SystemExit(f"expected {root / 'index.html'} to exist")
 
     handler = functools.partial(ShowcaseRequestHandler, directory=str(root))
     with ReusableTCPServer((args.bind, args.port), handler) as httpd:
         url = f"http://{args.bind}:{args.port}/"
-        print(f"Serving RoboWBC showcase from {root}")
+        print(f"Serving RoboWBC site from {root}")
         print(f"Open {url}")
         print("Press Ctrl-C to stop.")
         if args.open:

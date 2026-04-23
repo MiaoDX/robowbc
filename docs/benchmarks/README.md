@@ -5,8 +5,8 @@ not a hand-maintained latency table.
 
 The source of truth lives under:
 
-- `artifacts/benchmarks/nvidia/cases.json`
-- `artifacts/benchmarks/nvidia/README.md`
+- `benchmarks/nvidia/cases.json`
+- `benchmarks/nvidia/README.md`
 - `artifacts/benchmarks/nvidia/SUMMARY.md`
 - HTML summary generated either locally at `artifacts/benchmarks/nvidia/index.html`
   or in CI / Pages at `benchmarks/nvidia/index.html`
@@ -145,4 +145,4 @@ Publish only what exists as a normalized artifact under
 `artifacts/benchmarks/nvidia/`.
 
 If a row is blocked, say so explicitly. If a row is measured, link the row back
-to the artifact path and rerun command from `cases.json`.
+to the artifact path and rerun command from `benchmarks/nvidia/cases.json`.

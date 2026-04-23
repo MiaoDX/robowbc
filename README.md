@@ -89,27 +89,27 @@ the CLI and CI.
 <details>
 <summary><strong>Open or generate the visual report</strong></summary>
 
-The same report generator powers both the local HTML bundle and the published
+The same site builder powers both the local static bundle and the published
 GitHub Pages site.
 
 ```bash
-cargo build --bin robowbc --features robowbc-cli/sim-auto-download,robowbc-cli/vis
-python scripts/generate_policy_showcase.py \
-  --repo-root . \
-  --robowbc-binary ./target/debug/robowbc \
-  --output-dir ./artifacts/policy-showcase
-
-cd ./artifacts/policy-showcase
-python -m http.server 8000
+python scripts/build_site.py
+python scripts/serve_showcase.py --dir /tmp/robowbc-site --port 8000 --open
 ```
 
-The output folder contains `index.html`, `manifest.json`, per-policy `*.json`
-run summaries, raw `*.rrd` recordings, logs, and the embedded Rerun web viewer
-runtime. Pull requests keep the downloadable `policy-showcase` artifact, and
-`main` publishes the generated site to the live report link above. The root
-`index.html` is the overview page; each policy also gets its own
-`policies/<policy>.html` page with the embedded Rerun playback, charts, logs,
-and proof-pack links.
+`scripts/build_site.py` now owns the full local/CI site build. It picks
+`./.cache/mujoco` by default, downloads MuJoCo there when needed, rebuilds the
+`robowbc` binary with `robowbc-cli/sim-auto-download,robowbc-cli/vis`, runs the
+benchmark generators, and assembles the final static bundle into
+`/tmp/robowbc-site`. Set `MUJOCO_DOWNLOAD_DIR` only if you want a different
+cache location, or pass `--output-dir` if you want the site somewhere other
+than `/tmp/robowbc-site`.
+
+The output folder contains `index.html`, `manifest.json`, `policies/<policy>/`
+folders with per-policy HTML plus raw run artifacts, `benchmarks/nvidia/` with
+the NVIDIA comparison page, and `assets/rerun-web-viewer/` for embedded Rerun
+playback. Pull requests keep the downloadable `robowbc-site` artifact, and
+`main` publishes the generated site to the live report link above.
 </details>
 
 <details>
