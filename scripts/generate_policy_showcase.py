@@ -511,7 +511,7 @@ def build_proof_pack_manifest_payload(
         meta = {}
 
     showcase_context = meta.get("showcase_context") or {}
-    return {
+    payload = {
         "schema_version": 1,
         "generated_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ"),
         "policy_name": report.get("policy_name"),
@@ -551,6 +551,20 @@ def build_proof_pack_manifest_payload(
             for checkpoint in checkpoints
         ],
     }
+
+    capture_meta = report.get("_proof_pack_capture")
+    if checkpoints:
+        payload["capture_status"] = "ok"
+    elif isinstance(capture_meta, dict):
+        payload["capture_status"] = str(capture_meta.get("status", "skipped"))
+        if capture_meta.get("backend"):
+            payload["capture_backend"] = capture_meta["backend"]
+        if capture_meta.get("warning"):
+            payload["capture_warning"] = capture_meta["warning"]
+        if capture_meta.get("error"):
+            payload["capture_error"] = capture_meta["error"]
+
+    return payload
 
 
 def generate_policy_proof_pack(
@@ -1289,6 +1303,23 @@ def render_proof_pack_section(proof_pack_manifest: dict[str, object] | None) -> 
 
     checkpoints = proof_pack_manifest.get("checkpoints")
     if not isinstance(checkpoints, list) or not checkpoints:
+        capture_warning = proof_pack_manifest.get("capture_warning")
+        if isinstance(capture_warning, str) and capture_warning:
+            capture_backend = proof_pack_manifest.get("capture_backend")
+            backend_html = (
+                f'<p class="muted">Configured offscreen backend: <code>{html.escape(str(capture_backend))}</code>.</p>'
+                if capture_backend
+                else ""
+            )
+            return f'''<section class="card">
+  <h2>Visual Checkpoints</h2>
+  <div class="blocked-reason">
+    <p><strong>Screenshots unavailable for this build.</strong></p>
+    <p class="muted">{html.escape(capture_warning)}</p>
+    {backend_html}
+    <p class="muted">The raw run report, replay trace, and Rerun recording are still published above so the result remains reviewable.</p>
+  </div>
+</section>'''
         return ""
 
     checkpoint_cards: list[str] = []
