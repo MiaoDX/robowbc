@@ -16,3 +16,4 @@ onnxruntime_profile__*.json
 observation_config.yaml
 sonic_release/
 uv.lock
+.gstack/
