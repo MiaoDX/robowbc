@@ -14,7 +14,7 @@ from typing import Any
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-REGISTRY_PATH = ROOT_DIR / "artifacts/benchmarks/nvidia/cases.json"
+REGISTRY_PATH = ROOT_DIR / "benchmarks/nvidia/cases.json"
 NORMALIZER_PATH = ROOT_DIR / "scripts/normalize_nvidia_benchmarks.py"
 DECOUPLED_HARNESS = ROOT_DIR / "scripts/bench_nvidia_decoupled_official.py"
 GEAR_SONIC_HARNESS_SRC = ROOT_DIR / "scripts/bench_nvidia_gear_sonic_official.cpp"

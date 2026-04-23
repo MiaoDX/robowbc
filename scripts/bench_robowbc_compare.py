@@ -13,7 +13,7 @@ from typing import Any
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-REGISTRY_PATH = ROOT_DIR / "artifacts/benchmarks/nvidia/cases.json"
+REGISTRY_PATH = ROOT_DIR / "benchmarks/nvidia/cases.json"
 NORMALIZER_PATH = ROOT_DIR / "scripts/normalize_nvidia_benchmarks.py"
 DEFAULT_OUTPUT_ROOT = ROOT_DIR / "artifacts/benchmarks/nvidia/robowbc"
 DEFAULT_GEAR_SONIC_REVISION = "cc80d505b7e055fd6ae26426ae8bfa0a74c26011"
@@ -72,6 +72,30 @@ def run(argv: list[str], *, env: dict[str, str] | None = None) -> None:
         check=True,
         text=True,
     )
+
+
+def prepend_env_path(env: dict[str, str], key: str, value: Path) -> None:
+    current = env.get(key)
+    env[key] = f"{value}{os.pathsep}{current}" if current else str(value)
+
+
+def resolve_mujoco_runtime_libdir(env: dict[str, str]) -> Path | None:
+    download_dir = env.get("MUJOCO_DOWNLOAD_DIR")
+    if not download_dir:
+        return None
+    candidates = sorted(
+        Path(download_dir).glob("mujoco-*/lib/libmujoco.so"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    return candidates[0].parent if candidates else None
+
+
+def configure_mujoco_runtime_env(env: dict[str, str]) -> dict[str, str]:
+    libdir = resolve_mujoco_runtime_libdir(env)
+    if libdir is not None:
+        prepend_env_path(env, "LD_LIBRARY_PATH", libdir)
+    return env
 
 
 def git_rev_parse(repo_dir: Path) -> str:
@@ -266,6 +290,7 @@ def run_cli_case(
         temp_root = Path(temp_dir)
         temp_config = temp_root / source_config.name
         raw_report = temp_root / "report.json"
+        env = configure_mujoco_runtime_env(os.environ.copy())
         temp_config.write_text(
             append_report_section(source_config.read_text(encoding="utf-8"), raw_report),
             encoding="utf-8",
@@ -276,13 +301,16 @@ def run_cli_case(
                 "run",
                 "-p",
                 "robowbc-cli",
+                "--features",
+                "sim-auto-download,vis",
                 "--bin",
                 "robowbc",
                 "--",
                 "run",
                 "--config",
                 str(temp_config),
-            ]
+            ],
+            env=env,
         )
         normalize_run_report(
             case_id=case_id,

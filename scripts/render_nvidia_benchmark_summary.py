@@ -154,7 +154,8 @@ def render_markdown(summary: dict[str, Any]) -> str:
     lines: list[str] = [
         "# NVIDIA Comparison Summary",
         "",
-        "Generated from normalized artifacts under `artifacts/benchmarks/nvidia/`.",
+        "Generated from normalized artifacts under `artifacts/benchmarks/nvidia/`",
+        "using the tracked case registry in `benchmarks/nvidia/cases.json`.",
         "",
         "## Provenance",
         "",
@@ -218,6 +219,8 @@ def render_markdown(summary: dict[str, Any]) -> str:
             "python3 scripts/bench_robowbc_compare.py --all",
             "python3 scripts/bench_nvidia_official.py --all",
             "python3 scripts/render_nvidia_benchmark_summary.py --output artifacts/benchmarks/nvidia/SUMMARY.md",
+            "# or build the full static site bundle:",
+            "python3 scripts/build_site.py --output-dir /tmp/robowbc-site",
             "```",
             "",
             "If a future environment is missing models or build prerequisites, the wrappers will emit",
@@ -261,7 +264,9 @@ def render_html(summary: dict[str, Any]) -> str:
         [
             "python3 scripts/bench_robowbc_compare.py --all",
             "python3 scripts/bench_nvidia_official.py --all",
-            "python3 scripts/render_nvidia_benchmark_summary.py --output artifacts/benchmarks/nvidia/SUMMARY.md --html-output /tmp/policy-showcase/benchmarks/nvidia/index.html",
+            "python3 scripts/render_nvidia_benchmark_summary.py --output artifacts/benchmarks/nvidia/SUMMARY.md --html-output /tmp/robowbc-site/benchmarks/nvidia/index.html",
+            "# or build the full static site bundle:",
+            "python3 scripts/build_site.py --output-dir /tmp/robowbc-site",
         ]
     )
 
@@ -327,7 +332,7 @@ def render_html(summary: dict[str, Any]) -> str:
       <p>This page is generated automatically in CI from the normalized RoboWBC-vs-official benchmark artifacts. It keeps the matched-path comparison package visible on GitHub Pages without requiring readers to reconstruct the Markdown summary locally.</p>
       <p class="muted">Rows stay honest: if a future rerun loses models, prerequisites, or an executable upstream seam, the page surfaces the blocked artifact instead of approximating a nearby path.</p>
       <div class="hero-links">
-        <a class="hero-link" href="../../index.html">Policy showcase</a>
+        <a class="hero-link" href="../../index.html">Site home</a>
         <a class="hero-link" href="SUMMARY.md">Markdown summary</a>
         <a class="hero-link" href="cases.json">Case registry</a>
       </div>
@@ -378,7 +383,7 @@ def main() -> int:
     parser.add_argument(
         "--registry",
         type=Path,
-        default=Path("artifacts/benchmarks/nvidia/cases.json"),
+        default=Path("benchmarks/nvidia/cases.json"),
     )
     parser.add_argument(
         "--root",

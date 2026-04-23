@@ -716,8 +716,6 @@ def capture_frames_from_report(
     Returns a list of checkpoint metadata dicts for the HTML report.
     """
     import mujoco
-    from roboharness.core.capture import CameraView
-
     showcase_context = report["_meta"]["showcase_context"]
     model_path = repo_root / showcase_context["model_path"]
     robot_cfg_path = repo_root / showcase_context["robot_config_path"]

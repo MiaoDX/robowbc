@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import html
+import importlib.util
 import json
 import math
 import os
@@ -176,7 +177,7 @@ NOT_YET_SHOWCASED = [
 ]
 
 COLORS = ["#0f766e", "#dc2626", "#2563eb", "#d97706", "#7c3aed", "#0891b2"]
-RERUN_WEB_VIEWER_DIR = "_rerun_web_viewer"
+RERUN_WEB_VIEWER_DIR = "assets/rerun-web-viewer"
 DISPLAY_ORDER = {
     "gear_sonic": 0,
     "gear_sonic_tracking": 1,
@@ -199,6 +200,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--robowbc-binary", required=True)
     parser.add_argument("--output-dir", required=True)
     return parser.parse_args()
+
+
+def site_relative_path(root: Path, path: Path) -> str:
+    return path.relative_to(root).as_posix()
+
+
+def policy_output_dir(output_dir: Path, policy_id: str) -> Path:
+    return output_dir / "policies" / policy_id
+
+
+def detail_page_path(output_dir: Path, card_id: str) -> Path:
+    return policy_output_dir(output_dir, card_id) / "index.html"
 
 
 def resolve_ort_dylib(repo_root: Path) -> str | None:
@@ -334,6 +347,22 @@ def vendor_rerun_web_viewer(repo_root: Path, output_dir: Path) -> dict[str, str]
         "version": version,
         "module_path": f"./{RERUN_WEB_VIEWER_DIR}/index.js",
     }
+
+
+def derive_replay_trace_path(report_path: Path) -> Path:
+    stem = report_path.stem or "run"
+    suffix = report_path.suffix or ".json"
+    return report_path.with_name(f"{stem}_replay_trace{suffix}")
+
+
+def load_roboharness_report_module():
+    script_path = Path(__file__).with_name("roboharness_report.py")
+    spec = importlib.util.spec_from_file_location("roboharness_report", script_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"failed to load roboharness report helpers from {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def resolve_showcase_context(repo_root: Path, policy: dict[str, object]) -> dict[str, object]:
@@ -473,47 +502,87 @@ def detect_mujoco_model_variant(log_text: str) -> str | None:
     return match.group(1) if match else None
 
 
-def discover_proof_pack_artifacts(
-    output_dir: Path,
-    policy_id: str,
-) -> dict[str, str] | None:
-    manifest_candidates = [
-        output_dir / f"{policy_id}_proof_pack" / "proof_pack_manifest.json",
-        output_dir / f"{policy_id}.proof_pack" / "proof_pack_manifest.json",
-        output_dir / f"{policy_id}.proof_pack_manifest.json",
-    ]
+def build_proof_pack_manifest_payload(
+    report: dict[str, object],
+    checkpoints: list[dict[str, object]],
+) -> dict[str, object]:
+    meta = report.get("_meta", {})
+    if not isinstance(meta, dict):
+        meta = {}
 
-    for manifest_path in manifest_candidates:
-        if not manifest_path.exists():
-            continue
+    showcase_context = meta.get("showcase_context") or {}
+    return {
+        "schema_version": 1,
+        "generated_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ"),
+        "policy_name": report.get("policy_name"),
+        "robot_name": report.get("robot_name"),
+        "command_kind": report.get("command_kind"),
+        "command_data": report.get("command_data", []),
+        "control_frequency_hz": report.get("control_frequency_hz"),
+        "html_entrypoint": "index.html",
+        "metrics_source": "run.json",
+        "frame_source": "canonical_replay_trace",
+        "transport": {
+            "kind": showcase_context.get("transport"),
+            "model_path": showcase_context.get("model_path"),
+            "gain_profile": showcase_context.get("gain_profile"),
+            "timestep_secs": showcase_context.get("timestep"),
+            "substeps": showcase_context.get("substeps"),
+            "robot_config_path": showcase_context.get("robot_config_path"),
+        },
+        "raw_artifacts": {
+            "run_report": "run.json",
+            "replay_trace": "run_replay_trace.json",
+            "rerun_recording": "run.rrd",
+            "run_log": "run.log",
+            "temp_config": "run.toml",
+        },
+        "checkpoints": [
+            {
+                "name": checkpoint["name"],
+                "relative_dir": checkpoint["relative_dir"],
+                "tick": checkpoint["meta"]["tick"],
+                "frame_index": checkpoint["meta"]["frame_index"],
+                "sim_time_secs": checkpoint["meta"]["sim_time_secs"],
+                "selection_reason": checkpoint["meta"]["selection_reason"],
+                "frame_source": checkpoint["meta"]["frame_source"],
+                "cameras": checkpoint["meta"]["cameras"],
+            }
+            for checkpoint in checkpoints
+        ],
+    }
 
-        try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            continue
 
-        html_entrypoint = manifest.get("html_entrypoint")
-        if isinstance(html_entrypoint, str) and html_entrypoint:
-            html_path = manifest_path.parent / html_entrypoint
-        else:
-            html_path = manifest_path.parent / "roboharness_run_report.html"
+def generate_policy_proof_pack(
+    repo_root: Path,
+    policy_dir: Path,
+    report: dict[str, object],
+    site_root: Path,
+) -> tuple[dict[str, str], dict[str, object]] | None:
+    report_meta = report.get("_meta")
+    if not isinstance(report_meta, dict):
+        return None
 
-        try:
-            manifest_file = manifest_path.relative_to(output_dir).as_posix()
-            html_file = html_path.relative_to(output_dir).as_posix()
-        except ValueError:
-            continue
+    showcase_context = report_meta.get("showcase_context")
+    if not isinstance(showcase_context, dict) or showcase_context.get("transport") != "mujoco":
+        return None
 
-        return {
-            "proof_pack_manifest_file": manifest_file,
-            "proof_pack_html_file": html_file,
-        }
-
-    return None
+    helpers = load_roboharness_report_module()
+    checkpoints = helpers.capture_frames_from_report(repo_root, report, policy_dir)
+    manifest_payload = build_proof_pack_manifest_payload(report, checkpoints)
+    manifest_path = policy_dir / "proof_pack_manifest.json"
+    manifest_path.write_text(json.dumps(manifest_payload, indent=2), encoding="utf-8")
+    return (
+        {
+            "proof_pack_manifest_file": site_relative_path(site_root, manifest_path),
+        },
+        manifest_payload,
+    )
 
 
 def policy_meta(
     policy: dict[str, object],
+    site_root: Path,
     showcase_context: dict[str, object],
     actual_transport: str | None = None,
     actual_model_variant: str | None = None,
@@ -545,11 +614,11 @@ def policy_meta(
         "robot_config_path": showcase_context.get("robot_config_path"),
     }
     if json_path is not None:
-        meta["json_file"] = json_path.name
+        meta["json_file"] = site_relative_path(site_root, json_path)
     if rrd_path is not None:
-        meta["rrd_file"] = rrd_path.name
+        meta["rrd_file"] = site_relative_path(site_root, rrd_path)
     if log_path is not None:
-        meta["log_file"] = log_path.name
+        meta["log_file"] = site_relative_path(site_root, log_path)
     if proof_pack_artifacts is not None:
         meta.update(proof_pack_artifacts)
     return meta
@@ -569,7 +638,7 @@ def blocked_entry(repo_root: Path, policy: dict[str, object]) -> dict[str, objec
         "command_kind": str(policy["command_source"]).removeprefix("runtime."),
         "command_data": [],
         "_meta": {
-            **policy_meta(policy, showcase_context),
+            **policy_meta(policy, repo_root, showcase_context),
             "missing_paths": missing,
         },
     }
@@ -588,12 +657,15 @@ def run_policy(
         return blocked_entry(repo_root, policy)
 
     policy_id = str(policy["id"])
+    policy_dir = policy_output_dir(output_dir, policy_id)
+    policy_dir.mkdir(parents=True, exist_ok=True)
     showcase_context = resolve_showcase_context(repo_root, policy)
     base_config = (repo_root / str(policy["config"])).read_text(encoding="utf-8")
-    temp_config = output_dir / f"{policy_id}.toml"
-    json_path = output_dir / f"{policy_id}.json"
-    rrd_path = output_dir / f"{policy_id}.rrd"
-    log_path = output_dir / f"{policy_id}.log"
+    temp_config = policy_dir / "run.toml"
+    json_path = policy_dir / "run.json"
+    replay_path = derive_replay_trace_path(json_path)
+    rrd_path = policy_dir / "run.rrd"
+    log_path = policy_dir / "run.log"
     temp_config.write_text(
         compose_showcase_config(
             base_config,
@@ -631,7 +703,6 @@ def run_policy(
 
     actual_transport = detect_transport(log_text)
     actual_model_variant = detect_mujoco_model_variant(log_text)
-    proof_pack_artifacts = discover_proof_pack_artifacts(output_dir, policy_id)
     if showcase_context["transport"] == "mujoco" and actual_transport != "mujoco":
         raise SystemExit(
             f"policy showcase run for {policy_id} did not activate MuJoCo transport; "
@@ -639,11 +710,34 @@ def run_policy(
         )
 
     report = json.loads(json_path.read_text(encoding="utf-8"))
+    replay_trace = None
+    if replay_path.exists():
+        replay_trace = json.loads(replay_path.read_text(encoding="utf-8"))
+
+    report["_meta"] = {
+        "log_path": str(log_path),
+        "rrd_path": str(rrd_path),
+        "json_path": str(json_path),
+        "replay_trace_path": str(replay_path),
+        "replay_trace_present": replay_trace is not None,
+        "temp_config": str(temp_config),
+        "showcase_context": showcase_context,
+    }
+    if replay_trace is not None:
+        report["_replay_trace"] = replay_trace
+
+    proof_pack_artifacts: dict[str, str] | None = None
+    proof_pack_manifest: dict[str, object] | None = None
+    proof_pack_result = generate_policy_proof_pack(repo_root, policy_dir, report, output_dir)
+    if proof_pack_result is not None:
+        proof_pack_artifacts, proof_pack_manifest = proof_pack_result
+
     report["card_id"] = policy_id
     report.setdefault("policy_name", str(policy.get("policy_family", policy_id)))
     report["status"] = "ok"
     report["_meta"] = policy_meta(
         policy,
+        output_dir,
         showcase_context,
         actual_transport=actual_transport,
         actual_model_variant=actual_model_variant,
@@ -652,6 +746,8 @@ def run_policy(
         log_path=log_path,
         proof_pack_artifacts=proof_pack_artifacts,
     )
+    if proof_pack_manifest is not None:
+        report["_proof_pack_manifest"] = proof_pack_manifest
     return report
 
 
@@ -1101,11 +1197,6 @@ def render_demo_section(title: str, cards: list[str]) -> str:
 def relative_href(from_path: Path, target_path: Path) -> str:
     return os.path.relpath(target_path, start=from_path.parent).replace(os.sep, "/")
 
-
-def detail_page_path(output_dir: Path, card_id: str) -> Path:
-    return output_dir / "policies" / f"{card_id}.html"
-
-
 def rebase_meta_artifact_paths(
     meta: dict[str, object],
     from_page: Path,
@@ -1116,7 +1207,6 @@ def rebase_meta_artifact_paths(
         "json_file",
         "rrd_file",
         "log_file",
-        "proof_pack_html_file",
         "proof_pack_manifest_file",
     ):
         value = meta.get(key)
@@ -1127,16 +1217,140 @@ def rebase_meta_artifact_paths(
 
 def render_overview_links(meta: dict[str, object], detail_href: str) -> str:
     links = [f'<a href="{html.escape(detail_href)}">Detail page</a>']
+    if meta.get("proof_pack_manifest_file"):
+        links.append(f'<a href="{html.escape(detail_href)}#visual-checkpoints">Visual checkpoints</a>')
     for key, label in (
         ("rrd_file", "Rerun"),
         ("json_file", "JSON"),
         ("log_file", "log"),
-        ("proof_pack_html_file", "Proof pack"),
+        ("proof_pack_manifest_file", "Proof-pack manifest"),
     ):
         value = meta.get(key)
         if isinstance(value, str) and value:
             links.append(f'<a href="{html.escape(value)}">{html.escape(label)}</a>')
     return " · ".join(links)
+
+
+def discover_benchmark_pages(output_dir: Path, index_path: Path) -> list[dict[str, str]]:
+    benchmark_specs = [
+        (
+            output_dir / "benchmarks" / "nvidia" / "index.html",
+            "NVIDIA Comparison",
+            "RoboWBC-vs-official benchmark matrix built from the normalized NVIDIA artifacts.",
+        )
+    ]
+    pages: list[dict[str, str]] = []
+    for page_path, title, summary in benchmark_specs:
+        if page_path.is_file():
+            pages.append(
+                {
+                    "title": title,
+                    "summary": summary,
+                    "href": relative_href(index_path, page_path),
+                }
+            )
+    return pages
+
+
+def render_benchmark_section(pages: list[dict[str, str]]) -> str:
+    if not pages:
+        return ""
+
+    cards = []
+    for page in pages:
+        cards.append(
+            f'''<article class="policy-link-card">
+  <div class="policy-link-header">
+    <div>
+      <h3><a href="{html.escape(page["href"])}">{html.escape(page["title"])}</a></h3>
+      <p class="muted">Benchmarks</p>
+    </div>
+    <div class="badge-row">{pill("BENCHMARK", "meta")}</div>
+  </div>
+  <p>{html.escape(page["summary"])}</p>
+  <p class="links"><a href="{html.escape(page["href"])}">Open benchmark page</a></p>
+</article>'''
+        )
+
+    return f'''<section class="demo-section">
+      <div class="section-header">
+        <h2>Benchmarks</h2>
+        <p class="muted">Normalized benchmark packages that sit beside the policy pages in the same site bundle.</p>
+      </div>
+      <div class="cards">
+        {''.join(cards)}
+      </div>
+    </section>'''
+
+
+def render_proof_pack_section(proof_pack_manifest: dict[str, object] | None) -> str:
+    if not isinstance(proof_pack_manifest, dict):
+        return ""
+
+    checkpoints = proof_pack_manifest.get("checkpoints")
+    if not isinstance(checkpoints, list) or not checkpoints:
+        return ""
+
+    checkpoint_cards: list[str] = []
+    for checkpoint in checkpoints:
+        if not isinstance(checkpoint, dict):
+            continue
+        relative_dir = checkpoint.get("relative_dir")
+        cameras = checkpoint.get("cameras")
+        if not isinstance(relative_dir, str) or not isinstance(cameras, list):
+            continue
+
+        camera_cards = []
+        for camera in cameras:
+            if not isinstance(camera, str):
+                continue
+            image_href = f"{relative_dir}/{camera}_rgb.png"
+            camera_cards.append(
+                f'''<figure class="proof-view">
+  <img src="{html.escape(image_href)}" alt="{html.escape(str(checkpoint.get("name", "checkpoint")))} {html.escape(camera)} overlay" loading="lazy" />
+  <figcaption>{html.escape(camera)}</figcaption>
+</figure>'''
+            )
+
+        if not camera_cards:
+            continue
+
+        tick = checkpoint.get("tick", "-")
+        sim_time_secs = checkpoint.get("sim_time_secs")
+        sim_time_text = (
+            f"{float(sim_time_secs):.2f} s"
+            if isinstance(sim_time_secs, (int, float))
+            else "n/a"
+        )
+        selection_reason = str(checkpoint.get("selection_reason", ""))
+        checkpoint_cards.append(
+            f'''<article class="proof-checkpoint-card">
+  <div class="proof-checkpoint-head">
+    <div>
+      <h3>{html.escape(str(checkpoint.get("name", "checkpoint")))}</h3>
+      <p class="muted">{html.escape(selection_reason)}</p>
+    </div>
+    <div class="proof-checkpoint-meta">
+      <span>{html.escape(f"tick {tick}")}</span>
+      <span>{html.escape(sim_time_text)}</span>
+    </div>
+  </div>
+  <div class="proof-view-grid">
+    {''.join(camera_cards)}
+  </div>
+</article>'''
+        )
+
+    if not checkpoint_cards:
+        return ""
+
+    return f'''<section class="overview" id="visual-checkpoints">
+  <h2>Visual checkpoints</h2>
+  <p class="muted">Each image overlays the target pose in blue against the actual replayed pose in orange. The checkpoints are selected from the replay trace so you can cross-check startup, motion onset, peak latency, furthest progress, and final state without opening a second report.</p>
+  <div class="proof-checkpoint-grid">
+    {''.join(checkpoint_cards)}
+  </div>
+</section>'''
 
 
 def render_policy_link_card(
@@ -1270,6 +1484,15 @@ def showcase_styles() -> str:
     .blocked-reason, .blocked-paths { margin-top: 18px; background: #fff7f7; border: 1px solid #f5c2c7; border-radius: 16px; padding: 14px; }
     code { font-family: "IBM Plex Mono", "SFMono-Regular", monospace; font-size: 0.9rem; word-break: break-word; }
     .links { margin-top: 16px; }
+    .proof-checkpoint-grid { display: grid; gap: 18px; }
+    .proof-checkpoint-card { border: 1px solid var(--border); border-radius: 20px; padding: 18px; background: #fbfdff; }
+    .proof-checkpoint-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; flex-wrap: wrap; margin-bottom: 14px; }
+    .proof-checkpoint-head h3 { margin-bottom: 6px; }
+    .proof-checkpoint-meta { display: flex; flex-wrap: wrap; gap: 10px; color: var(--muted); font-size: 0.92rem; }
+    .proof-view-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+    .proof-view { margin: 0; }
+    .proof-view img { width: 100%; height: auto; display: block; border-radius: 14px; border: 1px solid var(--border); background: #f8fafc; }
+    .proof-view figcaption { margin-top: 8px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.78rem; }
     ul { margin-bottom: 0; }
     @media (max-width: 720px) {
       main { width: min(100% - 20px, 1180px); padding-top: 20px; }
@@ -1317,7 +1540,7 @@ def viewer_loader_script(viewer_module_path: str) -> str:
     function showFileProtocolMessage(stage) {{
       showStageError(
         stage,
-        "This report was opened via file://. Serve the folder over HTTP, for example with `python scripts/serve_showcase.py --dir ./artifacts/policy-showcase`."
+        "This page was opened via file://. Serve the built site over HTTP, for example with `python scripts/serve_showcase.py --dir /tmp/robowbc-site`."
       );
     }}
 
@@ -1388,7 +1611,7 @@ def render_policy_detail_page(
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{html.escape(page_title)} · RoboWBC Showcase</title>
+  <title>{html.escape(page_title)} · RoboWBC Site</title>
   <style>
 {showcase_styles()}
   </style>
@@ -1396,7 +1619,7 @@ def render_policy_detail_page(
 <body>
   <main>
     <section class="hero">
-      <p class="breadcrumbs"><a href="{html.escape(back_href)}">← Back to showcase overview</a></p>
+      <p class="breadcrumbs"><a href="{html.escape(back_href)}">← Back to site home</a></p>
       <h1>{html.escape(page_title)}</h1>
       <p>{html.escape(page_summary)}</p>
       <div class="meta-row">
@@ -1429,6 +1652,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
         else html.escape(sha[:12])
     )
     run_html = f'<a href="{html.escape(run_link)}">Actions run</a>' if run_link else ""
+    benchmark_pages = discover_benchmark_pages(output_dir, index_path)
 
     overview_rows: list[str] = []
     velocity_cards: list[str] = []
@@ -1447,7 +1671,8 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
         card_id = entry_card_id(entry)
         policy_family = entry_policy_family(entry)
         detail_path = detail_page_path(output_dir, card_id)
-        detail_href = relative_href(index_path, detail_path)
+        detail_path.parent.mkdir(parents=True, exist_ok=True)
+        detail_href = f"{relative_href(index_path, detail_path.parent)}/"
         back_href = relative_href(detail_path, index_path)
         viewer_module_path = relative_href(
             detail_path,
@@ -1805,11 +2030,6 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
             verdict_details = ""
 
         proof_pack_links: list[str] = []
-        proof_pack_html_file = detail_meta.get("proof_pack_html_file")
-        if proof_pack_html_file:
-            proof_pack_links.append(
-                f'<a href="{html.escape(str(proof_pack_html_file))}">Proof pack</a>'
-            )
         proof_pack_manifest_file = detail_meta.get("proof_pack_manifest_file")
         if proof_pack_manifest_file:
             proof_pack_links.append(
@@ -1817,6 +2037,11 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
             )
         proof_pack_links_html = (
             " · " + " · ".join(proof_pack_links) if proof_pack_links else ""
+        )
+        proof_pack_section = render_proof_pack_section(
+            normalized_entry.get("_proof_pack_manifest")
+            if isinstance(normalized_entry.get("_proof_pack_manifest"), dict)
+            else None
         )
 
         detail_body_html = f'''<section class="card" id="policy-{html.escape(card_id)}">
@@ -1931,7 +2156,8 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
     {velocity_tracking_details}
   </div>
   <p class="links"><a href="{html.escape(str(detail_meta['rrd_file']))}">Rerun recording</a> · <a href="{html.escape(str(detail_meta['json_file']))}">JSON summary</a> · <a href="{html.escape(str(detail_meta['log_file']))}">run log</a>{proof_pack_links_html} · <code>{html.escape(str(detail_meta['config_path']))}</code></p>
-</section>'''
+</section>
+{proof_pack_section}'''
         detail_path.write_text(
             render_policy_detail_page(
                 page_title=str(detail_meta["title"]),
@@ -1960,7 +2186,7 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>RoboWBC Policy Showcase</title>
+  <title>RoboWBC Site</title>
   <style>
 {showcase_styles()}
   </style>
@@ -1968,12 +2194,12 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
 <body>
   <main>
     <section class="hero">
-      <h1>RoboWBC Policy Showcase</h1>
-      <p>This artifact is generated automatically in CI from the set of policy integrations that are wired today. The root page is now comparison-first: use it to cross-check status, quality, provenance, and demo coverage quickly, then open each policy page for the heavy charts, Rerun playback, logs, and proof-pack overlays.</p>
-      <p class="muted">Velocity cards use staged command profiles instead of a single constant command. Reference or pose-tracking cases stay explicitly blocked unless a verified official asset and runtime path actually exist, so the showcase does not silently drift into mock output.</p>
-      <p class="muted">Each successful run carries a heuristic quality verdict. Velocity pages use RMSE, heading, distance, and timing gates; reference or pose pages currently use joint-target and base-height heuristics until a stronger policy-specific oracle exists.</p>
+      <h1>RoboWBC Site</h1>
+      <p>This site is generated automatically in CI from the runnable policy integrations and benchmark packages that exist today. The home page is comparison-first: use it to cross-check policy status, quality, provenance, and demo coverage quickly, then open a policy folder for charts, Rerun playback, logs, and visual checkpoints.</p>
+      <p class="muted">Each policy now owns its own folder under <code>policies/&lt;policy&gt;/</code>, so the HTML page and raw artifacts live together instead of being scattered at the site root. The same bundle also carries benchmark families under <code>benchmarks/</code>.</p>
+      <p class="muted">Velocity runs use staged locomotion command profiles instead of a single constant command. Reference or pose-tracking cases stay explicitly blocked unless a verified official asset and runtime path actually exist, so the site does not silently drift into mock output.</p>
       <p class="muted">The public G1 cards currently load a meshless MuJoCo MJCF variant because this repository does not redistribute Unitree's upstream STL mesh bundle. The dynamics stay MuJoCo-backed, while the Rerun robot scene is reconstructed from the same open MJCF kinematic tree.</p>
-      <p class="muted">Serve the generated folder over HTTP for reliable playback. Each detail page lazy-loads the saved <code>.rrd</code> recording and can still be published directly through CI artifacts or GitHub Pages.</p>
+      <p class="muted">Serve the generated folder over HTTP for reliable playback. Each policy page lazy-loads the saved <code>.rrd</code> recording and the visual checkpoints inline, so you do not need a second proof-pack HTML flow for normal review.</p>
       <div class="meta-row">
         <span>Generated: {html.escape(generated_at)}</span>
         <span>Commit: {commit_html or 'local'}</span>
@@ -1982,8 +2208,8 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
     </section>
 
     <section class="overview">
-      <h2>Compared policies</h2>
-      <p class="muted">Successful entries use real checkpoints or public asset bundles cached by CI and must activate the requested showcase transport. The links in each row jump straight to the per-policy page and raw assets. Blocked entries surface the exact missing files or unavailable upstream artifacts instead of falling back to mock output.</p>
+      <h2>Policy runs</h2>
+      <p class="muted">Successful entries use real checkpoints or public asset bundles cached by CI and must activate the requested MuJoCo transport. The links in each row jump straight to the per-policy folder and raw artifacts. Blocked entries surface the exact missing files or unavailable upstream artifacts instead of falling back to mock output.</p>
       <table>
         <thead>
           <tr><th>Policy</th><th>Status</th><th>Quality</th><th>Run path</th><th>Demo family</th><th>Coverage</th><th>Ticks</th><th>Avg inference</th><th>Achieved rate</th><th>Dropped frames</th></tr>
@@ -1996,9 +2222,10 @@ def render_html(entries: list[dict[str, object]], output_dir: Path, repo_root: P
 
     {render_demo_section("Velocity tracking", velocity_cards)}
     {render_demo_section("Reference / pose tracking", tracking_cards)}
+    {render_benchmark_section(benchmark_pages)}
 
     <section class="footer-panel">
-      <h2>Not Yet In This Showcase</h2>
+      <h2>Not Yet In This Site</h2>
       <ul>{excluded}</ul>
     </section>
   </main>
@@ -2017,10 +2244,6 @@ def main() -> int:
     repo_root = Path(args.repo_root).resolve()
     output_dir = Path(args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    # GitHub Pages ignores underscore-prefixed asset directories unless the site
-    # root opts out of Jekyll processing. The embedded Rerun viewer lives under
-    # _rerun_web_viewer/, so always emit the marker for deployed reports.
-    (output_dir / ".nojekyll").write_text("", encoding="utf-8")
     binary = Path(args.robowbc_binary).resolve()
     if not binary.exists():
         raise SystemExit(f"robowbc binary not found: {binary}")
@@ -2033,7 +2256,7 @@ def main() -> int:
 
     entries = [run_policy(repo_root, binary, output_dir, policy, env) for policy in POLICIES]
     render_html(entries, output_dir, repo_root)
-    print(f"wrote showcase report to {output_dir / 'index.html'}")
+    print(f"wrote site home to {output_dir / 'index.html'}")
     return 0
 
 
