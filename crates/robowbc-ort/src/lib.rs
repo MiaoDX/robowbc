@@ -2725,6 +2725,13 @@ pub fn link_all_ort_policies() {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::float_cmp,
+    clippy::unreadable_literal,
+    clippy::uninlined_format_args,
+    clippy::explicit_iter_loop
+)]
 mod tests {
     use super::*;
     use robowbc_core::{WbcCommand, WbcPolicy};
