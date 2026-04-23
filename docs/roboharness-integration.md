@@ -73,6 +73,11 @@ The report script writes a self-contained per-run proof pack under
 | `run.log` | Stdout/stderr from the CLI |
 | `roboharness_run/trial_001/...` | Captured checkpoints and per-checkpoint metadata |
 
+Each checkpoint camera now emits one comparison image per view. The proof-pack
+HTML displays `track_rgb.png`, `side_rgb.png`, and `top_rgb.png` as blue-target
+vs orange-actual overlays, while the raw per-state renders are also saved as
+`*_target_rgb.png` and `*_actual_rgb.png` beside them for debugging.
+
 The proof-pack manifest records:
 
 - the HTML entrypoint

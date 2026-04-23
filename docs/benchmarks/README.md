@@ -8,8 +8,8 @@ The source of truth lives under:
 - `artifacts/benchmarks/nvidia/cases.json`
 - `artifacts/benchmarks/nvidia/README.md`
 - `artifacts/benchmarks/nvidia/SUMMARY.md`
-- CI-generated HTML under the showcase / Pages bundle at
-  `benchmarks/nvidia/index.html`
+- HTML summary generated either locally at `artifacts/benchmarks/nvidia/index.html`
+  or in CI / Pages at `benchmarks/nvidia/index.html`
 - `scripts/bench_robowbc_compare.py`
 - `scripts/bench_nvidia_official.py`
 
