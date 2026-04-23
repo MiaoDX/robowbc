@@ -86,8 +86,10 @@ directly via `file://`; the interactive viewer expects an HTTP-served folder.
 Set `SITE_BIND=0.0.0.0` or `SITE_PORT=8123` on the `make site-serve` command if
 you want to expose the local preview to another machine or use a different
 port. Run `make site-smoke` when you want to validate the generated bundle
-without serving it. If the public checkpoints are present, the site includes
-MuJoCo-backed `gear_sonic`, `decoupled_wbc`, `wbc_agile`, and `bfm_zero`
+without serving it, or `make site-serve-check` when you want a quick
+start-and-stop server probe. If the public checkpoints are present, the site
+includes MuJoCo-backed `gear_sonic`, `decoupled_wbc`, `wbc_agile`, and
+`bfm_zero`
 folders; otherwise missing integrations are rendered as blocked with explicit
 missing-path reasons. On the public G1 path the loader uses a meshless MJCF
 fallback because this repo does not ship Unitree's STL mesh bundle.

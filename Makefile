@@ -15,7 +15,7 @@ SITE_PYTHON_DEPS ?= numpy joblib onnxruntime==1.24.4 pyyaml mujoco Pillow
 
 .DEFAULT_GOAL := help
 
-.PHONY: help toolchain build build-release check test clippy fmt fmt-check rust-doc docs-book docs verify smoke models-public site-python-deps benchmark-robowbc benchmark-official benchmark-summary benchmark-nvidia site site-smoke site-serve
+.PHONY: help toolchain build build-release check test clippy fmt fmt-check rust-doc docs-book docs verify smoke models-public site-python-deps benchmark-robowbc benchmark-official benchmark-summary benchmark-nvidia site site-smoke site-serve-check site-serve
 
 help: ## Show available targets and useful variables.
 	@awk 'BEGIN {FS = ":.*## "; print "Targets:"} /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -100,6 +100,17 @@ site: ## Build the full static site bundle with policy pages, proof packs, and b
 
 site-smoke: ## Validate the generated site bundle layout and embedded playback paths.
 	$(PYTHON) scripts/validate_site_bundle.py --root "$(SITE_OUTPUT_DIR)"
+
+site-serve-check: ## Start the local site server briefly to confirm it boots, then stop it automatically.
+	status=0; \
+	timeout --signal=INT 2s $(MAKE) --no-print-directory site-serve \
+		SITE_OUTPUT_DIR="$(SITE_OUTPUT_DIR)" \
+		SITE_BIND="$(SITE_BIND)" \
+		SITE_PORT="$(SITE_PORT)" \
+		SITE_OPEN=0 || status=$$?; \
+	if [[ $$status -ne 0 && $$status -ne 124 && $$status -ne 130 ]]; then \
+		exit $$status; \
+	fi
 
 site-serve: ## Serve the generated site bundle locally. Set SITE_OPEN=1 to open the browser.
 	extra_args=""; \
