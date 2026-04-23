@@ -163,6 +163,37 @@ jobs:
             --output /tmp/policy-showcase/benchmarks/nvidia/SUMMARY.md \
             --html-output /tmp/policy-showcase/benchmarks/nvidia/index.html
 
+      - name: Smoke-check generated showcase bundle
+        run: |
+          test -f /tmp/policy-showcase/index.html
+          test -f /tmp/policy-showcase/manifest.json
+          test -f /tmp/policy-showcase/.nojekyll
+          test -f /tmp/policy-showcase/_rerun_web_viewer/index.js
+          test -f /tmp/policy-showcase/benchmarks/nvidia/index.html
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path("/tmp/policy-showcase")
+          manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+          assert manifest, "showcase manifest is empty"
+          assert all("detail_page" in entry for entry in manifest), "detail_page missing from manifest"
+
+          detail_pages = [root / entry["detail_page"] for entry in manifest]
+          assert all(path.is_file() for path in detail_pages), "missing policy detail page"
+
+          ok_entries = [entry for entry in manifest if entry.get("status") == "ok"]
+          assert ok_entries, "expected at least one successful showcase entry"
+
+          detail_text = (root / ok_entries[0]["detail_page"]).read_text(encoding="utf-8")
+          assert "../_rerun_web_viewer/index.js" in detail_text, "detail page missing rebased viewer path"
+
+          rrd_file = ok_entries[0]["_meta"].get("rrd_file")
+          assert isinstance(rrd_file, str) and rrd_file, "successful showcase entry missing rrd_file"
+          expected_rrd = f"../{rrd_file}"
+          assert expected_rrd in detail_text, "detail page missing rebased rrd path"
+          PY
+
       - name: Upload NVIDIA benchmark comparison artifact
         uses: actions/upload-artifact@v4
         with:

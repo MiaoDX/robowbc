@@ -67,7 +67,8 @@ On Linux, the first `sim-auto-download` build unpacks MuJoCo into
 
 The output folder contains:
 
-- `index.html` with lazy-loaded interactive Rerun panes for each successful run
+- `index.html`, a comparison-first overview page linking to each policy report
+- `policies/*.html`, one detail page per policy with the interactive Rerun pane
 - raw `*.rrd`, `*.json`, and `*.log` files per policy
 - `_rerun_web_viewer/`, the vendored web runtime used by those panes
 
@@ -89,9 +90,9 @@ missing integrations are rendered as blocked with explicit missing-path
 reasons. On the public G1 path the loader uses a meshless MJCF fallback because
 this repo does not ship Unitree's STL mesh bundle. `wbc_agile` currently
 reuses the public 29-DOF G1 embodiment for its scene, so the extra finger
-joints stay at their default pose. The page lazy-loads each `.rrd` recording
-when a card becomes visible, which keeps the same static bundle usable in CI
-artifacts and on the `main`-branch GitHub Pages site.
+joints stay at their default pose. Each detail page lazy-loads its `.rrd`
+recording when the viewer becomes visible, which keeps the same static bundle
+usable in CI artifacts and on the `main`-branch GitHub Pages site.
 
 ## Run GEAR-SONIC with real checkpoints
 
