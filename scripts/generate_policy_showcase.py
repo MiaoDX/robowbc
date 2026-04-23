@@ -1228,7 +1228,7 @@ def render_overview_links(meta: dict[str, object], detail_href: str) -> str:
         value = meta.get(key)
         if isinstance(value, str) and value:
             links.append(f'<a href="{html.escape(value)}">{html.escape(label)}</a>')
-    return " · ".join(links)
+    return "<br />".join(links)
 
 
 def discover_benchmark_pages(output_dir: Path, index_path: Path) -> list[dict[str, str]]:
@@ -1483,7 +1483,7 @@ def showcase_styles() -> str:
     .rerun-stage-error { background: linear-gradient(180deg, rgba(127, 29, 29, 0.95), rgba(69, 10, 10, 0.96)); }
     .blocked-reason, .blocked-paths { margin-top: 18px; background: #fff7f7; border: 1px solid #f5c2c7; border-radius: 16px; padding: 14px; }
     code { font-family: "IBM Plex Mono", "SFMono-Regular", monospace; font-size: 0.9rem; word-break: break-word; }
-    .links { margin-top: 16px; }
+    .links { margin-top: 16px; line-height: 1.35; }
     .proof-checkpoint-grid { display: grid; gap: 18px; }
     .proof-checkpoint-card { border: 1px solid var(--border); border-radius: 20px; padding: 18px; background: #fbfdff; }
     .proof-checkpoint-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; flex-wrap: wrap; margin-bottom: 14px; }
