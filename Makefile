@@ -3,7 +3,9 @@ SHELL := bash
 
 PYTHON ?= python3
 CARGO ?= cargo
-MDBOOK ?= mdbook
+MDBOOK_VERSION ?= 0.4.40
+MDBOOK_BIN_DIR ?= $(CURDIR)/.cache/bin
+MDBOOK ?= $(MDBOOK_BIN_DIR)/mdbook
 
 SITE_OUTPUT_DIR ?= /tmp/robowbc-site
 SITE_BIND ?= 127.0.0.1
@@ -12,17 +14,24 @@ SITE_OPEN ?= 0
 MUJOCO_DOWNLOAD_DIR ?= $(CURDIR)/.cache/mujoco
 ROBOWBC_BINARY ?= $(CURDIR)/target/debug/robowbc
 SITE_PYTHON_DEPS ?= numpy joblib onnxruntime==1.24.4 pyyaml mujoco Pillow
+PYTHON_SDK_DIST_DIR ?= $(CURDIR)/dist
+PYTHON_SDK_MUJOCO_DOWNLOAD_DIR ?= $(CURDIR)/.cache/mujoco
+PYTHON_SDK_TARGET_DIR ?= $(CURDIR)/target/python-sdk-wheel
 
 .DEFAULT_GOAL := help
 
-.PHONY: help toolchain build build-release check test clippy fmt fmt-check rust-doc docs-book docs verify smoke models-public site-python-deps benchmark-robowbc benchmark-official benchmark-summary benchmark-nvidia site site-smoke site-serve-check site-serve
+.PHONY: help toolchain build build-release check test clippy fmt fmt-check rust-doc mdbook-install docs-book docs verify smoke models-public site-python-deps benchmark-robowbc benchmark-official benchmark-summary benchmark-nvidia site showcase-verify site-smoke site-serve-check site-serve python-sdk-deps python-sdk-build python-sdk-install python-sdk-smoke python-sdk-verify ci
 
 help: ## Show available targets and useful variables.
 	@awk 'BEGIN {FS = ":.*## "; print "Targets:"} /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@printf "\nVariables:\n"
 	@printf "  %-20s %s\n" "PYTHON" "$(PYTHON)"
+	@printf "  %-20s %s\n" "MDBOOK" "$(MDBOOK)"
 	@printf "  %-20s %s\n" "SITE_OUTPUT_DIR" "$(SITE_OUTPUT_DIR)"
 	@printf "  %-20s %s\n" "MUJOCO_DOWNLOAD_DIR" "$(MUJOCO_DOWNLOAD_DIR)"
+	@printf "  %-20s %s\n" "PYTHON_SDK_DIST_DIR" "$(PYTHON_SDK_DIST_DIR)"
+	@printf "  %-20s %s\n" "PYTHON_SDK_MUJOCO_DOWNLOAD_DIR" "$(PYTHON_SDK_MUJOCO_DOWNLOAD_DIR)"
+	@printf "  %-20s %s\n" "PYTHON_SDK_TARGET_DIR" "$(PYTHON_SDK_TARGET_DIR)"
 	@printf "  %-20s %s\n" "SITE_PORT" "$(SITE_PORT)"
 	@printf "  %-20s %s\n" "SITE_OPEN" "$(SITE_OPEN)"
 
@@ -54,11 +63,14 @@ fmt-check: ## Verify Rust formatting without changing files.
 rust-doc: ## Build Rust API docs.
 	$(CARGO) doc --workspace --no-deps
 
-docs-book: ## Build the mdBook docs (requires mdbook in PATH).
-	if ! command -v $(MDBOOK) >/dev/null; then \
-		echo "mdbook not found in PATH; install it before running 'make docs-book'." >&2; \
-		exit 1; \
+mdbook-install: ## Download the pinned mdBook binary used by CI into ./.cache/bin.
+	mkdir -p "$(MDBOOK_BIN_DIR)"
+	if [[ ! -x "$(MDBOOK)" ]]; then \
+		curl -sSL "https://github.com/rust-lang/mdBook/releases/download/v$(MDBOOK_VERSION)/mdbook-v$(MDBOOK_VERSION)-x86_64-unknown-linux-gnu.tar.gz" \
+			| tar -xz --directory "$(MDBOOK_BIN_DIR)"; \
 	fi
+
+docs-book: mdbook-install ## Build the mdBook docs.
 	$(MDBOOK) build
 
 docs: rust-doc docs-book ## Build both Rust API docs and mdBook docs.
@@ -98,6 +110,12 @@ site: ## Build the full static site bundle with policy pages, proof packs, and b
 		--robowbc-binary "$(ROBOWBC_BINARY)" \
 		--output-dir "$(SITE_OUTPUT_DIR)"
 
+showcase-verify: ## Run the same showcase build + bundle validation path used in CI.
+	$(MAKE) site-python-deps
+	$(MAKE) models-public
+	$(MAKE) site
+	$(MAKE) site-smoke
+
 site-smoke: ## Validate the generated site bundle layout and embedded playback paths.
 	$(PYTHON) scripts/validate_site_bundle.py --root "$(SITE_OUTPUT_DIR)"
 
@@ -122,3 +140,31 @@ site-serve: ## Serve the generated site bundle locally. Set SITE_OPEN=1 to open 
 		--bind "$(SITE_BIND)" \
 		--port "$(SITE_PORT)" \
 		$$extra_args
+
+python-sdk-deps: ## Install Python build dependencies for local SDK verification.
+	$(PYTHON) -m pip install "maturin>=1.4,<2.0"
+
+python-sdk-build: python-sdk-deps ## Build the local RoboWBC Python wheel with an absolute MuJoCo cache path.
+	mkdir -p "$(PYTHON_SDK_DIST_DIR)" "$(abspath $(PYTHON_SDK_MUJOCO_DOWNLOAD_DIR))"
+	rm -f "$(PYTHON_SDK_DIST_DIR)"/robowbc-*.whl
+	rm -rf "$(PYTHON_SDK_TARGET_DIR)"
+	MUJOCO_DOWNLOAD_DIR="$(abspath $(PYTHON_SDK_MUJOCO_DOWNLOAD_DIR))" \
+	CARGO_TARGET_DIR="$(PYTHON_SDK_TARGET_DIR)" \
+	$(PYTHON) -m maturin build --release --out "$(PYTHON_SDK_DIST_DIR)" -i "$(PYTHON)"
+
+python-sdk-install: python-sdk-build ## Install the freshly built local RoboWBC Python wheel.
+	wheel="$$(ls -1t "$(PYTHON_SDK_DIST_DIR)"/robowbc-*.whl | head -n 1)"; \
+	$(PYTHON) -m pip install --force-reinstall "$$wheel"
+
+python-sdk-smoke: ## Run the installed RoboWBC Python SDK smoke test.
+	$(PYTHON) scripts/python_sdk_smoke.py
+
+python-sdk-verify: ## Build, install, and smoke-test the RoboWBC Python SDK locally.
+	$(MAKE) python-sdk-install
+	$(MAKE) python-sdk-smoke
+
+ci: ## Run the same local validation entry points GitHub CI relies on.
+	$(MAKE) verify
+	$(MAKE) docs
+	$(MAKE) python-sdk-verify
+	$(MAKE) showcase-verify

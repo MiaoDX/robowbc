@@ -4,6 +4,8 @@
 /vis/
 /artifacts/
 /.cache/
+/book/
+/dist/
 *.onnx
 # Allow small test fixture models
 !crates/robowbc-ort/tests/fixtures/*.onnx

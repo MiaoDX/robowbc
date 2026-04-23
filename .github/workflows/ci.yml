@@ -5,6 +5,9 @@ on:
     branches: ["**"]
   pull_request:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 permissions:
   contents: read
 
@@ -48,11 +51,6 @@ jobs:
       - name: Build Rust API docs
         run: make rust-doc
 
-      - name: Install mdBook
-        run: |
-          curl -sSL https://github.com/rust-lang/mdBook/releases/download/v0.4.40/mdbook-v0.4.40-x86_64-unknown-linux-gnu.tar.gz \
-            | tar -xz --directory /usr/local/bin
-
       - name: Build docs
         run: make docs-book
 
@@ -94,21 +92,8 @@ jobs:
             models/bfm_zero
           key: live-policy-models-${{ runner.os }}-v3
 
-      - name: Install site-build Python dependencies
-        run: make site-python-deps
-
-      - name: Warm live policy checkpoint cache
-        run: |
-          bash scripts/download_gear_sonic_models.sh models/gear-sonic
-          bash scripts/download_decoupled_wbc_models.sh models/decoupled-wbc
-          bash scripts/download_wbc_agile_models.sh models/wbc-agile
-          bash scripts/download_bfm_zero_models.sh models/bfm_zero
-
-      - name: Build RoboWBC site
-        run: make site SITE_OUTPUT_DIR=/tmp/robowbc-site MUJOCO_DOWNLOAD_DIR=/tmp/mujoco
-
-      - name: Smoke-check generated site bundle
-        run: make site-smoke SITE_OUTPUT_DIR=/tmp/robowbc-site
+      - name: Build and validate RoboWBC site
+        run: make showcase-verify PYTHON=python3 SITE_OUTPUT_DIR=/tmp/robowbc-site MUJOCO_DOWNLOAD_DIR=/tmp/mujoco
 
       - name: Upload NVIDIA benchmark comparison artifact
         uses: actions/upload-artifact@v4
@@ -152,9 +137,6 @@ jobs:
 
   python-sdk:
     runs-on: ubuntu-latest
-    # ORT binary download can be flaky on cold CI caches; mark non-blocking
-    # until the cache is warm. The Rust job validates the Rust code correctness.
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -164,43 +146,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Build manylinux wheel
-        uses: PyO3/maturin-action@v1
-        with:
-          args: --release --out dist -i python3.12
-          manylinux: auto
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Install robowbc wheel
-        run: pip install dist/*.whl
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
 
-      - name: Python smoke test
-        run: |
-          python - <<'EOF'
-          from robowbc import Observation, Registry
-
-          # Verify policy list is non-empty
-          names = Registry.list_policies()
-          assert len(names) > 0, f"expected at least one policy, got: {names}"
-          print("Registered policies:", names)
-
-          # Verify Observation construction
-          obs = Observation(
-              joint_positions=[0.0] * 4,
-              joint_velocities=[0.0] * 4,
-              gravity_vector=[0.0, 0.0, -1.0],
-              command_type="motion_tokens",
-              command_data=[0.1, 0.2],
-          )
-          assert obs.joint_positions == [0.0] * 4
-          assert obs.command_type == "motion_tokens"
-          print("Observation:", obs)
-
-          # Verify build_from_str raises on unknown policy
-          try:
-              Registry.build_from_str('[policy]\nname = "no_such_policy"')
-              assert False, "should have raised"
-          except RuntimeError as e:
-              assert "unknown policy" in str(e).lower(), f"unexpected error: {e}"
-
-          print("All smoke tests passed.")
-          EOF
+      - name: Verify Python SDK
+        run: make python-sdk-verify PYTHON=python3 PYTHON_SDK_MUJOCO_DOWNLOAD_DIR=/tmp/mujoco

@@ -85,12 +85,30 @@ def parse_args() -> argparse.Namespace:
 # ---------------------------------------------------------------------------
 
 
+def ensure_headless_mujoco_env() -> None:
+    """Default MuJoCo to EGL for headless Linux report generation.
+
+    CI and most developer shells that render proof-pack screenshots do not have
+    a windowing session. MuJoCo's Python renderer needs an explicit offscreen
+    backend there or `mujoco.Renderer(...)` fails while creating the GL
+    context.
+    """
+    if sys.platform != "linux":
+        return
+    if os.environ.get("MUJOCO_GL"):
+        return
+    if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
+        return
+    os.environ["MUJOCO_GL"] = "egl"
+
+
 def preflight_checks(repo_root: Path, binary: Path, config_path: Path) -> dict[str, str]:
     """Verify that all required dependencies are present before running.
 
     Returns the runtime environment dict (with any necessary vars set).
     """
     errors: list[str] = []
+    ensure_headless_mujoco_env()
 
     # 1. Binary exists
     if not binary.exists():
@@ -715,6 +733,7 @@ def capture_frames_from_report(
 
     Returns a list of checkpoint metadata dicts for the HTML report.
     """
+    ensure_headless_mujoco_env()
     import mujoco
     showcase_context = report["_meta"]["showcase_context"]
     model_path = repo_root / showcase_context["model_path"]
