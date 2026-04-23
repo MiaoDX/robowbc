@@ -368,7 +368,7 @@ def derive_replay_trace_path(report_path: Path) -> Path:
 
 
 def load_meshless_mujoco_model(model_path: Path) -> tuple[Any, Any]:
-    """Load a MuJoCo model, falling back to a meshless variant if meshes are missing."""
+    """Load a MuJoCo model, falling back to visible proxy geoms if meshes are missing."""
     import mujoco
     import xml.etree.ElementTree as ET
 
@@ -379,7 +379,8 @@ def load_meshless_mujoco_model(model_path: Path) -> tuple[Any, Any]:
     except Exception:
         pass
 
-    # Build meshless fallback by stripping mesh references using ElementTree
+    # Build meshless fallback by stripping mesh assets and replacing mesh geoms
+    # with simple proxy spheres so proof-pack capture still shows a readable body.
     xml_text = model_path.read_text(encoding="utf-8")
     root = ET.fromstring(xml_text)
 
@@ -388,20 +389,52 @@ def load_meshless_mujoco_model(model_path: Path) -> tuple[Any, Any]:
         for mesh in asset.findall("mesh"):
             asset.remove(mesh)
 
-    # Remove all <geom> elements that reference a mesh
-    geoms_to_remove = []
-    for parent in root.iter():
-        for child in list(parent):
-            if child.tag == "geom" and "mesh" in child.attrib:
-                geoms_to_remove.append((parent, child))
-    for parent, geom in geoms_to_remove:
-        parent.remove(geom)
+    for geom in root.iter("geom"):
+        mesh_name = geom.attrib.pop("mesh", None)
+        if mesh_name is None:
+            continue
+        geom.attrib["type"] = "sphere"
+        geom.attrib["size"] = _meshless_proxy_size(mesh_name)
+        geom.attrib["rgba"] = _meshless_proxy_rgba(geom.attrib.get("rgba"))
 
     # Serialize back to string
     meshless_xml = ET.tostring(root, encoding="unicode")
     model = mujoco.MjModel.from_xml_string(meshless_xml)
     data = mujoco.MjData(model)
     return model, data
+
+
+def _meshless_proxy_size(mesh_name: str) -> str:
+    lowered = mesh_name.lower()
+    if any(token in lowered for token in ("pelvis", "torso", "waist", "head")):
+        return "0.055"
+    if any(token in lowered for token in ("thigh", "hip", "knee")):
+        return "0.05"
+    if any(token in lowered for token in ("ankle", "foot")):
+        return "0.045"
+    if any(token in lowered for token in ("shoulder", "upper_arm", "lower_arm", "elbow")):
+        return "0.042"
+    if any(token in lowered for token in ("wrist", "hand", "finger")):
+        return "0.028"
+    return "0.04"
+
+
+def _meshless_proxy_rgba(original_rgba: str | None) -> str:
+    if not original_rgba:
+        return "0.82 0.82 0.86 1"
+
+    parts = original_rgba.split()
+    if len(parts) != 4:
+        return "0.82 0.82 0.86 1"
+
+    try:
+        rgb = [float(parts[0]), float(parts[1]), float(parts[2])]
+        alpha = float(parts[3])
+    except ValueError:
+        return "0.82 0.82 0.86 1"
+
+    lifted = [min(1.0, 0.45 + channel * 0.55) for channel in rgb]
+    return f"{lifted[0]:.3f} {lifted[1]:.3f} {lifted[2]:.3f} {max(alpha, 1.0):.3f}"
 
 
 def replay_payload(report: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
@@ -737,16 +770,7 @@ def capture_frames_from_report(
     for checkpoint in checkpoint_specs:
         frame_index = int(checkpoint["index"])
         frame = frames[frame_index]
-        restore_frame_state(
-            model,
-            data,
-            frame,
-            joint_names,
-            default_pose,
-            joint_qpos_map,
-            joint_qvel_map,
-            floating_base_state,
-        )
+        target_frame = _target_pose_frame(frame)
 
         cp_name = f"{checkpoint['name']}_tick_{int(frame['tick']):04d}"
         cp_dir = capture_dir / cp_name
@@ -764,12 +788,38 @@ def capture_frames_from_report(
         }
 
         for cam_name, cam_obj in camera_configs:
+            restore_frame_state(
+                model,
+                data,
+                frame,
+                joint_names,
+                default_pose,
+                joint_qpos_map,
+                joint_qvel_map,
+                floating_base_state,
+            )
             renderer.update_scene(data, camera=cam_obj)
-            rgb = renderer.render()
+            actual_rgb = renderer.render()
 
-            # Save PNG
             img_path = cp_dir / f"{cam_name}_rgb.png"
-            _save_png(img_path, rgb)
+            _save_png(cp_dir / f"{cam_name}_actual_rgb.png", actual_rgb)
+            if target_frame is None:
+                _save_png(img_path, actual_rgb)
+            else:
+                restore_frame_state(
+                    model,
+                    data,
+                    target_frame,
+                    joint_names,
+                    default_pose,
+                    joint_qpos_map,
+                    joint_qvel_map,
+                    floating_base_state,
+                )
+                renderer.update_scene(data, camera=cam_obj)
+                target_rgb = renderer.render()
+                _save_png(cp_dir / f"{cam_name}_target_rgb.png", target_rgb)
+                _save_comparison_png(img_path, actual_rgb, target_rgb)
             meta["cameras"].append(cam_name)
 
         # Write metadata.json for roboharness reporting compatibility
@@ -781,6 +831,9 @@ def capture_frames_from_report(
                     "sim_time": sim_time_secs,
                     "cameras": meta["cameras"],
                     "camera_capability": "rgb",
+                    "comparison_mode": "target_vs_actual_overlay"
+                    if target_frame is not None
+                    else "actual_only",
                     "selection_reason": meta["selection_reason"],
                     "frame_source": frame_source,
                 }
@@ -856,6 +909,61 @@ def _save_png(path: Path, rgb: Any) -> None:
     img.save(path)
 
 
+def _target_pose_frame(frame: dict[str, Any]) -> dict[str, Any] | None:
+    target_positions = frame.get("target_positions")
+    if not isinstance(target_positions, list) or not target_positions:
+        return None
+
+    target_frame = dict(frame)
+    target_frame.pop("mujoco_qpos", None)
+    target_frame.pop("mujoco_qvel", None)
+    target_frame["actual_positions"] = list(target_positions)
+    target_frame["actual_velocities"] = [0.0] * len(target_positions)
+    return target_frame
+
+
+def _save_comparison_png(path: Path, actual_rgb: Any, target_rgb: Any) -> None:
+    """Save a target-vs-actual comparison image with a colored overlay."""
+    try:
+        from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
+    except ImportError:
+        raise SystemExit(
+            "Pillow is required to save captured frames. Install with: pip install Pillow"
+        )
+
+    actual = Image.fromarray(actual_rgb).convert("RGB")
+    target = Image.fromarray(target_rgb).convert("RGB")
+
+    def backdrop(img: Image.Image) -> Image.Image:
+        gray = ImageOps.grayscale(img)
+        gray = ImageOps.autocontrast(gray, cutoff=1)
+        gray = ImageEnhance.Brightness(gray).enhance(1.15)
+        gray_rgb = Image.merge("RGB", (gray, gray, gray))
+        return Image.blend(Image.new("RGB", img.size, (246, 248, 251)), gray_rgb, 0.16)
+
+    def mask(img: Image.Image) -> Image.Image:
+        gray = ImageOps.grayscale(img)
+        gray = ImageOps.autocontrast(gray, cutoff=1)
+        binary = gray.point(lambda value: 255 if value > 8 else 0)
+        return binary.filter(ImageFilter.MaxFilter(5))
+
+    def colored_layer(img: Image.Image, color: tuple[int, int, int], alpha: float) -> Image.Image:
+        mask_img = mask(img).point(lambda value: int(value * alpha))
+        layer = Image.new("RGBA", img.size, color + (255,))
+        layer.putalpha(mask_img)
+        return layer
+
+    canvas = backdrop(actual).convert("RGBA")
+    canvas.alpha_composite(colored_layer(target, (59, 130, 246), 0.50))
+    canvas.alpha_composite(colored_layer(actual, (249, 115, 22), 0.62))
+
+    draw = ImageDraw.Draw(canvas)
+    draw.rounded_rectangle((12, 12, 264, 60), radius=8, fill=(255, 255, 255, 230))
+    draw.text((24, 22), "Blue = target   Orange = actual", fill=(23, 23, 23, 255))
+
+    canvas.convert("RGB").save(path)
+
+
 # ---------------------------------------------------------------------------
 # HTML report generation
 # ---------------------------------------------------------------------------
@@ -879,6 +987,7 @@ def generate_report(
             f"<p><strong>Policy:</strong> <code>{policy_name}</code></p>",
             f"<p><strong>Robot:</strong> <code>{robot_name}</code></p>",
             f"<p><strong>Command:</strong> {command_kind} {command_data}</p>",
+            "<p><strong>Image mode:</strong> each camera view is a single comparison image with <span style='color:#3b82f6'>blue target pose</span> overlaid against <span style='color:#f97316'>orange actual pose</span>.</p>",
             "<div class='stats'>",
             f"  <div><span>Ticks</span><strong>{metrics.get('ticks', '-')}</strong></div>",
             f"  <div><span>Avg inference</span><strong>{metrics.get('average_inference_ms', 0.0):.3f} ms</strong></div>",
