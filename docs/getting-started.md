@@ -6,6 +6,9 @@ in under 10 minutes.
 RoboWBC only supports Linux hosts. If you build on macOS or Windows, the
 runtime crates fail fast by design.
 
+The repo now ships a root `Makefile`, so `make help` is the fastest way to see
+the supported local and CI-oriented commands.
+
 ## Prerequisites
 
 | Requirement | Version | Notes |
@@ -22,9 +25,9 @@ test fixtures (CPU, no external dependencies) are sufficient.
 ```bash
 git clone https://github.com/MiaoDX/robowbc
 cd robowbc
-cargo build                        # debug build, all crates
-cargo build --release              # release build (production)
-cargo test                         # run all tests
+make build                         # debug build, all crates
+make build-release                 # release build (production)
+make test                          # run all tests
 ```
 
 Expected output: all tests pass (a small number are marked `#[ignore]` — they
@@ -35,7 +38,7 @@ require real model checkpoints or hardware and are skipped in CI).
 The fastest local path is the checked-in `decoupled_wbc` fixture:
 
 ```bash
-cargo run --bin robowbc -- run --config configs/decoupled_smoke.toml
+make smoke
 ```
 
 `decoupled_smoke.toml` uses the bundled
@@ -52,15 +55,17 @@ The repository includes a single site builder that assembles the policy pages,
 visual checkpoints, and benchmark pages into one static bundle.
 
 ```bash
-python scripts/build_site.py
+make site
 ```
 
-The builder is now the single entrypoint for local and CI site generation. It
-defaults `MUJOCO_DOWNLOAD_DIR` to `./.cache/mujoco`, downloads MuJoCo there if
-the runtime is missing, rebuilds `./target/debug/robowbc` with
+The `site` target is now the single entrypoint for local and CI site
+generation. It defaults `MUJOCO_DOWNLOAD_DIR` to `./.cache/mujoco`, downloads
+MuJoCo there if the runtime is missing, rebuilds `./target/debug/robowbc` with
 `robowbc-cli/sim-auto-download,robowbc-cli/vis`, and writes the finished site
-bundle to `/tmp/robowbc-site`. Set `MUJOCO_DOWNLOAD_DIR` only if you want a
-different cache location, or pass `--output-dir` to place the site elsewhere.
+bundle to `/tmp/robowbc-site`. Set
+`MUJOCO_DOWNLOAD_DIR=/your/cache make site` if you want a different cache
+location, or override `SITE_OUTPUT_DIR=/your/output make site` to place the
+site elsewhere.
 
 The output folder contains:
 
@@ -73,20 +78,19 @@ The output folder contains:
 For the most reliable local viewing path, serve that folder over HTTP:
 
 ```bash
-python scripts/serve_showcase.py \
-  --dir /tmp/robowbc-site \
-  --port 8000 \
-  --open
+make site-serve SITE_OPEN=1
 ```
 
 Then open `http://127.0.0.1:8000`. Do not open the generated `index.html`
 directly via `file://`; the interactive viewer expects an HTTP-served folder.
-The helper script also accepts `--bind` if you want to expose the local preview
-to another machine on the same network. If the public checkpoints are present,
-the site includes MuJoCo-backed `gear_sonic`, `decoupled_wbc`, `wbc_agile`, and
-`bfm_zero` folders; otherwise missing integrations are rendered as blocked with
-explicit missing-path reasons. On the public G1 path the loader uses a meshless
-MJCF fallback because this repo does not ship Unitree's STL mesh bundle.
+Set `SITE_BIND=0.0.0.0` or `SITE_PORT=8123` on the `make site-serve` command if
+you want to expose the local preview to another machine or use a different
+port. Run `make site-smoke` when you want to validate the generated bundle
+without serving it. If the public checkpoints are present, the site includes
+MuJoCo-backed `gear_sonic`, `decoupled_wbc`, `wbc_agile`, and `bfm_zero`
+folders; otherwise missing integrations are rendered as blocked with explicit
+missing-path reasons. On the public G1 path the loader uses a meshless MJCF
+fallback because this repo does not ship Unitree's STL mesh bundle.
 `wbc_agile` currently reuses the public 29-DOF G1 embodiment for its scene, so
 the extra finger joints stay at their default pose. Each policy page lazy-loads
 its `.rrd` recording when the viewer becomes visible and keeps the visual

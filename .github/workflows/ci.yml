@@ -22,16 +22,16 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: cargo check
-        run: cargo check --workspace --all-targets
+        run: make check
 
       - name: cargo test
-        run: cargo test --workspace --all-targets
+        run: make test
 
       - name: cargo clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: make clippy
 
       - name: cargo fmt --check
-        run: cargo fmt --all -- --check
+        run: make fmt-check
 
   docs:
     runs-on: ubuntu-latest
@@ -46,7 +46,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build Rust API docs
-        run: cargo doc --workspace --no-deps
+        run: make rust-doc
 
       - name: Install mdBook
         run: |
@@ -54,7 +54,7 @@ jobs:
             | tar -xz --directory /usr/local/bin
 
       - name: Build docs
-        run: mdbook build
+        run: make docs-book
 
   showcase:
     name: Policy showcase (HTML + MuJoCo + Rerun)
@@ -95,7 +95,7 @@ jobs:
           key: live-policy-models-${{ runner.os }}-v3
 
       - name: Install site-build Python dependencies
-        run: pip install numpy joblib onnxruntime==1.24.4 pyyaml mujoco Pillow
+        run: make site-python-deps
 
       - name: Warm live policy checkpoint cache
         run: |
@@ -105,43 +105,10 @@ jobs:
           bash scripts/download_bfm_zero_models.sh models/bfm_zero
 
       - name: Build RoboWBC site
-        run: |
-          python scripts/build_site.py \
-            --repo-root . \
-            --robowbc-binary ./target/debug/robowbc \
-            --output-dir /tmp/robowbc-site
+        run: make site SITE_OUTPUT_DIR=/tmp/robowbc-site MUJOCO_DOWNLOAD_DIR=/tmp/mujoco
 
       - name: Smoke-check generated site bundle
-        run: |
-          test -f /tmp/robowbc-site/index.html
-          test -f /tmp/robowbc-site/manifest.json
-          test -f /tmp/robowbc-site/assets/rerun-web-viewer/index.js
-          test -f /tmp/robowbc-site/policies/gear_sonic/index.html
-          test -f /tmp/robowbc-site/benchmarks/nvidia/index.html
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-
-          root = Path("/tmp/robowbc-site")
-          manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
-          assert manifest, "site manifest is empty"
-          assert all("detail_page" in entry for entry in manifest), "detail_page missing from manifest"
-
-          detail_dirs = [root / entry["detail_page"] for entry in manifest]
-          assert all((path / "index.html").is_file() for path in detail_dirs), "missing policy detail page"
-
-          ok_entries = [entry for entry in manifest if entry.get("status") == "ok"]
-          assert ok_entries, "expected at least one successful policy entry"
-
-          detail_dir = root / ok_entries[0]["detail_page"]
-          detail_text = (detail_dir / "index.html").read_text(encoding="utf-8")
-          assert "../../assets/rerun-web-viewer/index.js" in detail_text, "detail page missing rebased viewer path"
-          assert 'data-rrd-file="run.rrd"' in detail_text, "detail page missing local run recording path"
-          assert "proof_pack_manifest.json" in detail_text, "detail page missing proof-pack manifest reference"
-
-          benchmark_text = (root / "index.html").read_text(encoding="utf-8")
-          assert "benchmarks/nvidia/index.html" in benchmark_text, "site home missing benchmark link"
-          PY
+        run: make site-smoke SITE_OUTPUT_DIR=/tmp/robowbc-site
 
       - name: Upload NVIDIA benchmark comparison artifact
         uses: actions/upload-artifact@v4
