@@ -6,12 +6,14 @@ CARGO ?= cargo
 MDBOOK_VERSION ?= 0.4.40
 MDBOOK_BIN_DIR ?= $(CURDIR)/.cache/bin
 MDBOOK ?= $(MDBOOK_BIN_DIR)/mdbook
+MUJOCO_VERSION ?= 3.6.0
 
 SITE_OUTPUT_DIR ?= /tmp/robowbc-site
 SITE_BIND ?= 127.0.0.1
 SITE_PORT ?= 8000
 SITE_OPEN ?= 0
 MUJOCO_DOWNLOAD_DIR ?= $(CURDIR)/.cache/mujoco
+MUJOCO_DYNAMIC_LINK_DIR ?= $(abspath $(MUJOCO_DOWNLOAD_DIR))/mujoco-$(MUJOCO_VERSION)/lib
 SHOWCASE_MUJOCO_GL ?= egl
 SHOWCASE_PYOPENGL_PLATFORM ?= $(SHOWCASE_MUJOCO_GL)
 ROBOWBC_BINARY ?= $(CURDIR)/target/debug/robowbc
@@ -22,7 +24,7 @@ PYTHON_SDK_TARGET_DIR ?= $(CURDIR)/target/python-sdk-wheel
 
 .DEFAULT_GOAL := help
 
-.PHONY: help toolchain build build-release check test clippy fmt fmt-check rust-doc mdbook-install docs-book docs verify smoke models-public site-python-deps site-render-check benchmark-robowbc benchmark-official benchmark-summary benchmark-nvidia site showcase-verify site-smoke site-serve-check site-serve python-sdk-deps python-sdk-build python-sdk-install python-sdk-smoke python-sdk-verify ci
+.PHONY: help toolchain build build-release check test sim-feature-test clippy fmt fmt-check rust-doc mdbook-install docs-book docs verify smoke models-public site-python-deps site-render-check benchmark-robowbc benchmark-official benchmark-summary benchmark-nvidia site showcase-verify site-smoke site-serve-check site-serve python-sdk-deps python-sdk-build python-sdk-install python-sdk-smoke python-sdk-verify ci
 
 help: ## Show available targets and useful variables.
 	@awk 'BEGIN {FS = ":.*## "; print "Targets:"} /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -30,7 +32,9 @@ help: ## Show available targets and useful variables.
 	@printf "  %-20s %s\n" "PYTHON" "$(PYTHON)"
 	@printf "  %-20s %s\n" "MDBOOK" "$(MDBOOK)"
 	@printf "  %-20s %s\n" "SITE_OUTPUT_DIR" "$(SITE_OUTPUT_DIR)"
+	@printf "  %-20s %s\n" "MUJOCO_VERSION" "$(MUJOCO_VERSION)"
 	@printf "  %-20s %s\n" "MUJOCO_DOWNLOAD_DIR" "$(MUJOCO_DOWNLOAD_DIR)"
+	@printf "  %-20s %s\n" "MUJOCO_DYNAMIC_LINK_DIR" "$(MUJOCO_DYNAMIC_LINK_DIR)"
 	@printf "  %-20s %s\n" "SHOWCASE_MUJOCO_GL" "$(SHOWCASE_MUJOCO_GL)"
 	@printf "  %-20s %s\n" "SHOWCASE_PYOPENGL_PLATFORM" "$(SHOWCASE_PYOPENGL_PLATFORM)"
 	@printf "  %-20s %s\n" "PYTHON_SDK_DIST_DIR" "$(PYTHON_SDK_DIST_DIR)"
@@ -54,6 +58,12 @@ check: ## Run cargo check across the workspace and all targets.
 
 test: ## Run cargo test across the workspace and all targets.
 	$(CARGO) test --workspace --all-targets
+
+sim-feature-test: ## Run the feature-enabled MuJoCo sim transport tests with the runtime/plugin env wired.
+	MUJOCO_DOWNLOAD_DIR="$(abspath $(MUJOCO_DOWNLOAD_DIR))" \
+	MUJOCO_DYNAMIC_LINK_DIR="$(MUJOCO_DYNAMIC_LINK_DIR)" \
+	LD_LIBRARY_PATH="$(MUJOCO_DYNAMIC_LINK_DIR):$${LD_LIBRARY_PATH:-}" \
+	$(CARGO) test -p robowbc-sim --features mujoco-auto-download
 
 clippy: ## Run clippy with warnings promoted to errors.
 	$(CARGO) clippy --workspace --all-targets -- -D warnings
@@ -177,6 +187,7 @@ python-sdk-verify: ## Build, install, and smoke-test the RoboWBC Python SDK loca
 
 ci: ## Run the same local validation entry points GitHub CI relies on.
 	$(MAKE) verify
+	$(MAKE) sim-feature-test
 	$(MAKE) docs
 	$(MAKE) python-sdk-verify
 	$(MAKE) showcase-verify
