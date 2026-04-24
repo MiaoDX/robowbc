@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import textwrap
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -412,7 +413,9 @@ class NvidiaBenchmarkTests(unittest.TestCase):
             self.assertIn("decoupled_wbc/walk_predict", html_summary)
             self.assertIn("robowbc/decoupled_wbc__walk_predict.json", html_summary)
             self.assertIn("official/decoupled_wbc__walk_predict.json", html_summary)
-            self.assertIn("Policy showcase", html_summary)
+            self.assertIn("Site home", html_summary)
+            self.assertIn("Markdown summary", html_summary)
+            self.assertIn("Case registry", html_summary)
 
     def test_official_wrapper_blocks_decoupled_case_when_models_are_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -561,6 +564,7 @@ class NvidiaBenchmarkTests(unittest.TestCase):
         composed = ROBOHARNESS.compose_run_config(
             base_toml,
             Path("/tmp/report.json"),
+            Path("/tmp/report_replay_trace.json"),
             Path("/tmp/run.rrd"),
             showcase_context,
             max_ticks=7,
@@ -617,6 +621,9 @@ class NvidiaBenchmarkTests(unittest.TestCase):
 
             [sim]
             gain_profile = "default_pd"
+
+            [comm]
+            frequency_hz = 50
             """
         ).strip()
         showcase_context = {
@@ -632,16 +639,23 @@ class NvidiaBenchmarkTests(unittest.TestCase):
         composed = ROBOHARNESS.compose_run_config(
             base_toml,
             Path("/tmp/report.json"),
+            Path("/tmp/report_replay_trace.json"),
             Path("/tmp/run.rrd"),
             showcase_context,
             max_ticks=7,
         )
 
+        parsed = tomllib.loads(composed)
         self.assertEqual(composed.count("[sim]"), 1)
         self.assertIn('model_path = "models/unitree_g1.xml"', composed)
         self.assertIn("timestep = 0.002", composed)
         self.assertIn("substeps = 10", composed)
         self.assertIn('gain_profile = "default_pd"', composed)
+        self.assertEqual(parsed["sim"]["gain_profile"], "default_pd")
+        self.assertEqual(parsed["sim"]["model_path"], "models/unitree_g1.xml")
+        self.assertEqual(parsed["sim"]["timestep"], 0.002)
+        self.assertEqual(parsed["sim"]["substeps"], 10)
+        self.assertEqual(parsed["comm"]["frequency_hz"], 50)
 
     def test_roboharness_run_robowbc_records_meta_and_report_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

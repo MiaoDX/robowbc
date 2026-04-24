@@ -27,6 +27,15 @@ loop_playback = false
 [robot]
 config_path = "configs/robots/unitree_g1_gear_sonic.toml"
 
+[sim]
+# Match the official GEAR-Sonic old freebase G1 robot model used by the public
+# deploy stack. This keeps the tracking proof pack on the same reviewed
+# embodiment as the velocity showcase card.
+model_path = "assets/robots/groot_g1_gear_sonic/g1_29dof_old.xml"
+timestep = 0.002
+substeps = 10
+gain_profile = "simulation_pd"
+
 [comm]
 frequency_hz = 50
 topics = { joint_state = "unitree/g1/joint_state", imu = "unitree/g1/imu", joint_target_command = "unitree/g1/command/joint_position" }

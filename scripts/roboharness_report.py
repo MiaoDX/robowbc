@@ -303,6 +303,7 @@ def ensure_showcase_sim_section(base_toml: str, showcase_context: dict[str, Any]
     for pattern, line in required_lines:
         if re.search(pattern, sim_section, re.MULTILINE) is None:
             sim_section += "\n" + line
+    sim_section += "\n"
     return base_toml[: match.start()] + sim_section + base_toml[match.end() :]
 
 

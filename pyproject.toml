@@ -23,3 +23,7 @@ classifiers = [
 features = ["pyo3/extension-module"]
 manifest-path = "crates/robowbc-py/Cargo.toml"
 module-name = "robowbc"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["third_party", "target", ".cache"]

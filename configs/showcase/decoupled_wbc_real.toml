@@ -22,6 +22,15 @@ control_frequency_hz = 50
 [robot]
 config_path = "configs/robots/unitree_g1_decoupled_wbc.toml"
 
+[sim]
+# Use the reviewed official Decoupled WBC old freebase G1 XML through a local
+# asset mirror so the showcase uses the official robot model and exact upstream
+# mesh bundle without depending on vendored Git LFS pointer placeholders.
+model_path = "assets/robots/groot_g1_decoupled_wbc/g1_29dof_old.xml"
+timestep = 0.002
+substeps = 10
+gain_profile = "simulation_pd"
+
 [comm]
 frequency_hz = 50
 topics = { joint_state = "unitree/g1/joint_state", imu = "unitree/g1/imu", joint_target_command = "unitree/g1/command/joint_position" }

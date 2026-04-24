@@ -25,6 +25,17 @@ control_frequency_hz = 50
 [robot]
 config_path = "configs/robots/unitree_g1_35dof_wbc_agile.toml"
 
+[sim]
+# WBC-AGILE upstream delegates the G1 MuJoCo model to Unitree's official
+# `unitree_mujoco` repository. Keep `[sim].model_path` on the exact reviewed
+# include-free base XML so the current Rust MuJoCo runtime can fall back
+# meshlessly when needed, while the proof-pack replay still renders the real
+# official geometry from the vendored mesh bundle.
+model_path = "assets/robots/unitree_g1/g1_29dof.xml"
+timestep = 0.002
+substeps = 10
+gain_profile = "simulation_pd"
+
 [comm]
 frequency_hz = 50
 topics = { joint_state = "unitree/g1/joint_state", imu = "unitree/g1/imu", joint_target_command = "unitree/g1/command/joint_position" }
