@@ -2,6 +2,7 @@
 
 use crate::{MujocoConfig, MujocoGainProfile, SimError};
 use mujoco_rs::renderer::MjRenderer;
+use mujoco_rs::wrappers::mj_plugin::load_all_plugin_libraries;
 use mujoco_rs::wrappers::{
     MjData, MjModel, MjtJoint, MjtObj, MjtSensor, MjtState, MjtTrn, MjvCamera,
 };
@@ -11,9 +12,11 @@ use robowbc_comm::{
 };
 use robowbc_core::{BasePose, JointPositionTargets, RobotConfig};
 use std::collections::BTreeSet;
+use std::env;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -79,6 +82,7 @@ pub struct MujocoCameraFrame {
 const PRIMARY_GYRO_SENSOR_NAMES: &[&str] = &["imu_gyro", "imu-angular-velocity"];
 const PRIMARY_ACCEL_SENSOR_NAMES: &[&str] = &["imu_acc", "imu-linear-acceleration"];
 const GIT_LFS_POINTER_PREFIX: &[u8] = b"version https://git-lfs.github.com/spec/v1\n";
+static MUJOCO_MESH_PLUGINS_LOADED: OnceLock<Result<(), String>> = OnceLock::new();
 
 /// A [`RobotTransport`] that steps a `MuJoCo` physics simulation.
 ///
@@ -636,6 +640,7 @@ fn control_frequency_hz(config: &MujocoConfig) -> u32 {
 }
 
 fn load_model_from_xml(model_path: &Path) -> Result<MjModel, SimError> {
+    ensure_mujoco_mesh_plugins_loaded()?;
     MjModel::from_xml(model_path).map_err(|e| SimError::ModelLoadFailed {
         reason: format!("{e}"),
     })
@@ -659,6 +664,67 @@ fn is_mesh_decoder_failure(error: &SimError) -> bool {
     lowered.contains("no decoder found for mesh file")
         || lowered.contains("decoder failed for mesh file")
         || lowered.contains("stl_decoder:")
+}
+
+fn ensure_mujoco_mesh_plugins_loaded() -> Result<(), SimError> {
+    let Some(plugin_dir) = resolve_mujoco_plugin_dir() else {
+        return Ok(());
+    };
+
+    let init = MUJOCO_MESH_PLUGINS_LOADED.get_or_init(|| {
+        load_all_plugin_libraries(&plugin_dir, None).map_err(|error| {
+            format!(
+                "failed to load MuJoCo mesh plugins from {}: {error}",
+                plugin_dir.display()
+            )
+        })
+    });
+    init.clone()
+        .map_err(|reason| SimError::ModelLoadFailed { reason })
+}
+
+fn resolve_mujoco_plugin_dir() -> Option<PathBuf> {
+    plugin_dir_from_env("MUJOCO_PLUGIN_DIR")
+        .or_else(|| plugin_dir_from_dynamic_link_dir())
+        .or_else(|| plugin_dir_from_download_dir())
+}
+
+fn plugin_dir_from_env(var_name: &str) -> Option<PathBuf> {
+    let path = env::var_os(var_name).map(PathBuf::from)?;
+    let canonical = fs::canonicalize(&path).ok()?;
+    canonical.is_dir().then_some(canonical)
+}
+
+fn plugin_dir_from_dynamic_link_dir() -> Option<PathBuf> {
+    let lib_dir = env::var_os("MUJOCO_DYNAMIC_LINK_DIR").map(PathBuf::from)?;
+    plugin_dir_from_lib_dir(&lib_dir)
+}
+
+fn plugin_dir_from_download_dir() -> Option<PathBuf> {
+    let download_dir = env::var_os("MUJOCO_DOWNLOAD_DIR").map(PathBuf::from)?;
+    plugin_dir_from_download_root(&download_dir)
+}
+
+fn plugin_dir_from_lib_dir(lib_dir: &Path) -> Option<PathBuf> {
+    let plugin_dir = lib_dir.parent()?.join("bin").join("mujoco_plugin");
+    let canonical = fs::canonicalize(plugin_dir).ok()?;
+    canonical.is_dir().then_some(canonical)
+}
+
+fn plugin_dir_from_download_root(download_dir: &Path) -> Option<PathBuf> {
+    let mut roots = fs::read_dir(download_dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    roots.sort();
+    roots.reverse();
+
+    roots.into_iter().find_map(|root| {
+        let candidate = root.join("bin").join("mujoco_plugin");
+        let canonical = fs::canonicalize(candidate).ok()?;
+        canonical.is_dir().then_some(canonical)
+    })
 }
 
 fn collect_missing_mesh_assets(model_path: &Path, mjcf: &str) -> Result<Vec<PathBuf>, SimError> {
@@ -1229,7 +1295,8 @@ mod tests {
 
     #[test]
     fn send_joint_targets_computes_pd_control_from_position_error() {
-        let robot = load_robot_config("configs/robots/unitree_g1.toml");
+        let mut robot = load_robot_config("configs/robots/unitree_g1.toml");
+        robot.joint_velocity_limits = None;
         let mut transport = MujocoTransport::new(
             MujocoConfig {
                 model_path: g1_model_path(),
@@ -1265,7 +1332,8 @@ mod tests {
 
     #[test]
     fn send_joint_targets_can_use_default_pd_gains_when_requested() {
-        let robot = load_robot_config("configs/robots/unitree_g1.toml");
+        let mut robot = load_robot_config("configs/robots/unitree_g1.toml");
+        robot.joint_velocity_limits = None;
         let mut transport = MujocoTransport::new(
             MujocoConfig {
                 model_path: g1_model_path(),
@@ -1301,7 +1369,8 @@ mod tests {
 
     #[test]
     fn send_joint_targets_clamps_pd_control_to_actuator_ctrlrange() {
-        let robot = load_robot_config("configs/robots/unitree_g1.toml");
+        let mut robot = load_robot_config("configs/robots/unitree_g1.toml");
+        robot.joint_velocity_limits = None;
         let mut transport = MujocoTransport::new(
             MujocoConfig {
                 model_path: g1_model_path(),
@@ -1340,7 +1409,8 @@ mod tests {
 
     #[test]
     fn multi_substep_send_matches_repeated_single_step_pd_recomputation() {
-        let robot = load_robot_config("configs/robots/unitree_g1.toml");
+        let mut robot = load_robot_config("configs/robots/unitree_g1.toml");
+        robot.joint_velocity_limits = None;
         let mut batched = MujocoTransport::new(
             MujocoConfig {
                 model_path: g1_model_path(),
@@ -1649,6 +1719,57 @@ mod tests {
             load_model_resolving_assets(&model_path).expect("invalid mesh should fall back");
 
         assert_eq!(loaded.model_variant, "meshless-public-mjcf");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn plugin_dir_from_lib_dir_resolves_sibling_plugin_folder() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "robowbc-sim-plugin-libdir-{unique}-{}",
+            std::process::id()
+        ));
+        let lib_dir = root.join("lib");
+        let plugin_dir = root.join("bin").join("mujoco_plugin");
+        fs::create_dir_all(&lib_dir).expect("lib dir should be creatable");
+        fs::create_dir_all(&plugin_dir).expect("plugin dir should be creatable");
+
+        let resolved = plugin_dir_from_lib_dir(&lib_dir).expect("plugin dir should resolve");
+
+        assert_eq!(
+            resolved,
+            fs::canonicalize(&plugin_dir).expect("plugin dir should canonicalize")
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn plugin_dir_from_download_root_picks_latest_available_mujoco_folder() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "robowbc-sim-plugin-download-{unique}-{}",
+            std::process::id()
+        ));
+        let older = root.join("mujoco-3.5.2").join("bin").join("mujoco_plugin");
+        let newer = root.join("mujoco-3.6.0").join("bin").join("mujoco_plugin");
+        fs::create_dir_all(&older).expect("older plugin dir should be creatable");
+        fs::create_dir_all(&newer).expect("newer plugin dir should be creatable");
+
+        let resolved =
+            plugin_dir_from_download_root(&root).expect("plugin dir should resolve from cache");
+
+        assert_eq!(
+            resolved,
+            fs::canonicalize(&newer).expect("newer plugin dir should canonicalize")
+        );
 
         let _ = fs::remove_dir_all(root);
     }
