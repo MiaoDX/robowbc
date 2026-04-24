@@ -4,7 +4,7 @@
 
 ### v0.1 Roboharness Visual Harness Integration
 
-**Status:** Complete
+**Status:** In Progress
 **Goal:** supplement the current HTML reporting surfaces with a truthful
 roboharness-backed visual proof path while keeping RoboWBC as the owner of
 runtime execution, control timing, and MuJoCo stepping.
@@ -14,6 +14,7 @@ runtime execution, control timing, and MuJoCo stepping.
 - [x] **Phase 1: Define the canonical replay trace and metrics contract for roboharness**
 - [x] **Phase 2: Generate per-run roboharness proof packs from robowbc artifacts**
 - [x] **Phase 3: Expose a live PyO3 MuJoCo session for direct roboharness backends**
+- [ ] **Phase 4: Make the visual harness phase-aware with lag-selectable phase-end comparisons**
 
 ## Delivered
 
@@ -105,5 +106,32 @@ Plans:
 
 Plans:
 - [x] `03-01-PLAN.md`
+
+### Phase 4: Make the visual harness phase-aware with lag-selectable phase-end comparisons
+
+**Status:** Ready for planning
+**Goal:** make the proof-pack and showcase views read like the staged demo the
+user commanded: explicit stand/accelerate/turn/run/settle phases, phase-aware
+visual checkpoints, and more intuitive target-vs-actual comparison at phase
+ends.
+**Requirements**:
+- add an explicit 1-second leading stand phase to the staged
+  `runtime.velocity_schedule` showcase demos and carry named semantic phase
+  boundaries through the reporting pipeline
+- capture phase midpoints and phase-end checkpoints for velocity demos while
+  keeping evidence checkpoints like `peak_latency` as secondary diagnostics
+- save target phase-end overlays together with positive-lag actual variants
+  (`+0..+5` ticks, default `+3`) and expose an in-page selector so reviewers
+  can inspect response lag without leaving the report
+- support opt-in tracking-demo phase metadata through explicit sidecar manifests
+  and fall back to the current generic tracking checkpoints when no sidecar is
+  present
+- improve the report layout and camera presets so locomotion progress and turn
+  completion are easier to read than the current fixed checkpoint strip
+**Depends on:** Phase 3
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 4 to break down)
 
 ---
