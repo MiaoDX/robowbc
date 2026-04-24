@@ -60,6 +60,8 @@ jobs:
     needs: rust
     env:
       MUJOCO_DOWNLOAD_DIR: /tmp/mujoco
+      MUJOCO_GL: egl
+      PYOPENGL_PLATFORM: egl
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -81,6 +83,11 @@ jobs:
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
+
+      - name: Install headless MuJoCo EGL runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri libgbm1
 
       - name: Cache live policy checkpoints
         uses: actions/cache@v4

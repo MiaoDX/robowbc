@@ -12,6 +12,8 @@ SITE_BIND ?= 127.0.0.1
 SITE_PORT ?= 8000
 SITE_OPEN ?= 0
 MUJOCO_DOWNLOAD_DIR ?= $(CURDIR)/.cache/mujoco
+SHOWCASE_MUJOCO_GL ?= egl
+SHOWCASE_PYOPENGL_PLATFORM ?= $(SHOWCASE_MUJOCO_GL)
 ROBOWBC_BINARY ?= $(CURDIR)/target/debug/robowbc
 SITE_PYTHON_DEPS ?= numpy joblib onnxruntime==1.24.4 pyyaml mujoco Pillow
 PYTHON_SDK_DIST_DIR ?= $(CURDIR)/dist
@@ -20,7 +22,7 @@ PYTHON_SDK_TARGET_DIR ?= $(CURDIR)/target/python-sdk-wheel
 
 .DEFAULT_GOAL := help
 
-.PHONY: help toolchain build build-release check test clippy fmt fmt-check rust-doc mdbook-install docs-book docs verify smoke models-public site-python-deps benchmark-robowbc benchmark-official benchmark-summary benchmark-nvidia site showcase-verify site-smoke site-serve-check site-serve python-sdk-deps python-sdk-build python-sdk-install python-sdk-smoke python-sdk-verify ci
+.PHONY: help toolchain build build-release check test clippy fmt fmt-check rust-doc mdbook-install docs-book docs verify smoke models-public site-python-deps site-render-check benchmark-robowbc benchmark-official benchmark-summary benchmark-nvidia site showcase-verify site-smoke site-serve-check site-serve python-sdk-deps python-sdk-build python-sdk-install python-sdk-smoke python-sdk-verify ci
 
 help: ## Show available targets and useful variables.
 	@awk 'BEGIN {FS = ":.*## "; print "Targets:"} /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -29,6 +31,8 @@ help: ## Show available targets and useful variables.
 	@printf "  %-20s %s\n" "MDBOOK" "$(MDBOOK)"
 	@printf "  %-20s %s\n" "SITE_OUTPUT_DIR" "$(SITE_OUTPUT_DIR)"
 	@printf "  %-20s %s\n" "MUJOCO_DOWNLOAD_DIR" "$(MUJOCO_DOWNLOAD_DIR)"
+	@printf "  %-20s %s\n" "SHOWCASE_MUJOCO_GL" "$(SHOWCASE_MUJOCO_GL)"
+	@printf "  %-20s %s\n" "SHOWCASE_PYOPENGL_PLATFORM" "$(SHOWCASE_PYOPENGL_PLATFORM)"
 	@printf "  %-20s %s\n" "PYTHON_SDK_DIST_DIR" "$(PYTHON_SDK_DIST_DIR)"
 	@printf "  %-20s %s\n" "PYTHON_SDK_MUJOCO_DOWNLOAD_DIR" "$(PYTHON_SDK_MUJOCO_DOWNLOAD_DIR)"
 	@printf "  %-20s %s\n" "PYTHON_SDK_TARGET_DIR" "$(PYTHON_SDK_TARGET_DIR)"
@@ -89,6 +93,11 @@ models-public: ## Download the public policy checkpoints used by the site and be
 site-python-deps: ## Install Python dependencies required for site generation and proof-pack capture.
 	$(PYTHON) -m pip install $(SITE_PYTHON_DEPS)
 
+site-render-check: ## Verify the MuJoCo offscreen renderer works before building screenshot-bearing proof packs.
+	MUJOCO_GL="$(SHOWCASE_MUJOCO_GL)" \
+	PYOPENGL_PLATFORM="$(SHOWCASE_PYOPENGL_PLATFORM)" \
+	$(PYTHON) scripts/check_mujoco_headless.py
+
 benchmark-robowbc: ## Regenerate normalized RoboWBC benchmark artifacts.
 	$(PYTHON) scripts/bench_robowbc_compare.py --all
 
@@ -104,6 +113,8 @@ benchmark-summary: ## Render benchmark Markdown and HTML summaries from the norm
 benchmark-nvidia: benchmark-robowbc benchmark-official benchmark-summary ## Rebuild the full NVIDIA benchmark comparison package.
 
 site: ## Build the full static site bundle with policy pages, proof packs, and benchmarks.
+	MUJOCO_GL="$(SHOWCASE_MUJOCO_GL)" \
+	PYOPENGL_PLATFORM="$(SHOWCASE_PYOPENGL_PLATFORM)" \
 	MUJOCO_DOWNLOAD_DIR="$(MUJOCO_DOWNLOAD_DIR)" \
 	$(PYTHON) scripts/build_site.py \
 		--repo-root . \
@@ -112,6 +123,7 @@ site: ## Build the full static site bundle with policy pages, proof packs, and b
 
 showcase-verify: ## Run the same showcase build + bundle validation path used in CI.
 	$(MAKE) site-python-deps
+	$(MAKE) site-render-check
 	$(MAKE) models-public
 	$(MAKE) site
 	$(MAKE) site-smoke
