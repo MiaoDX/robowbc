@@ -41,7 +41,20 @@ window_size = 3
 # execution_provider = { type = "cuda", device_id = 0 }
 
 [robot]
-config_path = "configs/robots/unitree_g1.toml"
+config_path = "configs/robots/unitree_g1_bfm_zero.toml"
+
+[sim]
+# Default to the reviewed Unitree base G1 MJCF, which matches the current
+# upstream `unitree_mujoco` file exactly.
+#
+# If you have a local BFM-Zero checkout and want the exact upstream MuJoCo
+# scene instead, override `model_path` with one of:
+#   /path/to/BFM-Zero/humanoidverse/data/robots/g1/scene_29dof_freebase_mujoco.xml
+#   /path/to/BFM-Zero/humanoidverse/data/robots/g1/scene_29dof_freebase_noadditional_actuators.xml
+model_path = "assets/robots/unitree_g1/g1_29dof.xml"
+timestep = 0.002
+substeps = 10
+gain_profile = "simulation_pd"
 
 [comm]
 frequency_hz = 50

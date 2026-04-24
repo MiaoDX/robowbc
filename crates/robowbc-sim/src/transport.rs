@@ -569,33 +569,52 @@ fn load_model_resolving_assets(model_path: &Path) -> Result<LoadedModel, SimErro
     })?;
     let missing_mesh_assets = collect_missing_mesh_assets(&absolute_model_path, &mjcf)?;
     let needs_ground_plane = !mjcf_has_plane_geom(&mjcf);
-    if missing_mesh_assets.is_empty() && !needs_ground_plane {
-        return Ok(LoadedModel {
-            model: load_model_from_xml(&absolute_model_path)?,
-            model_variant: "upstream-mjcf",
-        });
+    let mut force_meshless_fallback = !missing_mesh_assets.is_empty();
+
+    if !force_meshless_fallback {
+        let primary_variant = if needs_ground_plane {
+            "upstream-mjcf+ground-plane"
+        } else {
+            "upstream-mjcf"
+        };
+        let primary_load = if needs_ground_plane {
+            let ground_plane_mjcf = inject_ground_plane_into_mjcf(&mjcf)?;
+            load_model_from_generated_xml(&absolute_model_path, &ground_plane_mjcf)
+        } else {
+            load_model_from_xml(&absolute_model_path)
+        };
+
+        match primary_load {
+            Ok(model) => {
+                return Ok(LoadedModel {
+                    model,
+                    model_variant: primary_variant,
+                });
+            }
+            Err(err) if is_mesh_decoder_failure(&err) => {
+                force_meshless_fallback = true;
+            }
+            Err(err) => return Err(err),
+        }
     }
 
-    let patched_mjcf = if missing_mesh_assets.is_empty() {
-        inject_ground_plane_into_mjcf(&mjcf)?
-    } else {
+    let patched_mjcf = if force_meshless_fallback {
         let meshless = strip_mesh_references_from_mjcf(&mjcf);
         if needs_ground_plane {
             inject_ground_plane_into_mjcf(&meshless)?
         } else {
             meshless
         }
+    } else {
+        inject_ground_plane_into_mjcf(&mjcf)?
     };
-    let meshless_model_path =
-        write_temporary_meshless_model(&absolute_model_path, patched_mjcf.as_bytes())?;
-    let model = load_model_from_xml(&meshless_model_path);
-    let _ = fs::remove_file(&meshless_model_path);
+    let model = load_model_from_generated_xml(&absolute_model_path, &patched_mjcf);
 
-    let model_variant = match (missing_mesh_assets.is_empty(), needs_ground_plane) {
-        (true, true) => "upstream-mjcf+ground-plane",
-        (false, true) => "meshless-public-mjcf+ground-plane",
-        (false, false) => "meshless-public-mjcf",
-        (true, false) => unreachable!("unpatched upstream models return early"),
+    let model_variant = match (force_meshless_fallback, needs_ground_plane) {
+        (false, true) => "upstream-mjcf+ground-plane",
+        (false, false) => "upstream-mjcf",
+        (true, true) => "meshless-public-mjcf+ground-plane",
+        (true, false) => "meshless-public-mjcf",
     };
 
     model.map(|model| LoadedModel {
@@ -620,6 +639,26 @@ fn load_model_from_xml(model_path: &Path) -> Result<MjModel, SimError> {
     MjModel::from_xml(model_path).map_err(|e| SimError::ModelLoadFailed {
         reason: format!("{e}"),
     })
+}
+
+fn load_model_from_generated_xml(
+    source_model_path: &Path,
+    mjcf: &str,
+) -> Result<MjModel, SimError> {
+    let generated_model_path = write_temporary_meshless_model(source_model_path, mjcf.as_bytes())?;
+    let model = load_model_from_xml(&generated_model_path);
+    let _ = fs::remove_file(&generated_model_path);
+    model
+}
+
+fn is_mesh_decoder_failure(error: &SimError) -> bool {
+    let SimError::ModelLoadFailed { reason } = error else {
+        return false;
+    };
+    let lowered = reason.to_ascii_lowercase();
+    lowered.contains("no decoder found for mesh file")
+        || lowered.contains("decoder failed for mesh file")
+        || lowered.contains("stl_decoder:")
 }
 
 fn collect_missing_mesh_assets(model_path: &Path, mjcf: &str) -> Result<Vec<PathBuf>, SimError> {
@@ -1570,6 +1609,46 @@ mod tests {
             .expect("git-lfs placeholder meshes should be treated as missing");
 
         assert_eq!(missing, vec![mesh_path]);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn load_model_resolving_assets_falls_back_when_mesh_decoder_rejects_present_asset() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "robowbc-sim-invalid-mesh-{unique}-{}",
+            std::process::id()
+        ));
+        let mesh_dir = root.join("meshes");
+        fs::create_dir_all(&mesh_dir).expect("mesh dir should be creatable");
+        let model_path = root.join("model.xml");
+        let mesh_path = mesh_dir.join("pelvis.STL");
+        fs::write(&mesh_path, b"this is not a valid STL file\n")
+            .expect("invalid mesh should be writable");
+        let mjcf = r#"
+<mujoco model="test">
+  <compiler meshdir="meshes"/>
+  <asset>
+    <mesh name="pelvis" file="pelvis.STL"/>
+  </asset>
+  <worldbody>
+    <geom name="floor" size="0 0 0.05" type="plane"/>
+    <body name="pelvis">
+      <geom type="mesh" mesh="pelvis"/>
+    </body>
+  </worldbody>
+</mujoco>
+"#;
+        fs::write(&model_path, mjcf).expect("model xml should be writable");
+
+        let loaded =
+            load_model_resolving_assets(&model_path).expect("invalid mesh should fall back");
+
+        assert_eq!(loaded.model_variant, "meshless-public-mjcf");
 
         let _ = fs::remove_dir_all(root);
     }

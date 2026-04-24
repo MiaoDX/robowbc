@@ -1,7 +1,7 @@
 import importlib.util
 import json
-import re
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -159,7 +159,9 @@ def make_entry(
 
 
 class PolicyShowcaseTests(unittest.TestCase):
-    def render(self, entries: list[dict[str, object]]) -> tuple[str, list[dict[str, object]]]:
+    def render(
+        self, entries: list[dict[str, object]]
+    ) -> tuple[str, list[dict[str, object]], dict[str, str]]:
         original_vendor = SHOWCASE.vendor_rerun_web_viewer
         SHOWCASE.vendor_rerun_web_viewer = lambda repo_root, output_dir: {
             "version": "test",
@@ -171,7 +173,13 @@ class PolicyShowcaseTests(unittest.TestCase):
                 SHOWCASE.render_html(entries, output_dir, ROOT)
                 html_text = (output_dir / "index.html").read_text(encoding="utf-8")
                 manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
-                return html_text, manifest
+                detail_pages = {
+                    str(entry["card_id"]): (
+                        output_dir / "policies" / str(entry["card_id"]) / "index.html"
+                    ).read_text(encoding="utf-8")
+                    for entry in manifest
+                }
+                return html_text, manifest, detail_pages
         finally:
             SHOWCASE.vendor_rerun_web_viewer = original_vendor
 
@@ -205,13 +213,17 @@ class PolicyShowcaseTests(unittest.TestCase):
             ),
         ]
 
-        html_text, manifest = self.render(entries)
+        html_text, manifest, detail_pages = self.render(entries)
 
-        section_ids = re.findall(r'<section class="card" id="policy-([^"]+)"', html_text)
-        self.assertEqual(section_ids, ["gear_sonic", "gear_sonic_tracking"])
-
-        viewer_keys = re.findall(r'data-rerun-policy="([^"]+)"', html_text)
-        self.assertEqual(viewer_keys, ["gear_sonic", "gear_sonic_tracking"])
+        self.assertIn('href="policies/gear_sonic/"', html_text)
+        self.assertIn('href="policies/gear_sonic_tracking/"', html_text)
+        self.assertIn('id="policy-gear_sonic"', detail_pages["gear_sonic"])
+        self.assertIn('id="policy-gear_sonic_tracking"', detail_pages["gear_sonic_tracking"])
+        self.assertIn('data-rerun-policy="gear_sonic"', detail_pages["gear_sonic"])
+        self.assertIn(
+            'data-rerun-policy="gear_sonic_tracking"',
+            detail_pages["gear_sonic_tracking"],
+        )
 
         self.assertIn("gear_sonic_tracking · family gear_sonic", html_text)
         self.assertEqual([entry["card_id"] for entry in manifest], ["gear_sonic", "gear_sonic_tracking"])
@@ -239,13 +251,16 @@ class PolicyShowcaseTests(unittest.TestCase):
             entry.pop("card_id")
             entry["_meta"].pop("card_id")
 
-        html_text, _manifest = self.render([gear_sonic, gear_sonic_tracking])
+        html_text, manifest, detail_pages = self.render([gear_sonic, gear_sonic_tracking])
 
-        section_ids = re.findall(r'<section class="card" id="policy-([^"]+)"', html_text)
-        viewer_keys = re.findall(r'data-rerun-policy="([^"]+)"', html_text)
-
-        self.assertEqual(section_ids, ["gear_sonic", "gear_sonic_tracking"])
-        self.assertEqual(viewer_keys, ["gear_sonic", "gear_sonic_tracking"])
+        self.assertIn('href="policies/gear_sonic/"', html_text)
+        self.assertIn('href="policies/gear_sonic_tracking/"', html_text)
+        self.assertEqual([entry["card_id"] for entry in manifest], ["gear_sonic", "gear_sonic_tracking"])
+        self.assertIn('data-rerun-policy="gear_sonic"', detail_pages["gear_sonic"])
+        self.assertIn(
+            'data-rerun-policy="gear_sonic_tracking"',
+            detail_pages["gear_sonic_tracking"],
+        )
 
     def test_render_html_shows_velocity_metrics_only_for_velocity_cards(self) -> None:
         entries = [
@@ -275,14 +290,20 @@ class PolicyShowcaseTests(unittest.TestCase):
             ),
         ]
 
-        html_text, _manifest = self.render(entries)
+        html_text, _manifest, detail_pages = self.render(entries)
+        velocity_detail = detail_pages["decoupled_wbc"]
+        tracking_detail = detail_pages["bfm_zero"]
 
-        self.assertEqual(html_text.count("VX RMSE"), 1)
-        self.assertEqual(html_text.count("Yaw RMSE"), 1)
-        self.assertEqual(html_text.count("Mean joint error"), 2)
-        self.assertEqual(html_text.count("Quality verdict"), 2)
-        self.assertIn(">motion_tokens<", html_text)
-        self.assertIn(">velocity_schedule<", html_text)
+        self.assertIn("VX RMSE", velocity_detail)
+        self.assertIn("Yaw RMSE", velocity_detail)
+        self.assertNotIn("VX RMSE", tracking_detail)
+        self.assertNotIn("Yaw RMSE", tracking_detail)
+        self.assertIn("Mean joint error", velocity_detail)
+        self.assertIn("Mean joint error", tracking_detail)
+        self.assertIn("Quality verdict", velocity_detail)
+        self.assertIn("Quality verdict", tracking_detail)
+        self.assertIn(">MOTION_TOKENS<", html_text)
+        self.assertIn(">VELOCITY_SCHEDULE<", html_text)
 
     def test_render_html_marks_bad_tracking_cards_with_quality_pill_and_heuristics(self) -> None:
         entries = [
@@ -298,14 +319,56 @@ class PolicyShowcaseTests(unittest.TestCase):
             )
         ]
 
-        html_text, manifest = self.render(entries)
+        html_text, manifest, detail_pages = self.render(entries)
+        tracking_detail = detail_pages["gear_sonic_tracking"]
 
         self.assertIn(">BAD<", html_text)
-        self.assertIn("Mean joint error", html_text)
-        self.assertIn("Frames height &lt; 0.4 m", html_text)
-        self.assertIn("min base height", html_text.lower())
+        self.assertIn("Mean joint error", tracking_detail)
+        self.assertIn("Frames height &lt; 0.4 m", tracking_detail)
+        self.assertIn("Min base height", tracking_detail)
         self.assertEqual(manifest[0]["quality_verdict"]["label"], "BAD")
         self.assertIn("mean joint error", manifest[0]["quality_verdict"]["summary"])
+
+    def test_compose_showcase_config_preserves_existing_sim_section_and_fills_missing_fields(
+        self,
+    ) -> None:
+        base_toml = """
+[policy]
+name = "gear_sonic"
+
+[sim]
+gain_profile = "default_pd"
+
+[comm]
+frequency_hz = 50
+""".strip()
+        showcase_context = {
+            "transport": "mujoco",
+            "model_path": "models/unitree_g1.xml",
+            "timestep": 0.002,
+            "substeps": 10,
+            "gain_profile": "simulation_pd",
+            "report_max_frames": 200,
+        }
+
+        composed = SHOWCASE.compose_showcase_config(
+            base_toml,
+            "gear_sonic",
+            Path("/tmp/report.json"),
+            Path("/tmp/run.rrd"),
+            showcase_context,
+        )
+
+        parsed = tomllib.loads(composed)
+        self.assertEqual(composed.count("[sim]"), 1)
+        self.assertEqual(parsed["sim"]["gain_profile"], "default_pd")
+        self.assertEqual(parsed["sim"]["model_path"], "models/unitree_g1.xml")
+        self.assertEqual(parsed["sim"]["timestep"], 0.002)
+        self.assertEqual(parsed["sim"]["substeps"], 10)
+        self.assertEqual(parsed["comm"]["frequency_hz"], 50)
+        self.assertEqual(parsed["vis"]["app_id"], "robowbc-showcase-gear_sonic")
+        self.assertEqual(parsed["vis"]["save_path"], "/tmp/run.rrd")
+        self.assertEqual(parsed["report"]["output_path"], "/tmp/report.json")
 
     def test_classify_quality_verdict_marks_straight_velocity_run_as_good(self) -> None:
         verdict = SHOWCASE.classify_quality_verdict(
@@ -367,7 +430,7 @@ class PolicyShowcaseTests(unittest.TestCase):
             },
         )
 
-        html_text, manifest = self.render([entry])
+        html_text, manifest, _detail_pages = self.render([entry])
 
         self.assertIn(">??<", html_text)
         self.assertEqual(manifest[0]["quality_verdict"]["label"], "??")

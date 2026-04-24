@@ -22,6 +22,15 @@ num_threads = 1
 [robot]
 config_path = "configs/robots/unitree_g1_gear_sonic.toml"
 
+[sim]
+# Use the reviewed official GEAR-Sonic freebase G1 XML through a local asset
+# mirror so the showcase stays on the official robot model without depending on
+# unresolved third-party Git LFS mesh pointers.
+model_path = "assets/robots/groot_g1_gear_sonic/g1_29dof_old.xml"
+timestep = 0.002
+substeps = 10
+gain_profile = "simulation_pd"
+
 [comm]
 frequency_hz = 50
 topics = { joint_state = "unitree/g1/joint_state", imu = "unitree/g1/imu", joint_target_command = "unitree/g1/command/joint_position" }
