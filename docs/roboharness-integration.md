@@ -149,13 +149,21 @@ works normally.
   `cargo build --release --features robowbc-cli/sim,robowbc-cli/vis`
 - Python 3.10+
 - `roboharness`, `mujoco`, and `Pillow` installed
+- Linux EGL runtime packages when running headless screenshot capture:
+  `libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri libgbm1`
 
 Example:
 
 ```bash
 pip install mujoco Pillow
 pip install /path/to/roboharness
+sudo apt-get install -y libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri libgbm1
 ```
+
+For full local parity with the GitHub showcase job, prefer `make
+showcase-verify` from the repo root. That path now runs a fail-fast MuJoCo EGL
+render smoke check before it builds the site and rejects any generated bundle
+that still reports `capture_status != "ok"` for MuJoCo-backed proof packs.
 
 ## Meshless fallback
 

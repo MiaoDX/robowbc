@@ -113,6 +113,7 @@ GitHub Pages site.
 
 ```bash
 make site
+make showcase-verify
 make site-serve SITE_OPEN=1
 ```
 
@@ -120,12 +121,22 @@ make site-serve SITE_OPEN=1
 build. It picks `./.cache/mujoco` by default, downloads MuJoCo there when
 needed, rebuilds the `robowbc` binary with
 `robowbc-cli/sim-auto-download,robowbc-cli/vis`, runs the benchmark
-generators, and assembles the final static bundle into `/tmp/robowbc-site`.
+generators, forces the same `MUJOCO_GL=egl` / `PYOPENGL_PLATFORM=egl`
+offscreen path that the GitHub showcase job uses, and assembles the final
+static bundle into `/tmp/robowbc-site`.
 Set `MUJOCO_DOWNLOAD_DIR=/your/cache make site` if you want a different cache
 location, or override `SITE_OUTPUT_DIR=/your/output make site` if you want the
 site somewhere else. `make site-smoke` validates the generated bundle layout
 without serving it, and `make site-serve-check` does a short start/stop probe
 of the local HTTP server.
+
+`make showcase-verify` is the closest local equivalent to the GitHub `showcase`
+job. It installs the site Python deps, runs the same headless MuJoCo EGL render
+smoke check that CI now relies on, downloads the public checkpoints, builds the
+site bundle, and fails if any MuJoCo-backed policy page ships a proof-pack
+manifest without real screenshots. On Ubuntu, install the headless EGL runtime
+first if that render smoke check fails:
+`sudo apt-get install -y libegl1 libegl-mesa0 libgles2 libgl1-mesa-dri libgbm1`.
 
 The output folder contains `index.html`, `manifest.json`, `policies/<policy>/`
 folders with per-policy HTML plus raw run artifacts, `benchmarks/nvidia/` with
