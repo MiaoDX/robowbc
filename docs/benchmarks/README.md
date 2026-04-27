@@ -38,9 +38,9 @@ The decision is not "is Rust faster than C++?" The decision is:
 
 | Case ID | What is measured | Why it matters |
 |---------|------------------|----------------|
-| `gear_sonic_velocity/cold_start_tick` | First velocity tick after reset | Exposes planner cold-start cost |
-| `gear_sonic_velocity/warm_steady_state_tick` | Velocity interpolation tick with planner idle | Captures steady-state locomotion path |
-| `gear_sonic_velocity/replan_tick` | Velocity tick that executes `planner_sonic.onnx` | Measures the expensive replanning boundary |
+| `gear_sonic_velocity/cold_start_tick` | First full velocity-policy tick after reset | Exposes cold-start control-loop cost when planner motion is first seeded |
+| `gear_sonic_velocity/warm_steady_state_tick` | Full velocity-policy tick with planner motion already seeded | Captures the steady-state locomotion path without a new replan request |
+| `gear_sonic_velocity/replan_tick` | Full velocity-policy tick at the default slow-walk replan boundary | Measures control-loop work while a fresh planner path is requested asynchronously |
 | `gear_sonic_tracking/standing_placeholder_tick` | Encoder plus decoder standing-placeholder path | Separates tracking cost from planner cost |
 | `decoupled_wbc/walk_predict` | GR00T G1 history contract with motion command | Makes the walk checkpoint explicit |
 | `decoupled_wbc/balance_predict` | GR00T G1 history contract with near-zero command | Makes the balance checkpoint explicit |

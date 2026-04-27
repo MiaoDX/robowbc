@@ -148,7 +148,10 @@ fn bench_dynamic_identity_scaling(c: &mut Criterion) {
 // ambiguous "predict" bucket.
 // ---------------------------------------------------------------------------
 
-const GEAR_SONIC_REPLAN_INTERVAL_TICKS: usize = 5;
+// The benchmark fixture uses a 0.3 m/s forward command, which stays in the
+// published slow-walk bucket. That path only becomes eligible for a fresh
+// planner request after 50 control ticks, not after the 5-tick running path.
+const GEAR_SONIC_SLOW_WALK_REPLAN_INTERVAL_TICKS: usize = 50;
 
 fn load_gear_sonic_policy() -> Option<GearSonicPolicy> {
     // GearSonicPolicy requires real ONNX checkpoints because the encoder
@@ -265,7 +268,7 @@ fn bench_gear_sonic_modes(c: &mut Criterion) {
         b.iter_batched(
             || {
                 policy.reset().expect("reset should succeed");
-                for _ in 0..GEAR_SONIC_REPLAN_INTERVAL_TICKS {
+                for _ in 0..GEAR_SONIC_SLOW_WALK_REPLAN_INTERVAL_TICKS {
                     policy
                         .predict(&velocity_obs)
                         .expect("preparing replan tick should succeed");

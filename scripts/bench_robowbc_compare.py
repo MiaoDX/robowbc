@@ -16,6 +16,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 REGISTRY_PATH = ROOT_DIR / "benchmarks/nvidia/cases.json"
 NORMALIZER_PATH = ROOT_DIR / "scripts/normalize_nvidia_benchmarks.py"
 DEFAULT_OUTPUT_ROOT = ROOT_DIR / "artifacts/benchmarks/nvidia/robowbc"
+DEFAULT_MUJOCO_DOWNLOAD_DIR = ROOT_DIR / ".cache" / "mujoco"
 DEFAULT_GEAR_SONIC_REVISION = "cc80d505b7e055fd6ae26426ae8bfa0a74c26011"
 DEFAULT_DECOUPLED_COMMIT = "bc38f6d0ce6cab4589e025037ad0bfbab7ba73d8"
 DEFAULT_GEAR_SONIC_MODEL_DIR = Path(
@@ -79,12 +80,22 @@ def prepend_env_path(env: dict[str, str], key: str, value: Path) -> None:
     env[key] = f"{value}{os.pathsep}{current}" if current else str(value)
 
 
+def resolve_mujoco_download_dir(env: dict[str, str]) -> Path:
+    configured = env.get("MUJOCO_DOWNLOAD_DIR")
+    download_dir = (
+        Path(configured).expanduser().resolve()
+        if configured
+        else DEFAULT_MUJOCO_DOWNLOAD_DIR.resolve()
+    )
+    download_dir.mkdir(parents=True, exist_ok=True)
+    env["MUJOCO_DOWNLOAD_DIR"] = str(download_dir)
+    return download_dir
+
+
 def resolve_mujoco_runtime_libdir(env: dict[str, str]) -> Path | None:
-    download_dir = env.get("MUJOCO_DOWNLOAD_DIR")
-    if not download_dir:
-        return None
+    download_dir = resolve_mujoco_download_dir(env)
     candidates = sorted(
-        Path(download_dir).glob("mujoco-*/lib/libmujoco.so"),
+        download_dir.glob("mujoco-*/lib/libmujoco.so"),
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
@@ -92,6 +103,7 @@ def resolve_mujoco_runtime_libdir(env: dict[str, str]) -> Path | None:
 
 
 def configure_mujoco_runtime_env(env: dict[str, str]) -> dict[str, str]:
+    resolve_mujoco_download_dir(env)
     libdir = resolve_mujoco_runtime_libdir(env)
     if libdir is not None:
         prepend_env_path(env, "LD_LIBRARY_PATH", libdir)
