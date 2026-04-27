@@ -18,7 +18,9 @@ REGISTRY_PATH = ROOT_DIR / "benchmarks/nvidia/cases.json"
 NORMALIZER_PATH = ROOT_DIR / "scripts/normalize_nvidia_benchmarks.py"
 DECOUPLED_HARNESS = ROOT_DIR / "scripts/bench_nvidia_decoupled_official.py"
 GEAR_SONIC_HARNESS_SRC = ROOT_DIR / "scripts/bench_nvidia_gear_sonic_official.cpp"
-GEAR_SONIC_HARNESS_BIN = ROOT_DIR / "target/nvidia-bench/bench_nvidia_gear_sonic_official"
+DEFAULT_GEAR_SONIC_HARNESS_BIN = (
+    ROOT_DIR / "target/nvidia-bench/bench_nvidia_gear_sonic_official"
+)
 DEFAULT_OFFICIAL_REPO_DIR = ROOT_DIR / "third_party/GR00T-WholeBodyControl"
 DEFAULT_OFFICIAL_OUTPUT_ROOT = ROOT_DIR / "artifacts/benchmarks/nvidia/official"
 DEFAULT_DECOUPLED_MODEL_DIR = Path(
@@ -27,6 +29,7 @@ DEFAULT_DECOUPLED_MODEL_DIR = Path(
 DEFAULT_GEAR_SONIC_MODEL_DIR = Path(
     os.environ.get("GEAR_SONIC_MODEL_DIR", str(ROOT_DIR / "models/gear-sonic"))
 )
+PROVIDER_CHOICES = ("cpu", "cuda", "tensor_rt")
 
 
 def load_normalizer() -> Any:
@@ -57,7 +60,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--provider",
         default="cpu",
-        help="Provider label recorded in the artifact",
+        choices=PROVIDER_CHOICES,
+        help="Execution provider requested for the benchmark row",
     )
     parser.add_argument(
         "--repo-dir",
@@ -102,7 +106,7 @@ def run(
     argv: list[str],
     *,
     cwd: Path | None = None,
-    capture_output: bool = False,
+    capture_output: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         argv,
@@ -152,7 +156,25 @@ def have_gear_sonic_models(model_dir: Path) -> bool:
     )
 
 
+def configured_onnxruntime_root() -> Path | None:
+    for env_name in ("ROBOWBC_ORT_DYLIB_PATH", "ORT_DYLIB_PATH"):
+        configured = os.environ.get(env_name)
+        if not configured:
+            continue
+        dylib_path = Path(configured).expanduser().resolve()
+        if not dylib_path.is_file():
+            continue
+        root = dylib_path.parent.parent
+        if (root / "include" / "onnxruntime_cxx_api.h").is_file():
+            return root
+    return None
+
+
 def discover_onnxruntime_root() -> Path | None:
+    configured_root = configured_onnxruntime_root()
+    if configured_root is not None:
+        return configured_root
+
     build_root = ROOT_DIR / "target/debug/build"
     candidates = sorted(
         path
@@ -162,6 +184,34 @@ def discover_onnxruntime_root() -> Path | None:
     if not candidates:
         return None
     return candidates[-1]
+
+
+def gear_sonic_harness_bin() -> Path:
+    configured = os.environ.get("GEAR_SONIC_OFFICIAL_HARNESS_BIN")
+    if not configured:
+        return DEFAULT_GEAR_SONIC_HARNESS_BIN
+    return Path(configured).expanduser().resolve()
+
+
+def describe_process_failure(error: subprocess.CalledProcessError) -> str:
+    chunks = [chunk.strip() for chunk in (error.stdout, error.stderr) if chunk and chunk.strip()]
+    if not chunks:
+        return str(error)
+    combined = "\n".join(chunks)
+    lines = combined.splitlines()
+    if len(lines) > 40:
+        combined = "\n".join(lines[-40:])
+    return combined
+
+
+def blocked_reason_for_provider(case_id: str, provider: str) -> str | None:
+    if provider != "cpu" and case_id.startswith("decoupled_wbc/"):
+        return (
+            f"{case_id} stays CPU-only in this phase. Provider `{provider}` is not wired on "
+            "both comparison stacks for Decoupled WBC, so the row is blocked instead of "
+            "quietly relabeling a CPU measurement."
+        )
+    return None
 
 
 def emit_blocked(
@@ -227,6 +277,12 @@ def normalize_manual_case(
 
 
 def ensure_gear_sonic_harness(repo_dir: Path, output_root: Path) -> str | None:
+    harness_bin = gear_sonic_harness_bin()
+    if "GEAR_SONIC_OFFICIAL_HARNESS_BIN" in os.environ:
+        if harness_bin.is_file():
+            return None
+        return f"Configured GEAR_SONIC_OFFICIAL_HARNESS_BIN does not exist: {harness_bin}"
+
     upstream_include = (
         repo_dir / "gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/include"
     )
@@ -242,21 +298,22 @@ def ensure_gear_sonic_harness(repo_dir: Path, output_root: Path) -> str | None:
     if ort_root is None:
         return (
             "ONNX Runtime headers/libs were not found under "
-            f"{ROOT_DIR / 'target/debug/build'}; run `cargo build` first so the "
-            "official GEAR-Sonic harness can link against the repo's ORT bundle."
+            f"{ROOT_DIR / 'target/debug/build'} and no compatible ROBOWBC_ORT_DYLIB_PATH / "
+            "ORT_DYLIB_PATH override was detected; run `cargo build` first or point the "
+            "benchmark wrapper at a full ONNX Runtime distribution."
         )
 
     inputs = [GEAR_SONIC_HARNESS_SRC, policy_header, robot_header]
-    needs_rebuild = not GEAR_SONIC_HARNESS_BIN.exists()
+    needs_rebuild = configured_onnxruntime_root() is not None or not harness_bin.exists()
     if not needs_rebuild:
-        built_at = GEAR_SONIC_HARNESS_BIN.stat().st_mtime_ns
+        built_at = harness_bin.stat().st_mtime_ns
         needs_rebuild = any(path.stat().st_mtime_ns > built_at for path in inputs)
     if not needs_rebuild:
         return None
 
     build_log = output_root / "raw/gear_sonic_build.log"
     build_log.parent.mkdir(parents=True, exist_ok=True)
-    GEAR_SONIC_HARNESS_BIN.parent.mkdir(parents=True, exist_ok=True)
+    harness_bin.parent.mkdir(parents=True, exist_ok=True)
     compile_cmd = [
         "c++",
         "-std=c++20",
@@ -272,7 +329,7 @@ def ensure_gear_sonic_harness(repo_dir: Path, output_root: Path) -> str | None:
         "-lonnxruntime",
         "-lpthread",
         "-o",
-        str(GEAR_SONIC_HARNESS_BIN),
+        str(harness_bin),
     ]
     with build_log.open("w", encoding="utf-8") as handle:
         result = subprocess.run(
@@ -352,12 +409,15 @@ def run_gear_sonic_case(
     control_frequency_hz: int,
     source_command: str,
 ) -> None:
+    harness_bin = gear_sonic_harness_bin()
     raw_output = output_root / "raw" / f"{case_id.replace('/', '__')}.json"
     raw_output.parent.mkdir(parents=True, exist_ok=True)
     harness_cmd = [
-        str(GEAR_SONIC_HARNESS_BIN),
+        str(harness_bin),
         "--case-id",
         case_id,
+        "--provider",
+        provider,
         "--model-dir",
         str(model_dir),
         "--samples",
@@ -388,13 +448,13 @@ def source_command_for_case(args: argparse.Namespace, case_id: str) -> str:
         "scripts/bench_nvidia_official.py",
         "--case",
         case_id,
+        "--provider",
+        args.provider,
     ]
     if args.repo_dir != DEFAULT_OFFICIAL_REPO_DIR:
         argv.extend(["--repo-dir", str(args.repo_dir)])
     if args.output_root != DEFAULT_OFFICIAL_OUTPUT_ROOT:
         argv.extend(["--output-root", str(args.output_root)])
-    if args.provider != "cpu":
-        argv.extend(["--provider", args.provider])
     if args.samples != 100:
         argv.extend(["--samples", str(args.samples)])
     if args.ticks != 200:
@@ -414,6 +474,19 @@ def run_case(args: argparse.Namespace, case_id: str, robowbc_commit: str) -> Non
             upstream_commit=None,
             robowbc_commit=robowbc_commit,
             reason=repo_checkout_blocker(args.repo_dir),
+            output_root=args.output_root,
+            source_command=source_command,
+        )
+        return
+
+    blocked_reason = blocked_reason_for_provider(case_id, args.provider)
+    if blocked_reason is not None:
+        emit_blocked(
+            case_id=case_id,
+            provider=args.provider,
+            upstream_commit=upstream_commit,
+            robowbc_commit=robowbc_commit,
+            reason=blocked_reason,
             output_root=args.output_root,
             source_command=source_command,
         )
@@ -446,18 +519,32 @@ def run_case(args: argparse.Namespace, case_id: str, robowbc_commit: str) -> Non
                 source_command=source_command,
             )
             return
-        run_gear_sonic_case(
-            case_id=case_id,
-            model_dir=DEFAULT_GEAR_SONIC_MODEL_DIR,
-            output_root=args.output_root,
-            provider=args.provider,
-            upstream_commit=upstream_commit,
-            robowbc_commit=robowbc_commit,
-            samples=args.samples,
-            ticks=args.ticks,
-            control_frequency_hz=args.control_frequency_hz,
-            source_command=source_command,
-        )
+        try:
+            run_gear_sonic_case(
+                case_id=case_id,
+                model_dir=DEFAULT_GEAR_SONIC_MODEL_DIR,
+                output_root=args.output_root,
+                provider=args.provider,
+                upstream_commit=upstream_commit,
+                robowbc_commit=robowbc_commit,
+                samples=args.samples,
+                ticks=args.ticks,
+                control_frequency_hz=args.control_frequency_hz,
+                source_command=source_command,
+            )
+        except subprocess.CalledProcessError as error:
+            emit_blocked(
+                case_id=case_id,
+                provider=args.provider,
+                upstream_commit=upstream_commit,
+                robowbc_commit=robowbc_commit,
+                reason=(
+                    f"Requested provider `{args.provider}` could not run on the official "
+                    f"GEAR-Sonic harness. Exact runtime output:\n{describe_process_failure(error)}"
+                ),
+                output_root=args.output_root,
+                source_command=source_command,
+            )
         return
 
     if case_id.startswith("decoupled_wbc/"):
@@ -476,19 +563,33 @@ def run_case(args: argparse.Namespace, case_id: str, robowbc_commit: str) -> Non
                 source_command=source_command,
             )
             return
-        run_decoupled_case(
-            case_id=case_id,
-            repo_dir=args.repo_dir,
-            model_dir=model_dir,
-            output_root=args.output_root,
-            provider=args.provider,
-            upstream_commit=upstream_commit,
-            robowbc_commit=robowbc_commit,
-            samples=args.samples,
-            ticks=args.ticks,
-            control_frequency_hz=args.control_frequency_hz,
-            source_command=source_command,
-        )
+        try:
+            run_decoupled_case(
+                case_id=case_id,
+                repo_dir=args.repo_dir,
+                model_dir=model_dir,
+                output_root=args.output_root,
+                provider=args.provider,
+                upstream_commit=upstream_commit,
+                robowbc_commit=robowbc_commit,
+                samples=args.samples,
+                ticks=args.ticks,
+                control_frequency_hz=args.control_frequency_hz,
+                source_command=source_command,
+            )
+        except subprocess.CalledProcessError as error:
+            emit_blocked(
+                case_id=case_id,
+                provider=args.provider,
+                upstream_commit=upstream_commit,
+                robowbc_commit=robowbc_commit,
+                reason=(
+                    f"Requested provider `{args.provider}` could not run on the official "
+                    f"Decoupled WBC harness. Exact runtime output:\n{describe_process_failure(error)}"
+                ),
+                output_root=args.output_root,
+                source_command=source_command,
+            )
         return
 
     emit_blocked(

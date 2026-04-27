@@ -16,6 +16,7 @@
 #include <string_view>
 #include <thread>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -63,8 +64,15 @@ constexpr std::size_t kEncoderMotionAnchorOrientationOffset = 601;
 
 volatile float g_sink = 0.0f;
 
+enum class ProviderKind {
+    Cpu,
+    Cuda,
+    TensorRt,
+};
+
 struct Options {
     std::string case_id;
+    ProviderKind provider = ProviderKind::Cpu;
     fs::path model_dir;
     fs::path output;
     std::optional<fs::path> dump_dir;
@@ -321,7 +329,91 @@ void require_name(const std::vector<std::string>& names, std::string_view needle
     }
 }
 
-Ort::Session make_session(Ort::Env& env, const fs::path& model_path) {
+std::string provider_label(ProviderKind provider) {
+    switch (provider) {
+        case ProviderKind::Cpu:
+            return "cpu";
+        case ProviderKind::Cuda:
+            return "cuda";
+        case ProviderKind::TensorRt:
+            return "tensor_rt";
+    }
+    throw std::runtime_error("unreachable provider label state");
+}
+
+std::string provider_identifier(ProviderKind provider) {
+    switch (provider) {
+        case ProviderKind::Cpu:
+            return "CPUExecutionProvider";
+        case ProviderKind::Cuda:
+            return "CUDAExecutionProvider";
+        case ProviderKind::TensorRt:
+            return "TensorrtExecutionProvider";
+    }
+    throw std::runtime_error("unreachable provider identifier state");
+}
+
+std::vector<std::string> available_providers() {
+    return Ort::GetAvailableProviders();
+}
+
+std::string format_provider_list(const std::vector<std::string>& providers) {
+    if (providers.empty()) {
+        return "(none)";
+    }
+    std::string joined;
+    for (std::size_t index = 0; index < providers.size(); ++index) {
+        if (index > 0) {
+            joined += ", ";
+        }
+        joined += providers[index];
+    }
+    return joined;
+}
+
+void require_provider_available(ProviderKind provider) {
+    if (provider == ProviderKind::Cpu) {
+        return;
+    }
+
+    const auto providers = available_providers();
+    const auto identifier = provider_identifier(provider);
+    if (std::find(providers.begin(), providers.end(), identifier) == providers.end()) {
+        throw std::runtime_error(
+            std::string("requested provider `") + provider_label(provider)
+            + "` is not advertised by this ONNX Runtime build; available providers: "
+            + format_provider_list(providers)
+        );
+    }
+}
+
+void configure_provider(Ort::SessionOptions& options, ProviderKind provider) {
+    require_provider_available(provider);
+
+    if (provider == ProviderKind::Cpu) {
+        return;
+    }
+
+    try {
+        if (provider == ProviderKind::Cuda) {
+            Ort::CUDAProviderOptions cuda_options;
+            cuda_options.Update({{"device_id", "0"}});
+            options.AppendExecutionProvider_CUDA_V2(*cuda_options);
+            return;
+        }
+
+        Ort::TensorRTProviderOptions tensorrt_options;
+        tensorrt_options.Update({{"device_id", "0"}});
+        options.AppendExecutionProvider_TensorRT_V2(*tensorrt_options);
+    } catch (const Ort::Exception& error) {
+        throw std::runtime_error(
+            std::string("failed to configure provider `") + provider_label(provider)
+            + "`: " + error.what()
+        );
+    }
+}
+
+Ort::Session make_session(Ort::Env& env, const fs::path& model_path, ProviderKind provider) {
     if (!fs::is_regular_file(model_path)) {
         throw std::runtime_error("model file does not exist: " + model_path.string());
     }
@@ -329,8 +421,16 @@ Ort::Session make_session(Ort::Env& env, const fs::path& model_path) {
     Ort::SessionOptions options;
     options.SetIntraOpNumThreads(1);
     options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_EXTENDED);
+    configure_provider(options, provider);
     const std::string model_path_str = model_path.string();
-    return Ort::Session(env, model_path_str.c_str(), options);
+    try {
+        return Ort::Session(env, model_path_str.c_str(), options);
+    } catch (const Ort::Exception& error) {
+        throw std::runtime_error(
+            std::string("failed to initialize provider `") + provider_label(provider)
+            + "` for model " + model_path.string() + ": " + error.what()
+        );
+    }
 }
 
 struct PlannerState {
@@ -435,13 +535,14 @@ class GearSonicOfficialHarness {
 public:
     explicit GearSonicOfficialHarness(
         const fs::path& model_dir,
+        ProviderKind provider,
         std::optional<fs::path> dump_dir = std::nullopt
     )
         : env_(ORT_LOGGING_LEVEL_WARNING, "gear_sonic_official"),
           memory_info_(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault)),
-          encoder_(make_session(env_, model_dir / "model_encoder.onnx")),
-          decoder_(make_session(env_, model_dir / "model_decoder.onnx")),
-          planner_(make_session(env_, model_dir / "planner_sonic.onnx")),
+          encoder_(make_session(env_, model_dir / "model_encoder.onnx", provider)),
+          decoder_(make_session(env_, model_dir / "model_decoder.onnx", provider)),
+          planner_(make_session(env_, model_dir / "planner_sonic.onnx", provider)),
           planner_state_(),
           tracking_state_(),
           velocity_obs_(standing_velocity_observation()),
@@ -606,6 +707,22 @@ public:
 
         latest_action_ = raw_actions;
         return positions;
+    }
+
+    std::vector<float> planner_only_tick() {
+        std::deque<std::vector<float>> context;
+        const auto standing = PlannerState::make_standing_qpos();
+        for (std::size_t index = 0; index < kPlannerContextLen; ++index) {
+            context.push_back(standing);
+        }
+
+        float facing_yaw_rad = 0.0f;
+        const auto planner_command = derive_planner_command(facing_yaw_rad, velocity_command());
+        const auto trajectory = run_planner_command(context, planner_command);
+        if (trajectory.empty()) {
+            throw std::runtime_error("planner-only benchmark produced an empty trajectory");
+        }
+        return trajectory.front();
     }
 
     std::vector<float> velocity_first_live_replan_dump() {
@@ -1770,33 +1887,41 @@ private:
 };
 
 enum class CaseKind {
-    ColdStartTick,
-    WarmSteadyStateTick,
-    ReplanTick,
+    PlannerOnlyColdStart,
+    PlannerOnlySteadyState,
+    EncoderDecoderOnlyTrackingTick,
+    FullVelocityTickColdStart,
+    FullVelocityTickSteadyState,
+    FullVelocityTickReplanBoundary,
     FirstLiveReplanDump,
     LaterMotionDump,
-    StandingPlaceholderTick,
     EndToEndLoop,
 };
 
 CaseKind parse_case_kind(const std::string& case_id) {
-    if (case_id == "gear_sonic_velocity/cold_start_tick") {
-        return CaseKind::ColdStartTick;
+    if (case_id == "gear_sonic/planner_only_cold_start") {
+        return CaseKind::PlannerOnlyColdStart;
     }
-    if (case_id == "gear_sonic_velocity/warm_steady_state_tick") {
-        return CaseKind::WarmSteadyStateTick;
+    if (case_id == "gear_sonic/planner_only_steady_state") {
+        return CaseKind::PlannerOnlySteadyState;
     }
-    if (case_id == "gear_sonic_velocity/replan_tick") {
-        return CaseKind::ReplanTick;
+    if (case_id == "gear_sonic/encoder_decoder_only_tracking_tick") {
+        return CaseKind::EncoderDecoderOnlyTrackingTick;
+    }
+    if (case_id == "gear_sonic/full_velocity_tick_cold_start") {
+        return CaseKind::FullVelocityTickColdStart;
+    }
+    if (case_id == "gear_sonic/full_velocity_tick_steady_state") {
+        return CaseKind::FullVelocityTickSteadyState;
+    }
+    if (case_id == "gear_sonic/full_velocity_tick_replan_boundary") {
+        return CaseKind::FullVelocityTickReplanBoundary;
     }
     if (case_id == "gear_sonic_velocity/first_live_replan_dump") {
         return CaseKind::FirstLiveReplanDump;
     }
     if (case_id == "gear_sonic_velocity/later_motion_dump") {
         return CaseKind::LaterMotionDump;
-    }
-    if (case_id == "gear_sonic_tracking/standing_placeholder_tick") {
-        return CaseKind::StandingPlaceholderTick;
     }
     if (case_id == "gear_sonic/end_to_end_cli_loop") {
         return CaseKind::EndToEndLoop;
@@ -1863,6 +1988,22 @@ std::pair<std::vector<std::uint64_t>, double> run_end_to_end_loop(
     return {timings, achieved_hz};
 }
 
+ProviderKind parse_provider(const std::string& value) {
+    if (value == "cpu") {
+        return ProviderKind::Cpu;
+    }
+    if (value == "cuda") {
+        return ProviderKind::Cuda;
+    }
+    if (value == "tensor_rt") {
+        return ProviderKind::TensorRt;
+    }
+    throw std::runtime_error(
+        std::string("unsupported provider `") + value
+        + "`; expected one of: cpu, cuda, tensor_rt"
+    );
+}
+
 Options parse_args(int argc, char** argv) {
     Options options;
     for (int index = 1; index < argc; ++index) {
@@ -1876,6 +2017,8 @@ Options parse_args(int argc, char** argv) {
 
         if (arg == "--case-id") {
             options.case_id = require_value(arg);
+        } else if (arg == "--provider") {
+            options.provider = parse_provider(require_value(arg));
         } else if (arg == "--model-dir") {
             options.model_dir = require_value(arg);
         } else if (arg == "--output") {
@@ -1957,13 +2100,37 @@ int main(int argc, char** argv) {
     try {
         const Options options = parse_args(argc, argv);
         const CaseKind case_kind = parse_case_kind(options.case_id);
-        GearSonicOfficialHarness harness(options.model_dir, options.dump_dir);
+        GearSonicOfficialHarness harness(options.model_dir, options.provider, options.dump_dir);
 
         std::vector<std::uint64_t> samples_ns;
         std::optional<double> hz;
 
         switch (case_kind) {
-            case CaseKind::ColdStartTick:
+            case CaseKind::PlannerOnlyColdStart:
+                samples_ns = run_microbench(
+                    harness,
+                    options.samples,
+                    []() {},
+                    [&]() { return harness.planner_only_tick(); }
+                );
+                break;
+            case CaseKind::PlannerOnlySteadyState:
+                samples_ns = run_microbench(
+                    harness,
+                    options.samples,
+                    [&]() { harness.planner_only_tick(); },
+                    [&]() { return harness.planner_only_tick(); }
+                );
+                break;
+            case CaseKind::EncoderDecoderOnlyTrackingTick:
+                samples_ns = run_microbench(
+                    harness,
+                    options.samples,
+                    []() {},
+                    [&]() { return harness.tracking_tick(); }
+                );
+                break;
+            case CaseKind::FullVelocityTickColdStart:
                 samples_ns = run_microbench(
                     harness,
                     options.samples,
@@ -1971,7 +2138,7 @@ int main(int argc, char** argv) {
                     [&]() { return harness.velocity_tick(); }
                 );
                 break;
-            case CaseKind::WarmSteadyStateTick:
+            case CaseKind::FullVelocityTickSteadyState:
                 samples_ns = run_microbench(
                     harness,
                     options.samples,
@@ -1979,7 +2146,7 @@ int main(int argc, char** argv) {
                     [&]() { return harness.velocity_tick(); }
                 );
                 break;
-            case CaseKind::ReplanTick:
+            case CaseKind::FullVelocityTickReplanBoundary:
                 samples_ns = run_microbench(
                     harness,
                     options.samples,
@@ -2015,14 +2182,6 @@ int main(int argc, char** argv) {
                 );
                 break;
             }
-            case CaseKind::StandingPlaceholderTick:
-                samples_ns = run_microbench(
-                    harness,
-                    options.samples,
-                    []() {},
-                    [&]() { return harness.tracking_tick(); }
-                );
-                break;
             case CaseKind::EndToEndLoop: {
                 auto [timings, achieved_hz] = run_end_to_end_loop(
                     harness,

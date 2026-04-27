@@ -19,6 +19,9 @@ execution_provider = { type = "cpu" }
 optimization_level = "extended"
 num_threads = 1
 
+# Benchmark wrappers can rewrite all three GEAR-Sonic provider blocks together
+# to `cpu`, `cuda`, or `tensor_rt`. The checked-in runtime default stays CPU.
+
 # Uncomment to use an official upper-body/reference clip with the real
 # encoder+decoder tracking contract.
 #

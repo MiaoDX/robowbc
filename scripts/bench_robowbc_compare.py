@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import os
+import shlex
 import subprocess
 import tempfile
 from pathlib import Path
@@ -25,6 +26,57 @@ DEFAULT_GEAR_SONIC_MODEL_DIR = Path(
 DEFAULT_DECOUPLED_WBC_MODEL_DIR = Path(
     os.environ.get("DECOUPLED_WBC_MODEL_DIR", str(ROOT_DIR / "models/decoupled-wbc"))
 )
+PROVIDER_CHOICES = ("cpu", "cuda", "tensor_rt")
+BENCH_PROVIDER_ENV = "ROBOWBC_BENCH_PROVIDER"
+GEAR_SONIC_PROVIDER_SECTIONS = (
+    "policy.config.encoder",
+    "policy.config.decoder",
+    "policy.config.planner",
+)
+MICROBENCH_CASES: dict[str, dict[str, str]] = {
+    "gear_sonic/planner_only_cold_start": {
+        "criterion_filter": "policy/gear_sonic/planner_only_cold_start",
+        "family": "gear_sonic",
+    },
+    "gear_sonic/planner_only_steady_state": {
+        "criterion_filter": "policy/gear_sonic/planner_only_steady_state",
+        "family": "gear_sonic",
+    },
+    "gear_sonic/encoder_decoder_only_tracking_tick": {
+        "criterion_filter": "policy/gear_sonic/encoder_decoder_only_tracking_tick",
+        "family": "gear_sonic",
+    },
+    "gear_sonic/full_velocity_tick_cold_start": {
+        "criterion_filter": "policy/gear_sonic/full_velocity_tick_cold_start",
+        "family": "gear_sonic",
+    },
+    "gear_sonic/full_velocity_tick_steady_state": {
+        "criterion_filter": "policy/gear_sonic/full_velocity_tick_steady_state",
+        "family": "gear_sonic",
+    },
+    "gear_sonic/full_velocity_tick_replan_boundary": {
+        "criterion_filter": "policy/gear_sonic/full_velocity_tick_replan_boundary",
+        "family": "gear_sonic",
+    },
+    "decoupled_wbc/walk_predict": {
+        "criterion_filter": "policy/decoupled_wbc/walk_predict",
+        "family": "decoupled_wbc",
+    },
+    "decoupled_wbc/balance_predict": {
+        "criterion_filter": "policy/decoupled_wbc/balance_predict",
+        "family": "decoupled_wbc",
+    },
+}
+CLI_CASES: dict[str, dict[str, str]] = {
+    "gear_sonic/end_to_end_cli_loop": {
+        "config_path": "configs/sonic_g1.toml",
+        "family": "gear_sonic",
+    },
+    "decoupled_wbc/end_to_end_cli_loop": {
+        "config_path": "configs/decoupled_g1.toml",
+        "family": "decoupled_wbc",
+    },
+}
 
 
 def load_normalizer() -> Any:
@@ -55,7 +107,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--provider",
         default="cpu",
-        help="Provider label recorded in the artifact",
+        choices=PROVIDER_CHOICES,
+        help="Execution provider requested for the benchmark row",
     )
     return parser.parse_args()
 
@@ -65,13 +118,18 @@ def list_cases() -> None:
         print(case["case_id"])
 
 
-def run(argv: list[str], *, env: dict[str, str] | None = None) -> None:
-    subprocess.run(
+def run(
+    argv: list[str],
+    *,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
         argv,
         cwd=ROOT_DIR,
         env=env,
         check=True,
         text=True,
+        capture_output=True,
     )
 
 
@@ -155,6 +213,111 @@ def output_path_for(case_id: str, output_root: Path) -> Path:
     return output_root / f"{case_id.replace('/', '__')}.json"
 
 
+def case_ids() -> set[str]:
+    return {case["case_id"] for case in REGISTRY["cases"]}
+
+
+def source_command_for_case(args: argparse.Namespace, case_id: str) -> str:
+    argv = [
+        "python3",
+        "scripts/bench_robowbc_compare.py",
+        "--case",
+        case_id,
+        "--provider",
+        args.provider,
+    ]
+    if args.output_root != DEFAULT_OUTPUT_ROOT:
+        argv.extend(["--output-root", str(args.output_root)])
+    return shlex.join(argv)
+
+
+def provider_inline_table(provider: str) -> str:
+    if provider == "cpu":
+        return '{ type = "cpu" }'
+    return f'{{ type = "{provider}", device_id = 0 }}'
+
+
+def rewrite_gear_sonic_provider_blocks(config_text: str, provider: str) -> str:
+    lines = config_text.splitlines()
+    rewritten: list[str] = []
+    current_section: str | None = None
+    replaced_sections: set[str] = set()
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            current_section = stripped[1:-1]
+        if current_section in GEAR_SONIC_PROVIDER_SECTIONS and stripped.startswith(
+            "execution_provider"
+        ):
+            indent = line[: len(line) - len(line.lstrip())]
+            rewritten.append(
+                f"{indent}execution_provider = {provider_inline_table(provider)}"
+            )
+            replaced_sections.add(current_section)
+            continue
+        rewritten.append(line)
+
+    missing = set(GEAR_SONIC_PROVIDER_SECTIONS) - replaced_sections
+    if missing:
+        missing_str = ", ".join(sorted(missing))
+        raise ValueError(
+            "failed to rewrite all GEAR-Sonic execution_provider blocks; "
+            f"missing sections: {missing_str}"
+        )
+
+    rewritten_text = "\n".join(rewritten)
+    if config_text.endswith("\n"):
+        rewritten_text += "\n"
+    return rewritten_text
+
+
+def append_report_section(config_text: str, report_path: Path) -> str:
+    report_block = f'\n[report]\noutput_path = "{report_path}"\nmax_frames = 200\n'
+    return config_text.rstrip() + "\n" + report_block
+
+
+def compose_benchmark_cli_config(
+    config_text: str,
+    *,
+    provider: str,
+    report_path: Path,
+    rewrite_gear_sonic_providers: bool,
+) -> str:
+    updated = config_text
+    if rewrite_gear_sonic_providers:
+        updated = rewrite_gear_sonic_provider_blocks(updated, provider)
+    return append_report_section(updated, report_path)
+
+
+def describe_process_failure(error: subprocess.CalledProcessError) -> str:
+    chunks = [chunk.strip() for chunk in (error.stdout, error.stderr) if chunk and chunk.strip()]
+    if not chunks:
+        return str(error)
+    combined = "\n".join(chunks)
+    lines = combined.splitlines()
+    if len(lines) > 40:
+        combined = "\n".join(lines[-40:])
+    return combined
+
+
+def benchmark_failure_reason(provider: str, error: subprocess.CalledProcessError) -> str:
+    details = describe_process_failure(error)
+    return (
+        f"Requested provider `{provider}` could not run on the RoboWBC benchmark path. "
+        f"Exact runtime output:\n{details}"
+    )
+
+
+def blocked_reason_for_provider(case_id: str, provider: str) -> str | None:
+    if provider != "cpu" and case_id.startswith("decoupled_wbc/"):
+        return (
+            f"{case_id} stays CPU-only in this phase. Provider `{provider}` is not wired on "
+            "both comparison stacks for Decoupled WBC, so the row is blocked instead of "
+            "quietly relabeling a CPU measurement."
+        )
+    return None
+
+
 def emit_blocked(
     *,
     case_id: str,
@@ -163,6 +326,7 @@ def emit_blocked(
     robowbc_commit: str,
     output_root: Path,
     reason: str,
+    source_command: str,
 ) -> None:
     case = NORMALIZER.registry_case(REGISTRY, case_id)
     artifact = NORMALIZER.build_artifact(
@@ -175,7 +339,7 @@ def emit_blocked(
         samples_ns=[],
         hz=None,
         notes=reason,
-        source_command=case["robowbc_command"],
+        source_command=source_command,
         raw_source=reason,
         status="blocked",
     )
@@ -191,6 +355,7 @@ def normalize_criterion_case(
     upstream_commit: str,
     robowbc_commit: str,
     output_root: Path,
+    source_command: str,
 ) -> None:
     case = NORMALIZER.registry_case(REGISTRY, case_id)
     criterion_id = case["criterion_id"]
@@ -207,7 +372,7 @@ def normalize_criterion_case(
         samples_ns=samples_ns,
         hz=None,
         notes="Normalized from Criterion sample.json per-iteration timings.",
-        source_command=case["robowbc_command"],
+        source_command=source_command,
         raw_source=raw_source,
         status="ok",
     )
@@ -224,6 +389,7 @@ def normalize_run_report(
     robowbc_commit: str,
     output_root: Path,
     report_path: Path,
+    source_command: str,
 ) -> None:
     case = NORMALIZER.registry_case(REGISTRY, case_id)
     samples_ns, hz, raw_source = NORMALIZER.run_report_samples_ns(report_path)
@@ -237,7 +403,7 @@ def normalize_run_report(
         samples_ns=samples_ns,
         hz=hz,
         notes="Normalized from robowbc-cli JSON run report.",
-        source_command=case["robowbc_command"],
+        source_command=source_command,
         raw_source=raw_source,
         status="ok",
     )
@@ -256,9 +422,11 @@ def run_microbench_case(
     output_root: Path,
     env_name: str,
     env_value: Path,
+    source_command: str,
 ) -> None:
     env = os.environ.copy()
     env[env_name] = str(env_value)
+    env[BENCH_PROVIDER_ENV] = provider
     run(
         [
             "cargo",
@@ -280,12 +448,8 @@ def run_microbench_case(
         upstream_commit=upstream_commit,
         robowbc_commit=robowbc_commit,
         output_root=output_root,
+        source_command=source_command,
     )
-
-
-def append_report_section(config_text: str, report_path: Path) -> str:
-    report_block = f'\n[report]\noutput_path = "{report_path}"\nmax_frames = 200\n'
-    return config_text.rstrip() + "\n" + report_block
 
 
 def run_cli_case(
@@ -296,6 +460,7 @@ def run_cli_case(
     upstream_commit: str,
     robowbc_commit: str,
     output_root: Path,
+    source_command: str,
 ) -> None:
     source_config = ROOT_DIR / config_path
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -304,7 +469,12 @@ def run_cli_case(
         raw_report = temp_root / "report.json"
         env = configure_mujoco_runtime_env(os.environ.copy())
         temp_config.write_text(
-            append_report_section(source_config.read_text(encoding="utf-8"), raw_report),
+            compose_benchmark_cli_config(
+                source_config.read_text(encoding="utf-8"),
+                provider=provider,
+                report_path=raw_report,
+                rewrite_gear_sonic_providers=case_id.startswith("gear_sonic/"),
+            ),
             encoding="utf-8",
         )
         run(
@@ -331,126 +501,78 @@ def run_cli_case(
             robowbc_commit=robowbc_commit,
             output_root=output_root,
             report_path=raw_report,
+            source_command=source_command,
         )
-
-
-def case_ids() -> set[str]:
-    return {case["case_id"] for case in REGISTRY["cases"]}
 
 
 def run_case(case_id: str, args: argparse.Namespace) -> None:
     if case_id not in case_ids():
         raise ValueError(f"unknown case_id: {case_id}")
 
+    source_command = source_command_for_case(args, case_id)
     gear_model_dir = DEFAULT_GEAR_SONIC_MODEL_DIR
     decoupled_model_dir = DEFAULT_DECOUPLED_WBC_MODEL_DIR
     robowbc_commit = git_rev_parse(ROOT_DIR)
 
-    if case_id == "gear_sonic_velocity/cold_start_tick":
-        if not have_gear_sonic_models(gear_model_dir):
-            emit_blocked(
-                case_id=case_id,
-                provider=args.provider,
-                upstream_commit=gear_sonic_revision(gear_model_dir),
-                robowbc_commit=robowbc_commit,
-                output_root=args.output_root,
-                reason=(
-                    "GEAR-Sonic checkpoints not found under "
-                    f"{gear_model_dir}; run scripts/download_gear_sonic_models.sh first."
-                ),
-            )
-            return
-        run_microbench_case(
+    blocked_reason = blocked_reason_for_provider(case_id, args.provider)
+    if blocked_reason is not None:
+        upstream_commit = (
+            gear_sonic_revision(gear_model_dir)
+            if case_id.startswith("gear_sonic/")
+            else decoupled_revision(decoupled_model_dir)
+        )
+        emit_blocked(
             case_id=case_id,
-            criterion_filter="policy/gear_sonic_velocity/cold_start_tick",
             provider=args.provider,
-            upstream_commit=gear_sonic_revision(gear_model_dir),
+            upstream_commit=upstream_commit,
             robowbc_commit=robowbc_commit,
             output_root=args.output_root,
-            env_name="GEAR_SONIC_MODEL_DIR",
-            env_value=gear_model_dir,
+            reason=blocked_reason,
+            source_command=source_command,
         )
         return
 
-    if case_id == "gear_sonic_velocity/warm_steady_state_tick":
-        if not have_gear_sonic_models(gear_model_dir):
-            emit_blocked(
-                case_id=case_id,
-                provider=args.provider,
-                upstream_commit=gear_sonic_revision(gear_model_dir),
-                robowbc_commit=robowbc_commit,
-                output_root=args.output_root,
-                reason=(
-                    "GEAR-Sonic checkpoints not found under "
-                    f"{gear_model_dir}; run scripts/download_gear_sonic_models.sh first."
-                ),
-            )
+    if case_id in MICROBENCH_CASES:
+        spec = MICROBENCH_CASES[case_id]
+        if spec["family"] == "gear_sonic":
+            if not have_gear_sonic_models(gear_model_dir):
+                emit_blocked(
+                    case_id=case_id,
+                    provider=args.provider,
+                    upstream_commit=gear_sonic_revision(gear_model_dir),
+                    robowbc_commit=robowbc_commit,
+                    output_root=args.output_root,
+                    reason=(
+                        "GEAR-Sonic checkpoints not found under "
+                        f"{gear_model_dir}; run scripts/download_gear_sonic_models.sh first."
+                    ),
+                    source_command=source_command,
+                )
+                return
+            try:
+                run_microbench_case(
+                    case_id=case_id,
+                    criterion_filter=spec["criterion_filter"],
+                    provider=args.provider,
+                    upstream_commit=gear_sonic_revision(gear_model_dir),
+                    robowbc_commit=robowbc_commit,
+                    output_root=args.output_root,
+                    env_name="GEAR_SONIC_MODEL_DIR",
+                    env_value=gear_model_dir,
+                    source_command=source_command,
+                )
+            except subprocess.CalledProcessError as error:
+                emit_blocked(
+                    case_id=case_id,
+                    provider=args.provider,
+                    upstream_commit=gear_sonic_revision(gear_model_dir),
+                    robowbc_commit=robowbc_commit,
+                    output_root=args.output_root,
+                    reason=benchmark_failure_reason(args.provider, error),
+                    source_command=source_command,
+                )
             return
-        run_microbench_case(
-            case_id=case_id,
-            criterion_filter="policy/gear_sonic_velocity/warm_steady_state_tick",
-            provider=args.provider,
-            upstream_commit=gear_sonic_revision(gear_model_dir),
-            robowbc_commit=robowbc_commit,
-            output_root=args.output_root,
-            env_name="GEAR_SONIC_MODEL_DIR",
-            env_value=gear_model_dir,
-        )
-        return
 
-    if case_id == "gear_sonic_velocity/replan_tick":
-        if not have_gear_sonic_models(gear_model_dir):
-            emit_blocked(
-                case_id=case_id,
-                provider=args.provider,
-                upstream_commit=gear_sonic_revision(gear_model_dir),
-                robowbc_commit=robowbc_commit,
-                output_root=args.output_root,
-                reason=(
-                    "GEAR-Sonic checkpoints not found under "
-                    f"{gear_model_dir}; run scripts/download_gear_sonic_models.sh first."
-                ),
-            )
-            return
-        run_microbench_case(
-            case_id=case_id,
-            criterion_filter="policy/gear_sonic_velocity/replan_tick",
-            provider=args.provider,
-            upstream_commit=gear_sonic_revision(gear_model_dir),
-            robowbc_commit=robowbc_commit,
-            output_root=args.output_root,
-            env_name="GEAR_SONIC_MODEL_DIR",
-            env_value=gear_model_dir,
-        )
-        return
-
-    if case_id == "gear_sonic_tracking/standing_placeholder_tick":
-        if not have_gear_sonic_models(gear_model_dir):
-            emit_blocked(
-                case_id=case_id,
-                provider=args.provider,
-                upstream_commit=gear_sonic_revision(gear_model_dir),
-                robowbc_commit=robowbc_commit,
-                output_root=args.output_root,
-                reason=(
-                    "GEAR-Sonic checkpoints not found under "
-                    f"{gear_model_dir}; run scripts/download_gear_sonic_models.sh first."
-                ),
-            )
-            return
-        run_microbench_case(
-            case_id=case_id,
-            criterion_filter="policy/gear_sonic_tracking/standing_placeholder_tick",
-            provider=args.provider,
-            upstream_commit=gear_sonic_revision(gear_model_dir),
-            robowbc_commit=robowbc_commit,
-            output_root=args.output_root,
-            env_name="GEAR_SONIC_MODEL_DIR",
-            env_value=gear_model_dir,
-        )
-        return
-
-    if case_id == "decoupled_wbc/walk_predict":
         if not have_decoupled_models(decoupled_model_dir):
             emit_blocked(
                 case_id=case_id,
@@ -462,21 +584,77 @@ def run_case(case_id: str, args: argparse.Namespace) -> None:
                     "Decoupled WBC checkpoints not found under "
                     f"{decoupled_model_dir}; run scripts/download_decoupled_wbc_models.sh first."
                 ),
+                source_command=source_command,
             )
             return
-        run_microbench_case(
-            case_id=case_id,
-            criterion_filter="policy/decoupled_wbc/walk_predict",
-            provider=args.provider,
-            upstream_commit=decoupled_revision(decoupled_model_dir),
-            robowbc_commit=robowbc_commit,
-            output_root=args.output_root,
-            env_name="DECOUPLED_WBC_MODEL_DIR",
-            env_value=decoupled_model_dir,
-        )
+        try:
+            run_microbench_case(
+                case_id=case_id,
+                criterion_filter=spec["criterion_filter"],
+                provider=args.provider,
+                upstream_commit=decoupled_revision(decoupled_model_dir),
+                robowbc_commit=robowbc_commit,
+                output_root=args.output_root,
+                env_name="DECOUPLED_WBC_MODEL_DIR",
+                env_value=decoupled_model_dir,
+                source_command=source_command,
+            )
+        except subprocess.CalledProcessError as error:
+            emit_blocked(
+                case_id=case_id,
+                provider=args.provider,
+                upstream_commit=decoupled_revision(decoupled_model_dir),
+                robowbc_commit=robowbc_commit,
+                output_root=args.output_root,
+                reason=benchmark_failure_reason(args.provider, error),
+                source_command=source_command,
+            )
         return
 
-    if case_id == "decoupled_wbc/balance_predict":
+    if case_id in CLI_CASES:
+        spec = CLI_CASES[case_id]
+        if spec["family"] == "gear_sonic":
+            if not have_gear_sonic_models(gear_model_dir):
+                emit_blocked(
+                    case_id=case_id,
+                    provider=args.provider,
+                    upstream_commit=gear_sonic_revision(gear_model_dir),
+                    robowbc_commit=robowbc_commit,
+                    output_root=args.output_root,
+                    reason=(
+                        "GEAR-Sonic checkpoints not found under "
+                        f"{gear_model_dir}; run scripts/download_gear_sonic_models.sh first."
+                    ),
+                    source_command=source_command,
+                )
+                return
+            try:
+                run_cli_case(
+                    case_id=case_id,
+                    config_path=spec["config_path"],
+                    provider=args.provider,
+                    upstream_commit=gear_sonic_revision(gear_model_dir),
+                    robowbc_commit=robowbc_commit,
+                    output_root=args.output_root,
+                    source_command=source_command,
+                )
+            except (subprocess.CalledProcessError, ValueError) as error:
+                reason = (
+                    benchmark_failure_reason(args.provider, error)
+                    if isinstance(error, subprocess.CalledProcessError)
+                    else str(error)
+                )
+                emit_blocked(
+                    case_id=case_id,
+                    provider=args.provider,
+                    upstream_commit=gear_sonic_revision(gear_model_dir),
+                    robowbc_commit=robowbc_commit,
+                    output_root=args.output_root,
+                    reason=reason,
+                    source_command=source_command,
+                )
+            return
+
         if not have_decoupled_models(decoupled_model_dir):
             emit_blocked(
                 case_id=case_id,
@@ -488,66 +666,29 @@ def run_case(case_id: str, args: argparse.Namespace) -> None:
                     "Decoupled WBC checkpoints not found under "
                     f"{decoupled_model_dir}; run scripts/download_decoupled_wbc_models.sh first."
                 ),
+                source_command=source_command,
             )
             return
-        run_microbench_case(
-            case_id=case_id,
-            criterion_filter="policy/decoupled_wbc/balance_predict",
-            provider=args.provider,
-            upstream_commit=decoupled_revision(decoupled_model_dir),
-            robowbc_commit=robowbc_commit,
-            output_root=args.output_root,
-            env_name="DECOUPLED_WBC_MODEL_DIR",
-            env_value=decoupled_model_dir,
-        )
-        return
-
-    if case_id == "gear_sonic/end_to_end_cli_loop":
-        if not have_gear_sonic_models(gear_model_dir):
-            emit_blocked(
+        try:
+            run_cli_case(
                 case_id=case_id,
+                config_path=spec["config_path"],
                 provider=args.provider,
-                upstream_commit=gear_sonic_revision(gear_model_dir),
+                upstream_commit=decoupled_revision(decoupled_model_dir),
                 robowbc_commit=robowbc_commit,
                 output_root=args.output_root,
-                reason=(
-                    "GEAR-Sonic checkpoints not found under "
-                    f"{gear_model_dir}; run scripts/download_gear_sonic_models.sh first."
-                ),
+                source_command=source_command,
             )
-            return
-        run_cli_case(
-            case_id=case_id,
-            config_path="configs/sonic_g1.toml",
-            provider=args.provider,
-            upstream_commit=gear_sonic_revision(gear_model_dir),
-            robowbc_commit=robowbc_commit,
-            output_root=args.output_root,
-        )
-        return
-
-    if case_id == "decoupled_wbc/end_to_end_cli_loop":
-        if not have_decoupled_models(decoupled_model_dir):
+        except subprocess.CalledProcessError as error:
             emit_blocked(
                 case_id=case_id,
                 provider=args.provider,
                 upstream_commit=decoupled_revision(decoupled_model_dir),
                 robowbc_commit=robowbc_commit,
                 output_root=args.output_root,
-                reason=(
-                    "Decoupled WBC checkpoints not found under "
-                    f"{decoupled_model_dir}; run scripts/download_decoupled_wbc_models.sh first."
-                ),
+                reason=benchmark_failure_reason(args.provider, error),
+                source_command=source_command,
             )
-            return
-        run_cli_case(
-            case_id=case_id,
-            config_path="configs/decoupled_g1.toml",
-            provider=args.provider,
-            upstream_commit=decoupled_revision(decoupled_model_dir),
-            robowbc_commit=robowbc_commit,
-            output_root=args.output_root,
-        )
         return
 
     emit_blocked(
@@ -557,6 +698,7 @@ def run_case(case_id: str, args: argparse.Namespace) -> None:
         robowbc_commit=robowbc_commit,
         output_root=args.output_root,
         reason=f"No RoboWBC benchmark mapping has been defined for {case_id}.",
+        source_command=source_command,
     )
 
 
