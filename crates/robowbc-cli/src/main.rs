@@ -1,3 +1,18 @@
+//! Command-line entry point for `RoboWBC`.
+//!
+//! The `robowbc` binary loads a TOML config, builds a registered policy,
+//! selects the requested transport path, and runs the control loop while
+//! optionally writing JSON reports and replay traces.
+//!
+//! Supported commands:
+//! - `robowbc run --config <path/to/config.toml>`
+//! - `robowbc init [--output <path/to/template.toml>]`
+//!
+//! Binary-specific error handling uses `anyhow` so the CLI can attach context
+//! to configuration, setup, and runtime failures without leaking that policy
+//! into the library crates.
+
+use anyhow::{anyhow, Context};
 use robowbc_comm::{
     run_control_tick, CommConfig, CommError, ImuSample, JointState, RobotTransport,
     UnitreeG1Config, UnitreeG1Transport,
@@ -1607,71 +1622,43 @@ fn run_control_loop(
     Ok(metrics)
 }
 
-fn main() {
-    let args: Vec<String> = std::env::args().collect();
+fn run_init_command(output_path: &Path) -> anyhow::Result<()> {
+    write_template(output_path)
+        .map_err(anyhow::Error::msg)
+        .with_context(|| format!("while writing template config to {}", output_path.display()))?;
+    println!("wrote template config to {}", output_path.display());
+    Ok(())
+}
 
-    let command = match parse_args(&args) {
-        Ok(command) => command,
-        Err(err) => {
-            eprintln!("{err}");
-            std::process::exit(2);
-        }
-    };
+fn install_ctrlc_handler(running: &Arc<AtomicBool>) -> anyhow::Result<()> {
+    let signal = Arc::clone(running);
+    ctrlc::set_handler(move || {
+        signal.store(false, Ordering::SeqCst);
+    })
+    .context("failed to install Ctrl+C handler")
+}
 
-    if let CliCommand::Init { output_path } = command {
-        if let Err(err) = write_template(&output_path) {
-            eprintln!("{err}");
-            std::process::exit(1);
-        }
-        println!("wrote template config to {}", output_path.display());
-        return;
-    }
+fn run_with_config(config_path: &Path) -> anyhow::Result<()> {
+    let app = load_app_config(config_path)
+        .map_err(anyhow::Error::msg)
+        .with_context(|| format!("while loading config {}", config_path.display()))?;
 
-    let config_path = match command {
-        CliCommand::Run { config_path } => config_path,
-        CliCommand::Init { .. } => unreachable!("init command already handled"),
-    };
+    let runtime_command = validate_config(&app)
+        .map_err(|err| anyhow!("invalid config: {err}"))
+        .with_context(|| format!("while validating config {}", config_path.display()))?;
 
-    let app = match load_app_config(&config_path) {
-        Ok(config) => config,
-        Err(err) => {
-            eprintln!("{err}");
-            std::process::exit(1);
-        }
-    };
-
-    let runtime_command = match validate_config(&app) {
-        Ok(command) => command,
-        Err(err) => {
-            eprintln!("invalid config: {err}");
-            std::process::exit(1);
-        }
-    };
-
-    let (policy, robot) = match build_policy(&app) {
-        Ok(value) => value,
-        Err(err) => {
-            eprintln!("{err}");
-            std::process::exit(1);
-        }
-    };
+    let policy_name = app.policy.name.clone();
+    let (policy, robot) = build_policy(&app)
+        .map_err(anyhow::Error::msg)
+        .with_context(|| format!("while building policy {policy_name:?}"))?;
 
     let running = Arc::new(AtomicBool::new(true));
-    {
-        let signal = Arc::clone(&running);
-        if let Err(e) = ctrlc::set_handler(move || {
-            signal.store(false, Ordering::SeqCst);
-        }) {
-            eprintln!("failed to install Ctrl+C handler: {e}");
-            std::process::exit(1);
-        }
-    }
+    install_ctrlc_handler(&running)?;
 
     let report_config = app.report.clone();
-
-    match run_control_loop(
+    let metrics = run_control_loop(
         &*policy,
-        &app.policy.name,
+        &policy_name,
         &robot,
         &app.comm,
         &runtime_command,
@@ -1683,20 +1670,46 @@ fn main() {
         app.sim,
         #[cfg(feature = "vis")]
         app.vis.as_ref(),
-    ) {
-        Ok(metrics) => {
-            println!(
-                "shutdown complete: ticks={}, avg_inference_ms={:.3}, achieved_hz={:.2}, dropped_frames={}",
-                metrics.ticks,
-                metrics.average_inference_ms,
-                metrics.achieved_frequency_hz,
-                metrics.dropped_frames
-            );
-        }
+    )
+    .map_err(anyhow::Error::msg)
+    .with_context(|| format!("while running control loop for policy {policy_name:?}"))?;
+
+    println!(
+        "shutdown complete: ticks={}, avg_inference_ms={:.3}, achieved_hz={:.2}, dropped_frames={}",
+        metrics.ticks,
+        metrics.average_inference_ms,
+        metrics.achieved_frequency_hz,
+        metrics.dropped_frames
+    );
+    Ok(())
+}
+
+fn print_cli_error(err: &anyhow::Error) {
+    eprintln!("{err}");
+    for cause in err.chain().skip(1) {
+        eprintln!("caused by: {cause}");
+    }
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+
+    let command = match parse_args(&args) {
+        Ok(command) => command,
         Err(err) => {
             eprintln!("{err}");
-            std::process::exit(1);
+            std::process::exit(2);
         }
+    };
+
+    let result = match command {
+        CliCommand::Init { output_path } => run_init_command(&output_path),
+        CliCommand::Run { config_path } => run_with_config(&config_path),
+    };
+
+    if let Err(err) = result {
+        print_cli_error(&err);
+        std::process::exit(1);
     }
 }
 

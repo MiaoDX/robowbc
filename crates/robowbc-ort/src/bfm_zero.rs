@@ -158,6 +158,7 @@ fn default_tracking_window_size() -> usize {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+/// Observation/input contracts supported by BFM-Zero checkpoints.
 pub enum BfmZeroObservationContract {
     /// Legacy flat single-input contract used by fixture models in tests.
     #[default]

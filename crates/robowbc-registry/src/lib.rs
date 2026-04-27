@@ -52,11 +52,19 @@ inventory::collect!(WbcRegistration);
 #[derive(Debug)]
 pub enum RegistryError {
     /// Requested policy name does not exist in the compile-time registry.
-    UnknownPolicy { name: String },
+    UnknownPolicy {
+        /// Policy name requested by the caller.
+        name: String,
+    },
     /// The TOML config does not contain a valid `[policy]` section.
     InvalidConfig(&'static str),
     /// Building a known policy failed.
-    PolicyBuildFailed { name: String, source: WbcError },
+    PolicyBuildFailed {
+        /// Policy name that was found in the registry.
+        name: String,
+        /// Underlying policy-construction error.
+        source: WbcError,
+    },
 }
 
 impl fmt::Display for RegistryError {

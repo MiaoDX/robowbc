@@ -92,6 +92,7 @@ fn default_control_frequency_hz() -> u32 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
+/// Observation/input contracts supported by WBC-AGILE checkpoints.
 pub enum WbcAgileContract {
     /// Legacy flat single-input contract used by fixture models in tests.
     #[default]

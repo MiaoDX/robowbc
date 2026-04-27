@@ -1219,6 +1219,8 @@ struct GearSonicContractSupport {
     real_planner: bool,
 }
 
+/// `GEAR-SONIC` policy wrapper with velocity-planner, motion-token, and
+/// reference-tracking execution paths.
 pub struct GearSonicPolicy {
     encoder: Mutex<OrtBackend>,
     decoder: Mutex<OrtBackend>,

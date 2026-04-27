@@ -100,10 +100,16 @@ pub enum CommError {
     ImuUnavailable,
     /// Could not publish target command.
     #[error("command publish failed: {reason}")]
-    PublishFailed { reason: String },
+    PublishFailed {
+        /// Transport-specific reason for the publish failure.
+        reason: String,
+    },
     /// Invalid communication configuration.
     #[error("invalid communication configuration: {reason}")]
-    InvalidConfig { reason: &'static str },
+    InvalidConfig {
+        /// Static validation message describing the rejected config.
+        reason: &'static str,
+    },
 }
 
 impl PartialEq for CommError {
