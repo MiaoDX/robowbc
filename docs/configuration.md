@@ -118,6 +118,39 @@ standing-placeholder alias instead of an empty-array magic value.
 - Non-empty `motion_tokens` are for the older fixture-style mock pipeline, not
   the published `planner_sonic.onnx` path
 
+### `runtime.velocity_schedule.segments`
+
+Named velocity-schedule segments are the authoritative source for the
+phase-aware proof-pack contract used by the visual harness and static showcase.
+
+```toml
+[[runtime.velocity_schedule.segments]]
+phase_name = "stand"
+duration_secs = 1.0
+start = [0.0, 0.0, 0.0]
+end = [0.0, 0.0, 0.0]
+```
+
+Rules:
+
+- `phase_name` is optional for the schedule as a whole, but if any segment sets
+  it then every segment must set it.
+- Phase names must be unique and safe for manifest-relative directories: no
+  `/`, `\`, or `..`.
+- The CLI derives canonical tick windows from the authored duration with
+  `segment_ticks = round(duration_secs * communication.frequency_hz)`. Segments
+  that round below one control tick are rejected.
+- Published phase boundaries use inclusive indices:
+  `start_tick` is inclusive, `end_tick` is inclusive, and
+  `midpoint_tick = start_tick + floor((end_tick - start_tick) / 2)`.
+- When `phase_name` values are present, the CLI serializes one authoritative
+  top-level `phase_timeline` into the run artifacts and also annotates replay
+  frames with the active `phase_name` so downstream tooling does not re-derive
+  semantic phases from numeric commands.
+- If you want the phase-review bundle to publish the full `+0..+5` phase-end
+  lag contract honestly, leave at least five review ticks after the final
+  authored phase by setting `runtime.max_ticks` above the last segment end.
+
 ### `wholebody_vla`
 
 - Uses `runtime.kinematic_pose`
@@ -136,6 +169,8 @@ standing-placeholder alias instead of an empty-array magic value.
 - `inference.device` must be non-empty
 - Runtime command fields are mutually exclusive; set exactly one of `motion_tokens`, `velocity`, `velocity_schedule`, `kinematic_pose`, or `standing_placeholder_tracking`
 - `standing_placeholder_tracking` is only supported when `policy.name = "gear_sonic"`
+- Named `runtime.velocity_schedule.segments` must either all define
+  `phase_name` or all omit it; duplicate or unsafe phase names are rejected
 
 ## Optional artifact sections
 

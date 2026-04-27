@@ -33,6 +33,16 @@ from typing import Any
 # We import them lazily so the script can still run --help even if
 # generate_policy_showcase.py has heavy dependencies.
 _SCRIPT_DIR = Path(__file__).parent.resolve()
+PHASE_REVIEW_VERSION = 1
+DEFAULT_PHASE_REVIEW_LAG_TICKS = 3
+DEFAULT_PHASE_REVIEW_TARGET_LAG_TICKS = 0
+MAX_PHASE_REVIEW_LAG_TICKS = 5
+TRACKING_COMMAND_KINDS = {
+    "kinematic_pose",
+    "motion_tokens",
+    "reference_motion_tracking",
+    "standing_placeholder_tracking",
+}
 
 
 def _import_showcase_helpers():
@@ -420,6 +430,7 @@ def run_robowbc(
         replay_trace = json.loads(replay_path.read_text(encoding="utf-8"))
 
     report["_meta"] = {
+        "config_path": str(config_path),
         "log_path": str(log_path),
         "rrd_path": str(rrd_path),
         "json_path": str(json_path),
@@ -580,6 +591,339 @@ def mean_joint_delta(reference: dict[str, Any], frame: dict[str, Any]) -> float 
     for reference_position, current_position in zip(reference_positions, current_positions):
         total += abs(float(current_position) - float(reference_position))
     return total / len(reference_positions)
+
+
+def lag_ticks_to_ms(lag_ticks: int, control_frequency_hz: int) -> float:
+    if control_frequency_hz <= 0:
+        return float(lag_ticks)
+    return (float(lag_ticks) * 1_000.0) / float(control_frequency_hz)
+
+
+def normalize_phase_name(name: object, *, source: str, index: int) -> str:
+    if not isinstance(name, str):
+        raise SystemExit(f"{source}: phase #{index + 1} is missing a string phase name")
+
+    trimmed = name.strip()
+    if not trimmed:
+        raise SystemExit(f"{source}: phase #{index + 1} has an empty phase name")
+    if "/" in trimmed or "\\" in trimmed or ".." in trimmed:
+        raise SystemExit(
+            f"{source}: phase {trimmed!r} must not contain path separators or '..'"
+        )
+    if any(ord(ch) < 32 for ch in trimmed):
+        raise SystemExit(f"{source}: phase {trimmed!r} contains control characters")
+    return trimmed
+
+
+def slugify_phase_name(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    if not slug:
+        raise SystemExit(f"phase {name!r} did not produce a safe directory slug")
+    return slug
+
+
+def normalize_phase_timeline_entries(
+    entries: object,
+    *,
+    frame_count: int,
+    control_frequency_hz: int,
+    source: str,
+) -> list[dict[str, object]]:
+    if not isinstance(entries, list) or not entries:
+        raise SystemExit(f"{source}: phase timeline must be a non-empty list")
+
+    normalized: list[dict[str, object]] = []
+    seen_names: set[str] = set()
+    previous_end = -1
+    for index, raw_entry in enumerate(entries):
+        if not isinstance(raw_entry, dict):
+            raise SystemExit(f"{source}: phase #{index + 1} must be a TOML/JSON object")
+
+        phase_name = normalize_phase_name(
+            raw_entry.get("phase_name", raw_entry.get("name")),
+            source=source,
+            index=index,
+        )
+        if phase_name in seen_names:
+            raise SystemExit(f"{source}: duplicate phase name {phase_name!r}")
+        seen_names.add(phase_name)
+
+        start_tick = raw_entry.get("start_tick")
+        end_tick = raw_entry.get("end_tick")
+        if not isinstance(start_tick, int) or start_tick < 0:
+            raise SystemExit(f"{source}: phase {phase_name!r} must define start_tick >= 0")
+        if not isinstance(end_tick, int) or end_tick < start_tick:
+            raise SystemExit(
+                f"{source}: phase {phase_name!r} must define end_tick >= start_tick"
+            )
+        if start_tick <= previous_end:
+            raise SystemExit(
+                f"{source}: phase {phase_name!r} overlaps or is out of order relative to the previous phase"
+            )
+        if end_tick >= frame_count:
+            raise SystemExit(
+                f"{source}: phase {phase_name!r} ends at tick {end_tick}, but only {frame_count} frames were recorded"
+            )
+
+        midpoint_tick = raw_entry.get("midpoint_tick")
+        expected_midpoint = start_tick + ((end_tick - start_tick) // 2)
+        if midpoint_tick is None:
+            midpoint_tick = expected_midpoint
+        elif not isinstance(midpoint_tick, int) or midpoint_tick != expected_midpoint:
+            raise SystemExit(
+                f"{source}: phase {phase_name!r} midpoint_tick must equal the canonical midpoint {expected_midpoint}"
+            )
+
+        duration_ticks = end_tick - start_tick + 1
+        raw_duration_ticks = raw_entry.get("duration_ticks")
+        if raw_duration_ticks is not None and raw_duration_ticks != duration_ticks:
+            raise SystemExit(
+                f"{source}: phase {phase_name!r} duration_ticks must equal {duration_ticks}"
+            )
+
+        duration_secs = raw_entry.get("duration_secs")
+        if duration_secs is None:
+            duration_secs = duration_ticks / float(max(control_frequency_hz, 1))
+        elif not isinstance(duration_secs, (int, float)) or float(duration_secs) <= 0.0:
+            raise SystemExit(
+                f"{source}: phase {phase_name!r} must define a positive duration_secs when provided"
+            )
+
+        normalized.append(
+            {
+                "phase_name": phase_name,
+                "phase_slug": slugify_phase_name(phase_name),
+                "start_tick": start_tick,
+                "midpoint_tick": midpoint_tick,
+                "end_tick": end_tick,
+                "duration_ticks": duration_ticks,
+                "duration_secs": float(duration_secs),
+            }
+        )
+        previous_end = end_tick
+
+    return normalized
+
+
+def resolve_report_config_path(repo_root: Path, report: dict[str, Any]) -> Path | None:
+    meta = report.get("_meta")
+    if not isinstance(meta, dict):
+        return None
+
+    config_path = meta.get("config_path")
+    if not isinstance(config_path, str) or not config_path:
+        return None
+
+    candidate = Path(config_path)
+    if not candidate.is_absolute():
+        candidate = (repo_root / candidate).resolve()
+    else:
+        candidate = candidate.resolve()
+
+    try:
+        candidate.relative_to(repo_root.resolve())
+    except ValueError as exc:
+        raise SystemExit(
+            f"tracking phase sidecars must stay inside the repo root; got config path {candidate}"
+        ) from exc
+    return candidate
+
+
+def load_tracking_phase_review_contract(
+    sidecar_path: Path,
+    *,
+    frame_count: int,
+    control_frequency_hz: int,
+) -> dict[str, object]:
+    raw = tomllib.loads(sidecar_path.read_text(encoding="utf-8"))
+    default_lag_ticks = raw.get("default_lag_ticks", DEFAULT_PHASE_REVIEW_LAG_TICKS)
+    if (
+        not isinstance(default_lag_ticks, int)
+        or default_lag_ticks < 0
+        or default_lag_ticks > MAX_PHASE_REVIEW_LAG_TICKS
+    ):
+        raise SystemExit(
+            f"{sidecar_path}: default_lag_ticks must be an integer between 0 and {MAX_PHASE_REVIEW_LAG_TICKS}"
+        )
+
+    normalized_timeline = normalize_phase_timeline_entries(
+        raw.get("phases"),
+        frame_count=frame_count,
+        control_frequency_hz=control_frequency_hz,
+        source=str(sidecar_path),
+    )
+    return {
+        "source": "tracking_sidecar",
+        "default_lag_ticks": default_lag_ticks,
+        "default_lag_ms": lag_ticks_to_ms(default_lag_ticks, control_frequency_hz),
+        "lag_options": list(range(MAX_PHASE_REVIEW_LAG_TICKS + 1)),
+        "default_target_lag_ticks": DEFAULT_PHASE_REVIEW_TARGET_LAG_TICKS,
+        "default_target_lag_ms": lag_ticks_to_ms(
+            DEFAULT_PHASE_REVIEW_TARGET_LAG_TICKS, control_frequency_hz
+        ),
+        "target_lag_options": list(range(MAX_PHASE_REVIEW_LAG_TICKS + 1)),
+        "phase_timeline": normalized_timeline,
+    }
+
+
+def resolve_phase_review_contract(repo_root: Path, report: dict[str, Any]) -> dict[str, object] | None:
+    replay_root, frames, _ = replay_payload(report)
+    if not frames:
+        return None
+
+    control_frequency_hz = int(replay_root.get("control_frequency_hz", 50) or 50)
+    command_kind = str(report.get("command_kind") or replay_root.get("command_kind") or "")
+
+    if command_kind == "velocity_schedule":
+        raw_timeline = report.get("phase_timeline", replay_root.get("phase_timeline"))
+        if raw_timeline is None:
+            return None
+        normalized_timeline = normalize_phase_timeline_entries(
+            raw_timeline,
+            frame_count=len(frames),
+            control_frequency_hz=control_frequency_hz,
+            source="run artifact phase_timeline",
+        )
+        return {
+            "source": "velocity_schedule",
+            "default_lag_ticks": DEFAULT_PHASE_REVIEW_LAG_TICKS,
+            "default_lag_ms": lag_ticks_to_ms(
+                DEFAULT_PHASE_REVIEW_LAG_TICKS, control_frequency_hz
+            ),
+            "lag_options": list(range(MAX_PHASE_REVIEW_LAG_TICKS + 1)),
+            "default_target_lag_ticks": DEFAULT_PHASE_REVIEW_TARGET_LAG_TICKS,
+            "default_target_lag_ms": lag_ticks_to_ms(
+                DEFAULT_PHASE_REVIEW_TARGET_LAG_TICKS, control_frequency_hz
+            ),
+            "target_lag_options": list(range(MAX_PHASE_REVIEW_LAG_TICKS + 1)),
+            "phase_timeline": normalized_timeline,
+        }
+
+    if command_kind not in TRACKING_COMMAND_KINDS:
+        return None
+
+    config_path = resolve_report_config_path(repo_root, report)
+    if config_path is None:
+        return None
+
+    sidecar_path = config_path.with_suffix(".phases.toml")
+    if not sidecar_path.exists():
+        return None
+    if sidecar_path.parent != config_path.parent:
+        raise SystemExit(
+            f"tracking phase sidecar must be a sibling of {config_path}; got {sidecar_path}"
+        )
+
+    return load_tracking_phase_review_contract(
+        sidecar_path.resolve(),
+        frame_count=len(frames),
+        control_frequency_hz=control_frequency_hz,
+    )
+
+
+def build_phase_review_capture_plan(
+    frames: list[dict[str, Any]],
+    phase_review: dict[str, object],
+    *,
+    frame_source: str,
+    control_frequency_hz: int,
+) -> list[dict[str, object]]:
+    plan: list[dict[str, object]] = []
+    timeline = phase_review["phase_timeline"]
+    assert isinstance(timeline, list)
+    lag_options = phase_review["lag_options"]
+    assert isinstance(lag_options, list)
+    default_lag_ticks = int(phase_review["default_lag_ticks"])
+    target_lag_options = phase_review.get("target_lag_options", lag_options)
+    assert isinstance(target_lag_options, list)
+    default_target_lag_ticks = int(
+        phase_review.get("default_target_lag_ticks", DEFAULT_PHASE_REVIEW_TARGET_LAG_TICKS)
+    )
+
+    for phase_entry in timeline:
+        assert isinstance(phase_entry, dict)
+        phase_name = str(phase_entry["phase_name"])
+        phase_slug = str(phase_entry["phase_slug"])
+        midpoint_tick = int(phase_entry["midpoint_tick"])
+        end_tick = int(phase_entry["end_tick"])
+
+        plan.append(
+            {
+                "kind": "phase_midpoint",
+                "name": f"{phase_name}_midpoint",
+                "phase_name": phase_name,
+                "phase_slug": phase_slug,
+                "tick": midpoint_tick,
+                "frame_index": midpoint_tick,
+                "selection_reason": f"{phase_name} midpoint from the explicit phase timeline",
+                "frame_source": frame_source,
+            }
+        )
+
+        available_lag_options = [
+            int(lag)
+            for lag in lag_options
+            if isinstance(lag, int) and 0 <= lag <= MAX_PHASE_REVIEW_LAG_TICKS
+            and end_tick + lag < len(frames)
+        ]
+        if not available_lag_options:
+            raise SystemExit(
+                f"phase {phase_name!r} has no recorded frames at or after phase end tick {end_tick}"
+            )
+        default_display_lag = (
+            default_lag_ticks
+            if default_lag_ticks in available_lag_options
+            else available_lag_options[-1]
+        )
+        available_target_lag_options = [
+            int(lag)
+            for lag in target_lag_options
+            if isinstance(lag, int) and 0 <= lag <= MAX_PHASE_REVIEW_LAG_TICKS
+            and end_tick + lag < len(frames)
+        ]
+        if not available_target_lag_options:
+            raise SystemExit(
+                f"phase {phase_name!r} has no recorded target frames at or after phase end tick {end_tick}"
+            )
+        default_target_display_lag = (
+            default_target_lag_ticks
+            if default_target_lag_ticks in available_target_lag_options
+            else available_target_lag_options[-1]
+        )
+        variants = [
+            {
+                "lag_ticks": lag_ticks,
+                "lag_ms": lag_ticks_to_ms(lag_ticks, control_frequency_hz),
+                "frame_index": end_tick + lag_ticks,
+                "tick": int(frames[end_tick + lag_ticks]["tick"]),
+                "selection_reason": (
+                    f"{phase_name} phase end actual response at +{lag_ticks} ticks"
+                ),
+                "frame_source": frame_source,
+            }
+            for lag_ticks in available_lag_options
+        ]
+        plan.append(
+            {
+                "kind": "phase_end",
+                "name": f"{phase_name}_end",
+                "phase_name": phase_name,
+                "phase_slug": phase_slug,
+                "phase_end_tick": end_tick,
+                "frame_index": end_tick,
+                "selection_reason": (
+                    f"{phase_name} phase end with positive-lag actual-response review"
+                ),
+                "frame_source": frame_source,
+                "lag_options": available_lag_options,
+                "default_display_lag": default_display_lag,
+                "target_lag_options": available_target_lag_options,
+                "default_target_display_lag": default_target_display_lag,
+                "variants": variants,
+            }
+        )
+
+    return plan
 
 
 def select_checkpoint_specs(
@@ -783,6 +1127,115 @@ def restore_frame_state(
     mujoco.mj_forward(model, data)
 
 
+def phase_review_camera_configs(phase_review: dict[str, object] | None) -> list[tuple[str, Any]]:
+    if isinstance(phase_review, dict) and phase_review.get("source") == "velocity_schedule":
+        return [
+            ("track", _phase_review_track_camera()),
+            ("side", _side_camera()),
+            ("top", _phase_review_top_camera()),
+        ]
+    return [
+        ("track", _track_camera()),
+        ("side", _side_camera()),
+        ("top", _top_camera()),
+    ]
+
+
+def capture_overlay_images(
+    *,
+    model: Any,
+    data: Any,
+    renderer: Any,
+    actual_frame: dict[str, Any],
+    target_frame: dict[str, Any] | None,
+    joint_names: list[str],
+    default_pose: list[float],
+    joint_qpos_map: dict[str, int],
+    joint_qvel_map: dict[str, int],
+    floating_base_state: dict[str, int] | None,
+    camera_configs: list[tuple[str, Any]],
+    output_dir: Path,
+    require_target: bool,
+) -> list[str]:
+    if require_target and target_frame is None:
+        raise SystemExit(
+            f"phase-aware checkpoint at tick {actual_frame.get('tick')} is missing target_positions"
+        )
+
+    cameras: list[str] = []
+    for cam_name, cam_obj in camera_configs:
+        restore_frame_state(
+            model,
+            data,
+            actual_frame,
+            joint_names,
+            default_pose,
+            joint_qpos_map,
+            joint_qvel_map,
+            floating_base_state,
+        )
+        renderer.update_scene(data, camera=cam_obj)
+        actual_rgb = renderer.render()
+
+        image_path = output_dir / f"{cam_name}_rgb.png"
+        _save_png(output_dir / f"{cam_name}_actual_rgb.png", actual_rgb)
+        if target_frame is None:
+            _save_png(image_path, actual_rgb)
+        else:
+            restore_frame_state(
+                model,
+                data,
+                target_frame,
+                joint_names,
+                default_pose,
+                joint_qpos_map,
+                joint_qvel_map,
+                floating_base_state,
+            )
+            renderer.update_scene(data, camera=cam_obj)
+            target_rgb = renderer.render()
+            _save_png(output_dir / f"{cam_name}_target_rgb.png", target_rgb)
+            _save_comparison_png(image_path, actual_rgb, target_rgb)
+        cameras.append(cam_name)
+
+    return cameras
+
+
+def write_checkpoint_metadata(
+    *,
+    checkpoint_dir: Path,
+    tick: int,
+    sim_time_secs: float,
+    cameras: list[str],
+    selection_reason: str,
+    frame_source: str,
+    comparison_mode: str,
+    phase_name: str | None = None,
+    phase_end_tick: int | None = None,
+    lag_ticks: int | None = None,
+) -> None:
+    metadata = {
+        "step": tick,
+        "sim_time": sim_time_secs,
+        "cameras": cameras,
+        "camera_capability": "rgb",
+        "comparison_mode": comparison_mode,
+        "selection_reason": selection_reason,
+        "frame_source": frame_source,
+    }
+    if phase_name is not None:
+        metadata["phase_name"] = phase_name
+    if phase_end_tick is not None:
+        metadata["phase_end_tick"] = phase_end_tick
+    if lag_ticks is not None:
+        metadata["lag_ticks"] = lag_ticks
+
+    (checkpoint_dir / "metadata.json").write_text(
+        json.dumps(metadata),
+        encoding="utf-8",
+    )
+
+
 def capture_frames_from_report(
     repo_root: Path,
     report: dict[str, Any],
@@ -808,6 +1261,18 @@ def capture_frames_from_report(
         renderer = mujoco.Renderer(model, height=480, width=640)
         replay_root, frames, frame_source = replay_payload(report)
         control_frequency_hz = int(replay_root.get("control_frequency_hz", 50) or 50)
+        phase_review = resolve_phase_review_contract(repo_root, report)
+        if phase_review is not None:
+            report["_phase_review"] = {
+                "source": phase_review["source"],
+                "default_lag_ticks": phase_review["default_lag_ticks"],
+                "default_lag_ms": phase_review["default_lag_ms"],
+                "lag_options": list(phase_review["lag_options"]),
+                "default_target_lag_ticks": phase_review["default_target_lag_ticks"],
+                "default_target_lag_ms": phase_review["default_target_lag_ms"],
+                "target_lag_options": list(phase_review["target_lag_options"]),
+                "phase_timeline": list(phase_review["phase_timeline"]),
+            }
 
         # Build joint name -> qpos address mapping
         joint_qpos_map: dict[str, int] = {}
@@ -831,103 +1296,263 @@ def capture_frames_from_report(
         if not frames:
             return []
 
-        checkpoint_specs = select_checkpoint_specs(frames)
+        capture_plan: list[dict[str, Any]] = []
+        primary_ticks: set[int] = set()
+        if phase_review is not None:
+            capture_plan.extend(
+                build_phase_review_capture_plan(
+                    frames,
+                    phase_review,
+                    frame_source=frame_source,
+                    control_frequency_hz=control_frequency_hz,
+                )
+            )
+            for checkpoint in capture_plan:
+                if checkpoint["kind"] == "phase_midpoint":
+                    primary_ticks.add(int(checkpoint["tick"]))
+                elif checkpoint["kind"] == "phase_end":
+                    primary_ticks.add(int(checkpoint["phase_end_tick"]))
+
+        for checkpoint in select_checkpoint_specs(frames):
+            frame_index = int(checkpoint["index"])
+            if frame_index in primary_ticks:
+                continue
+            frame = frames[frame_index]
+            capture_plan.append(
+                {
+                    "kind": "diagnostic",
+                    "name": str(checkpoint["name"]),
+                    "tick": int(frame["tick"]),
+                    "frame_index": frame_index,
+                    "selection_reason": str(checkpoint["reason"]),
+                    "frame_source": frame_source,
+                }
+            )
 
         # roboharness expects: output_dir / task_name / trial_name / checkpoint_name
         capture_dir = output_dir / "roboharness_run" / "trial_001"
         capture_dir.mkdir(parents=True, exist_ok=True)
 
         checkpoints: list[dict[str, Any]] = []
+        camera_configs = phase_review_camera_configs(phase_review)
 
-        # Camera configurations: track + a few fixed angles
-        camera_configs = [
-            ("track", _track_camera()),
-            ("side", _side_camera()),
-            ("top", _top_camera()),
-        ]
-
-        for checkpoint in checkpoint_specs:
-            frame_index = int(checkpoint["index"])
-            frame = frames[frame_index]
-            target_frame = _target_pose_frame(frame)
-
-            cp_name = f"{checkpoint['name']}_tick_{int(frame['tick']):04d}"
-            cp_dir = capture_dir / cp_name
-            cp_dir.mkdir(parents=True, exist_ok=True)
-            sim_time_secs = frame_sim_time_secs(frame, control_frequency_hz)
-
-            meta = {
-                "tick": int(frame["tick"]),
-                "frame_index": frame_index,
-                "sim_time_secs": sim_time_secs,
-                "inference_latency_ms": float(frame.get("inference_latency_ms", 0.0) or 0.0),
-                "selection_reason": str(checkpoint["reason"]),
-                "frame_source": frame_source,
-                "cameras": [],
-            }
-
-            for cam_name, cam_obj in camera_configs:
-                restore_frame_state(
-                    model,
-                    data,
-                    frame,
-                    joint_names,
-                    default_pose,
-                    joint_qpos_map,
-                    joint_qvel_map,
-                    floating_base_state,
-                )
-                renderer.update_scene(data, camera=cam_obj)
-                actual_rgb = renderer.render()
-
-                img_path = cp_dir / f"{cam_name}_rgb.png"
-                _save_png(cp_dir / f"{cam_name}_actual_rgb.png", actual_rgb)
-                if target_frame is None:
-                    _save_png(img_path, actual_rgb)
+        for checkpoint in capture_plan:
+            kind = str(checkpoint["kind"])
+            if kind in {"diagnostic", "phase_midpoint"}:
+                frame_index = int(checkpoint["frame_index"])
+                frame = frames[frame_index]
+                target_frame = _target_pose_frame(frame)
+                phase_name = checkpoint.get("phase_name")
+                if kind == "phase_midpoint":
+                    cp_name = f"{checkpoint['phase_slug']}_midpoint_tick_{int(frame['tick']):04d}"
                 else:
-                    restore_frame_state(
-                        model,
-                        data,
-                        target_frame,
-                        joint_names,
-                        default_pose,
-                        joint_qpos_map,
-                        joint_qvel_map,
-                        floating_base_state,
-                    )
-                    renderer.update_scene(data, camera=cam_obj)
-                    target_rgb = renderer.render()
-                    _save_png(cp_dir / f"{cam_name}_target_rgb.png", target_rgb)
-                    _save_comparison_png(img_path, actual_rgb, target_rgb)
-                meta["cameras"].append(cam_name)
-
-            # Write metadata.json for roboharness reporting compatibility
-            meta_path = cp_dir / "metadata.json"
-            meta_path.write_text(
-                json.dumps(
+                    cp_name = f"{checkpoint['name']}_tick_{int(frame['tick']):04d}"
+                cp_dir = capture_dir / cp_name
+                cp_dir.mkdir(parents=True, exist_ok=True)
+                sim_time_secs = frame_sim_time_secs(frame, control_frequency_hz)
+                cameras = capture_overlay_images(
+                    model=model,
+                    data=data,
+                    renderer=renderer,
+                    actual_frame=frame,
+                    target_frame=target_frame,
+                    joint_names=joint_names,
+                    default_pose=default_pose,
+                    joint_qpos_map=joint_qpos_map,
+                    joint_qvel_map=joint_qvel_map,
+                    floating_base_state=floating_base_state,
+                    camera_configs=camera_configs,
+                    output_dir=cp_dir,
+                    require_target=kind == "phase_midpoint",
+                )
+                write_checkpoint_metadata(
+                    checkpoint_dir=cp_dir,
+                    tick=int(frame["tick"]),
+                    sim_time_secs=sim_time_secs,
+                    cameras=cameras,
+                    selection_reason=str(checkpoint["selection_reason"]),
+                    frame_source=frame_source,
+                    comparison_mode="target_vs_actual_overlay"
+                    if target_frame is not None
+                    else "actual_only",
+                    phase_name=str(phase_name) if isinstance(phase_name, str) else None,
+                )
+                checkpoints.append(
                     {
-                        "step": frame["tick"],
-                        "sim_time": sim_time_secs,
-                        "cameras": meta["cameras"],
-                        "camera_capability": "rgb",
-                        "comparison_mode": "target_vs_actual_overlay"
-                        if target_frame is not None
-                        else "actual_only",
-                        "selection_reason": meta["selection_reason"],
-                        "frame_source": frame_source,
+                        "kind": kind,
+                        "phase_name": phase_name if isinstance(phase_name, str) else None,
+                        "phase_kind": "midpoint" if kind == "phase_midpoint" else None,
+                        "name": str(checkpoint["name"]),
+                        "dir": cp_dir,
+                        "relative_dir": cp_dir.relative_to(output_dir).as_posix(),
+                        "meta": {
+                            "tick": int(frame["tick"]),
+                            "frame_index": frame_index,
+                            "sim_time_secs": sim_time_secs,
+                            "inference_latency_ms": float(
+                                frame.get("inference_latency_ms", 0.0) or 0.0
+                            ),
+                            "selection_reason": str(checkpoint["selection_reason"]),
+                            "frame_source": frame_source,
+                            "cameras": cameras,
+                        },
                     }
-                ),
-                encoding="utf-8",
-            )
+                )
+                continue
 
+            if kind != "phase_end":
+                raise SystemExit(f"unknown checkpoint kind: {kind}")
+
+            phase_name = str(checkpoint["phase_name"])
+            phase_slug = str(checkpoint["phase_slug"])
+            phase_end_tick = int(checkpoint["phase_end_tick"])
+            canonical_target_source_frame = frames[int(checkpoint["frame_index"])]
+            target_frame = _target_pose_frame(canonical_target_source_frame)
+            cp_root = capture_dir / f"{phase_slug}_end_tick_{phase_end_tick:04d}"
+            cp_root.mkdir(parents=True, exist_ok=True)
+            lag_variants: list[dict[str, Any]] = []
+            for variant in checkpoint["variants"]:
+                assert isinstance(variant, dict)
+                lag_ticks = int(variant["lag_ticks"])
+                actual_frame = frames[int(variant["frame_index"])]
+                variant_dir = cp_root / f"lag_{lag_ticks}"
+                variant_dir.mkdir(parents=True, exist_ok=True)
+                cameras = capture_overlay_images(
+                    model=model,
+                    data=data,
+                    renderer=renderer,
+                    actual_frame=actual_frame,
+                    target_frame=target_frame,
+                    joint_names=joint_names,
+                    default_pose=default_pose,
+                    joint_qpos_map=joint_qpos_map,
+                    joint_qvel_map=joint_qvel_map,
+                    floating_base_state=floating_base_state,
+                    camera_configs=camera_configs,
+                    output_dir=variant_dir,
+                    require_target=True,
+                )
+                sim_time_secs = frame_sim_time_secs(actual_frame, control_frequency_hz)
+                write_checkpoint_metadata(
+                    checkpoint_dir=variant_dir,
+                    tick=int(actual_frame["tick"]),
+                    sim_time_secs=sim_time_secs,
+                    cameras=cameras,
+                    selection_reason=str(variant["selection_reason"]),
+                    frame_source=frame_source,
+                    comparison_mode="target_vs_actual_overlay",
+                    phase_name=phase_name,
+                    phase_end_tick=phase_end_tick,
+                    lag_ticks=lag_ticks,
+                )
+                lag_variants.append(
+                    {
+                        "lag_ticks": lag_ticks,
+                        "lag_ms": float(variant["lag_ms"]),
+                        "tick": int(actual_frame["tick"]),
+                        "frame_index": int(variant["frame_index"]),
+                        "sim_time_secs": sim_time_secs,
+                        "selection_reason": str(variant["selection_reason"]),
+                        "frame_source": frame_source,
+                        "relative_dir": variant_dir.relative_to(output_dir).as_posix(),
+                        "cameras": cameras,
+                    }
+                )
+
+            default_display_lag = int(checkpoint["default_display_lag"])
+            default_variant = next(
+                (
+                    variant
+                    for variant in lag_variants
+                    if int(variant["lag_ticks"]) == default_display_lag
+                ),
+                lag_variants[-1],
+            )
             checkpoints.append(
                 {
-                    "name": cp_name,
-                    "dir": cp_dir,
-                    "meta": meta,
-                    "relative_dir": cp_dir.relative_to(output_dir).as_posix(),
+                    "kind": "phase_end",
+                    "phase_name": phase_name,
+                    "phase_kind": "phase_end",
+                    "name": str(checkpoint["name"]),
+                    "dir": cp_root,
+                    "relative_dir": str(default_variant["relative_dir"]),
+                    "meta": {
+                        "tick": phase_end_tick,
+                        "frame_index": int(checkpoint["frame_index"]),
+                        "phase_end_tick": phase_end_tick,
+                        "sim_time_secs": frame_sim_time_secs(
+                            canonical_target_source_frame, control_frequency_hz
+                        ),
+                        "selection_reason": str(checkpoint["selection_reason"]),
+                        "frame_source": frame_source,
+                        "cameras": list(default_variant["cameras"]),
+                    },
+                    "lag_options": list(checkpoint["lag_options"]),
+                    "default_lag_ticks": default_display_lag,
+                    "lag_variants": lag_variants,
+                    "target_lag_options": list(checkpoint["target_lag_options"]),
+                    "default_target_lag_ticks": int(checkpoint["default_target_display_lag"]),
+                    "target_lag_variants": [],
                 }
             )
+
+            target_lag_variants: list[dict[str, Any]] = []
+            for target_lag_ticks in checkpoint["target_lag_options"]:
+                target_source_frame = frames[phase_end_tick + int(target_lag_ticks)]
+                target_pose_frame = _target_pose_frame(target_source_frame)
+                if target_pose_frame is None:
+                    raise SystemExit(
+                        f"phase-aware target checkpoint at tick {target_source_frame.get('tick')} is missing target_positions"
+                    )
+                target_variant_dir = cp_root / f"target_lag_{int(target_lag_ticks)}"
+                target_variant_dir.mkdir(parents=True, exist_ok=True)
+                cameras = capture_overlay_images(
+                    model=model,
+                    data=data,
+                    renderer=renderer,
+                    actual_frame=target_pose_frame,
+                    target_frame=None,
+                    joint_names=joint_names,
+                    default_pose=default_pose,
+                    joint_qpos_map=joint_qpos_map,
+                    joint_qvel_map=joint_qvel_map,
+                    floating_base_state=floating_base_state,
+                    camera_configs=camera_configs,
+                    output_dir=target_variant_dir,
+                    require_target=False,
+                )
+                sim_time_secs = frame_sim_time_secs(target_source_frame, control_frequency_hz)
+                write_checkpoint_metadata(
+                    checkpoint_dir=target_variant_dir,
+                    tick=int(target_source_frame["tick"]),
+                    sim_time_secs=sim_time_secs,
+                    cameras=cameras,
+                    selection_reason=(
+                        f"{phase_name} target pose sampled at +{int(target_lag_ticks)} ticks from phase end"
+                    ),
+                    frame_source=frame_source,
+                    comparison_mode="target_pose_only",
+                    phase_name=phase_name,
+                    phase_end_tick=phase_end_tick,
+                    lag_ticks=int(target_lag_ticks),
+                )
+                target_lag_variants.append(
+                    {
+                        "lag_ticks": int(target_lag_ticks),
+                        "lag_ms": lag_ticks_to_ms(int(target_lag_ticks), control_frequency_hz),
+                        "tick": int(target_source_frame["tick"]),
+                        "frame_index": phase_end_tick + int(target_lag_ticks),
+                        "sim_time_secs": sim_time_secs,
+                        "selection_reason": (
+                            f"{phase_name} target pose sampled at +{int(target_lag_ticks)} ticks from phase end"
+                        ),
+                        "frame_source": frame_source,
+                        "relative_dir": target_variant_dir.relative_to(output_dir).as_posix(),
+                        "cameras": cameras,
+                    }
+                )
+
+            checkpoints[-1]["target_lag_variants"] = target_lag_variants
 
         return checkpoints
     except Exception as exc:
@@ -964,6 +1589,20 @@ def _track_camera() -> Any:
     return cam
 
 
+def _phase_review_track_camera() -> Any:
+    """Return a more locomotion-informative chase view for staged velocity demos."""
+    import mujoco
+
+    cam = mujoco.MjvCamera()
+    cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
+    cam.trackbodyid = 0
+    cam.distance = 3.1
+    cam.azimuth = 155.0
+    cam.elevation = -14.0
+    cam.lookat[:] = [0.15, 0.0, 0.88]
+    return cam
+
+
 def _side_camera() -> Any:
     """Return a side-view camera configuration."""
     import mujoco
@@ -989,6 +1628,20 @@ def _top_camera() -> Any:
     cam.azimuth = 0.0
     cam.elevation = -80.0
     cam.lookat[:] = [0.0, 0.0, 0.8]
+    return cam
+
+
+def _phase_review_top_camera() -> Any:
+    """Return a path-oriented top view for staged velocity demos."""
+    import mujoco
+
+    cam = mujoco.MjvCamera()
+    cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
+    cam.trackbodyid = 0
+    cam.distance = 4.8
+    cam.azimuth = 22.0
+    cam.elevation = -84.0
+    cam.lookat[:] = [0.35, 0.0, 0.8]
     return cam
 
 
@@ -1121,16 +1774,51 @@ def relative_output_artifact(output_dir: Path, artifact_path: str | None) -> str
         return path.as_posix()
 
 
-def write_proof_pack_manifest(
+def manifest_checkpoint_entry(checkpoint: dict[str, Any]) -> dict[str, Any]:
+    entry = {
+        "name": checkpoint["name"],
+        "relative_dir": checkpoint["relative_dir"],
+        "tick": checkpoint["meta"]["tick"],
+        "frame_index": checkpoint["meta"]["frame_index"],
+        "sim_time_secs": checkpoint["meta"]["sim_time_secs"],
+        "selection_reason": checkpoint["meta"]["selection_reason"],
+        "frame_source": checkpoint["meta"]["frame_source"],
+        "cameras": checkpoint["meta"]["cameras"],
+    }
+    if isinstance(checkpoint.get("phase_name"), str):
+        entry["phase_name"] = checkpoint["phase_name"]
+    if isinstance(checkpoint.get("phase_kind"), str):
+        entry["phase_kind"] = checkpoint["phase_kind"]
+    if checkpoint.get("meta", {}).get("phase_end_tick") is not None:
+        entry["phase_end_tick"] = checkpoint["meta"]["phase_end_tick"]
+    if checkpoint.get("default_lag_ticks") is not None:
+        entry["default_lag_ticks"] = checkpoint["default_lag_ticks"]
+    if isinstance(checkpoint.get("lag_options"), list):
+        entry["lag_options"] = checkpoint["lag_options"]
+    if isinstance(checkpoint.get("lag_variants"), list):
+        entry["lag_variants"] = checkpoint["lag_variants"]
+    if checkpoint.get("default_target_lag_ticks") is not None:
+        entry["default_target_lag_ticks"] = checkpoint["default_target_lag_ticks"]
+    if isinstance(checkpoint.get("target_lag_options"), list):
+        entry["target_lag_options"] = checkpoint["target_lag_options"]
+    if isinstance(checkpoint.get("target_lag_variants"), list):
+        entry["target_lag_variants"] = checkpoint["target_lag_variants"]
+    return entry
+
+
+def build_proof_pack_manifest_payload(
     output_dir: Path,
     report: dict[str, Any],
     checkpoints: list[dict[str, Any]],
-    report_path: Path,
-) -> Path:
+    *,
+    html_entrypoint: str,
+) -> dict[str, Any]:
     replay_root, _, frame_source = replay_payload(report)
     meta = report.get("_meta", {})
-    manifest_path = output_dir / "proof_pack_manifest.json"
-    payload = {
+    if not isinstance(meta, dict):
+        meta = {}
+
+    payload: dict[str, Any] = {
         "schema_version": 1,
         "generated_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ"),
         "policy_name": report.get("policy_name"),
@@ -1138,7 +1826,7 @@ def write_proof_pack_manifest(
         "command_kind": report.get("command_kind"),
         "command_data": report.get("command_data", []),
         "control_frequency_hz": replay_root.get("control_frequency_hz"),
-        "html_entrypoint": relative_output_artifact(output_dir, str(report_path)),
+        "html_entrypoint": html_entrypoint,
         "metrics_source": "run_report.json",
         "frame_source": frame_source,
         "transport": replay_root.get("transport"),
@@ -1149,20 +1837,69 @@ def write_proof_pack_manifest(
             "run_log": relative_output_artifact(output_dir, meta.get("log_path")),
             "temp_config": relative_output_artifact(output_dir, meta.get("temp_config")),
         },
-        "checkpoints": [
-            {
-                "name": checkpoint["name"],
-                "relative_dir": checkpoint["relative_dir"],
-                "tick": checkpoint["meta"]["tick"],
-                "frame_index": checkpoint["meta"]["frame_index"],
-                "sim_time_secs": checkpoint["meta"]["sim_time_secs"],
-                "selection_reason": checkpoint["meta"]["selection_reason"],
-                "frame_source": checkpoint["meta"]["frame_source"],
-                "cameras": checkpoint["meta"]["cameras"],
-            }
-            for checkpoint in checkpoints
-        ],
     }
+
+    legacy_checkpoints = [
+        manifest_checkpoint_entry(checkpoint)
+        for checkpoint in checkpoints
+    ]
+    payload["checkpoints"] = legacy_checkpoints
+
+    phase_review = report.get("_phase_review")
+    if isinstance(phase_review, dict):
+        phase_checkpoints = [
+            manifest_checkpoint_entry(checkpoint)
+            for checkpoint in checkpoints
+            if checkpoint.get("kind") in {"phase_midpoint", "phase_end"}
+        ]
+        diagnostic_checkpoints = [
+            manifest_checkpoint_entry(checkpoint)
+            for checkpoint in checkpoints
+            if checkpoint.get("kind") == "diagnostic"
+        ]
+        payload["phase_review"] = {
+            "enabled": True,
+            "version": PHASE_REVIEW_VERSION,
+            "source": phase_review.get("source"),
+        }
+        payload["phase_timeline"] = phase_review.get("phase_timeline", [])
+        payload["phase_checkpoints"] = phase_checkpoints
+        payload["diagnostic_checkpoints"] = diagnostic_checkpoints
+        payload["lag_options"] = phase_review.get("lag_options", [])
+        payload["default_lag_ticks"] = phase_review.get("default_lag_ticks")
+        payload["default_lag_ms"] = phase_review.get("default_lag_ms")
+        payload["target_lag_options"] = phase_review.get("target_lag_options", [])
+        payload["default_target_lag_ticks"] = phase_review.get("default_target_lag_ticks")
+        payload["default_target_lag_ms"] = phase_review.get("default_target_lag_ms")
+
+    capture_meta = report.get("_proof_pack_capture")
+    if checkpoints:
+        payload["capture_status"] = "ok"
+    elif isinstance(capture_meta, dict):
+        payload["capture_status"] = str(capture_meta.get("status", "skipped"))
+        if capture_meta.get("backend"):
+            payload["capture_backend"] = capture_meta["backend"]
+        if capture_meta.get("warning"):
+            payload["capture_warning"] = capture_meta["warning"]
+        if capture_meta.get("error"):
+            payload["capture_error"] = capture_meta["error"]
+
+    return payload
+
+
+def write_proof_pack_manifest(
+    output_dir: Path,
+    report: dict[str, Any],
+    checkpoints: list[dict[str, Any]],
+    report_path: Path,
+) -> Path:
+    manifest_path = output_dir / "proof_pack_manifest.json"
+    payload = build_proof_pack_manifest_payload(
+        output_dir,
+        report,
+        checkpoints,
+        html_entrypoint=str(relative_output_artifact(output_dir, str(report_path))),
+    )
     manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return manifest_path
 

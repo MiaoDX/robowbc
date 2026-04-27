@@ -504,68 +504,17 @@ def detect_mujoco_model_variant(log_text: str) -> str | None:
 
 
 def build_proof_pack_manifest_payload(
+    policy_dir: Path,
     report: dict[str, object],
     checkpoints: list[dict[str, object]],
 ) -> dict[str, object]:
-    meta = report.get("_meta", {})
-    if not isinstance(meta, dict):
-        meta = {}
-
-    showcase_context = meta.get("showcase_context") or {}
-    payload = {
-        "schema_version": 1,
-        "generated_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ"),
-        "policy_name": report.get("policy_name"),
-        "robot_name": report.get("robot_name"),
-        "command_kind": report.get("command_kind"),
-        "command_data": report.get("command_data", []),
-        "control_frequency_hz": report.get("control_frequency_hz"),
-        "html_entrypoint": "index.html",
-        "metrics_source": "run.json",
-        "frame_source": "canonical_replay_trace",
-        "transport": {
-            "kind": showcase_context.get("transport"),
-            "model_path": showcase_context.get("model_path"),
-            "gain_profile": showcase_context.get("gain_profile"),
-            "timestep_secs": showcase_context.get("timestep"),
-            "substeps": showcase_context.get("substeps"),
-            "robot_config_path": showcase_context.get("robot_config_path"),
-        },
-        "raw_artifacts": {
-            "run_report": "run.json",
-            "replay_trace": "run_replay_trace.json",
-            "rerun_recording": "run.rrd",
-            "run_log": "run.log",
-            "temp_config": "run.toml",
-        },
-        "checkpoints": [
-            {
-                "name": checkpoint["name"],
-                "relative_dir": checkpoint["relative_dir"],
-                "tick": checkpoint["meta"]["tick"],
-                "frame_index": checkpoint["meta"]["frame_index"],
-                "sim_time_secs": checkpoint["meta"]["sim_time_secs"],
-                "selection_reason": checkpoint["meta"]["selection_reason"],
-                "frame_source": checkpoint["meta"]["frame_source"],
-                "cameras": checkpoint["meta"]["cameras"],
-            }
-            for checkpoint in checkpoints
-        ],
-    }
-
-    capture_meta = report.get("_proof_pack_capture")
-    if checkpoints:
-        payload["capture_status"] = "ok"
-    elif isinstance(capture_meta, dict):
-        payload["capture_status"] = str(capture_meta.get("status", "skipped"))
-        if capture_meta.get("backend"):
-            payload["capture_backend"] = capture_meta["backend"]
-        if capture_meta.get("warning"):
-            payload["capture_warning"] = capture_meta["warning"]
-        if capture_meta.get("error"):
-            payload["capture_error"] = capture_meta["error"]
-
-    return payload
+    helpers = load_roboharness_report_module()
+    return helpers.build_proof_pack_manifest_payload(
+        policy_dir,
+        report,
+        checkpoints,
+        html_entrypoint="index.html",
+    )
 
 
 def generate_policy_proof_pack(
@@ -584,7 +533,7 @@ def generate_policy_proof_pack(
 
     helpers = load_roboharness_report_module()
     checkpoints = helpers.capture_frames_from_report(repo_root, report, policy_dir)
-    manifest_payload = build_proof_pack_manifest_payload(report, checkpoints)
+    manifest_payload = build_proof_pack_manifest_payload(policy_dir, report, checkpoints)
     manifest_path = policy_dir / "proof_pack_manifest.json"
     manifest_path.write_text(json.dumps(manifest_payload, indent=2), encoding="utf-8")
     return (
@@ -1298,10 +1247,7 @@ def render_benchmark_section(pages: list[dict[str, str]]) -> str:
     </section>'''
 
 
-def render_proof_pack_section(proof_pack_manifest: dict[str, object] | None) -> str:
-    if not isinstance(proof_pack_manifest, dict):
-        return ""
-
+def render_generic_proof_pack_section(proof_pack_manifest: dict[str, object]) -> str:
     checkpoints = proof_pack_manifest.get("checkpoints")
     if not isinstance(checkpoints, list) or not checkpoints:
         capture_warning = proof_pack_manifest.get("capture_warning")
@@ -1383,6 +1329,316 @@ def render_proof_pack_section(proof_pack_manifest: dict[str, object] | None) -> 
     {''.join(checkpoint_cards)}
   </div>
 </section>'''
+
+
+def render_proof_pack_section(proof_pack_manifest: dict[str, object] | None) -> str:
+    if not isinstance(proof_pack_manifest, dict):
+        return ""
+
+    phase_review = proof_pack_manifest.get("phase_review")
+    if not (isinstance(phase_review, dict) and phase_review.get("enabled") is True):
+        return render_generic_proof_pack_section(proof_pack_manifest)
+
+    phase_timeline = proof_pack_manifest.get("phase_timeline")
+    phase_checkpoints = proof_pack_manifest.get("phase_checkpoints")
+    diagnostic_checkpoints = proof_pack_manifest.get("diagnostic_checkpoints")
+    lag_options = proof_pack_manifest.get("lag_options")
+    default_lag_ticks = proof_pack_manifest.get("default_lag_ticks")
+    default_lag_ms = proof_pack_manifest.get("default_lag_ms")
+    target_lag_options = proof_pack_manifest.get("target_lag_options")
+    default_target_lag_ticks = proof_pack_manifest.get("default_target_lag_ticks")
+    default_target_lag_ms = proof_pack_manifest.get("default_target_lag_ms")
+    if not isinstance(phase_timeline, list) or not isinstance(phase_checkpoints, list):
+        raise SystemExit("phase-aware proof-pack manifest is missing phase timeline data")
+    if not isinstance(diagnostic_checkpoints, list):
+        diagnostic_checkpoints = []
+    if not isinstance(lag_options, list) or not all(isinstance(item, int) for item in lag_options):
+        raise SystemExit("phase-aware proof-pack manifest is missing integer lag_options")
+    if not isinstance(default_lag_ticks, int):
+        raise SystemExit("phase-aware proof-pack manifest is missing default_lag_ticks")
+    if not isinstance(target_lag_options, list) or not all(
+        isinstance(item, int) for item in target_lag_options
+    ):
+        target_lag_options = [0]
+    if not isinstance(default_target_lag_ticks, int):
+        default_target_lag_ticks = 0
+
+    checkpoint_map: dict[str, dict[str, dict[str, object]]] = {}
+    for checkpoint in phase_checkpoints:
+        if not isinstance(checkpoint, dict):
+            continue
+        phase_name = checkpoint.get("phase_name")
+        phase_kind = checkpoint.get("phase_kind")
+        if not isinstance(phase_name, str) or not isinstance(phase_kind, str):
+            continue
+        checkpoint_map.setdefault(phase_name, {})[phase_kind] = checkpoint
+
+    timeline_cards: list[str] = []
+    phase_cards: list[str] = []
+    for entry in phase_timeline:
+        if not isinstance(entry, dict):
+            continue
+        phase_name = entry.get("phase_name")
+        if not isinstance(phase_name, str):
+            continue
+        midpoint_checkpoint = checkpoint_map.get(phase_name, {}).get("midpoint")
+        phase_end_checkpoint = checkpoint_map.get(phase_name, {}).get("phase_end")
+        if not isinstance(midpoint_checkpoint, dict) or not isinstance(phase_end_checkpoint, dict):
+            raise SystemExit(f"phase-aware manifest is missing midpoint/end checkpoints for {phase_name}")
+
+        start_tick = int(entry.get("start_tick", 0) or 0)
+        midpoint_tick = int(entry.get("midpoint_tick", 0) or 0)
+        end_tick = int(entry.get("end_tick", 0) or 0)
+        duration_ticks = int(entry.get("duration_ticks", 0) or 0)
+        duration_secs = float(entry.get("duration_secs", 0.0) or 0.0)
+        timeline_cards.append(
+            f'''<article class="phase-timeline-card">
+  <h3>{html.escape(phase_name)}</h3>
+  <p class="muted">ticks {start_tick}–{end_tick} · midpoint {midpoint_tick} · {duration_ticks} ticks / {duration_secs:.2f} s</p>
+</article>'''
+        )
+
+        midpoint_relative_dir = midpoint_checkpoint.get("relative_dir")
+        midpoint_cameras = midpoint_checkpoint.get("cameras")
+        if not isinstance(midpoint_relative_dir, str) or not isinstance(midpoint_cameras, list):
+            raise SystemExit(f"midpoint checkpoint for {phase_name} is malformed")
+        midpoint_views = "".join(
+            f'''<figure class="proof-view">
+  <img src="{html.escape(f"{midpoint_relative_dir}/{camera}_rgb.png")}" alt="{html.escape(phase_name)} midpoint {html.escape(camera)} overlay" loading="lazy" />
+  <figcaption>{html.escape(camera)}</figcaption>
+</figure>'''
+            for camera in midpoint_cameras
+            if isinstance(camera, str)
+        )
+
+        lag_variants = phase_end_checkpoint.get("lag_variants")
+        if not isinstance(lag_variants, list) or not lag_variants:
+            raise SystemExit(f"phase-end checkpoint for {phase_name} is missing lag_variants")
+        lag_variants_by_tick = {
+            int(variant["lag_ticks"]): variant
+            for variant in lag_variants
+            if isinstance(variant, dict)
+            and isinstance(variant.get("lag_ticks"), int)
+            and isinstance(variant.get("relative_dir"), str)
+        }
+        available_lags = sorted(lag_variants_by_tick)
+        if not available_lags:
+            raise SystemExit(f"phase-end checkpoint for {phase_name} has no usable lag variants")
+        display_lag = default_lag_ticks if default_lag_ticks in lag_variants_by_tick else available_lags[-1]
+        default_variant = lag_variants_by_tick[display_lag]
+        default_variant_dir = str(default_variant["relative_dir"])
+        default_variant_ms = float(default_variant.get("lag_ms", 0.0) or 0.0)
+        target_phase_lag_options = phase_end_checkpoint.get("target_lag_options")
+        if not isinstance(target_phase_lag_options, list) or not all(
+            isinstance(item, int) for item in target_phase_lag_options
+        ):
+            target_phase_lag_options = [0]
+        target_lag_variants = phase_end_checkpoint.get("target_lag_variants")
+        target_variant_fallback_dir = str(default_variant["relative_dir"])
+        target_variants_by_tick: dict[int, dict[str, object]] = {}
+        if isinstance(target_lag_variants, list) and target_lag_variants:
+            target_variants_by_tick = {
+                int(variant["lag_ticks"]): variant
+                for variant in target_lag_variants
+                if isinstance(variant, dict)
+                and isinstance(variant.get("lag_ticks"), int)
+                and isinstance(variant.get("relative_dir"), str)
+            }
+        if not target_variants_by_tick:
+            target_variants_by_tick = {
+                0: {
+                    "lag_ticks": 0,
+                    "lag_ms": 0.0,
+                    "tick": phase_end_checkpoint.get("phase_end_tick", end_tick),
+                    "frame_index": phase_end_checkpoint.get("frame_index", end_tick),
+                    "sim_time_secs": phase_end_checkpoint.get("sim_time_secs", 0.0),
+                    "selection_reason": f"{phase_name} target pose at canonical phase end",
+                    "frame_source": phase_end_checkpoint.get("frame_source", "canonical_replay_trace"),
+                    "relative_dir": target_variant_fallback_dir,
+                    "cameras": default_variant.get("cameras", []),
+                    "_raw_suffix": "_target_rgb.png",
+                }
+            }
+        available_target_lags = sorted(target_variants_by_tick)
+        display_target_lag = (
+            default_target_lag_ticks
+            if default_target_lag_ticks in target_variants_by_tick
+            else available_target_lags[-1]
+        )
+        default_target_variant = target_variants_by_tick[display_target_lag]
+        default_target_variant_ms = float(default_target_variant.get("lag_ms", 0.0) or 0.0)
+        end_cameras = default_variant.get("cameras")
+        if not isinstance(end_cameras, list):
+            raise SystemExit(f"phase-end checkpoint for {phase_name} is missing camera data")
+        phase_end_views = []
+        for camera in end_cameras:
+            if not isinstance(camera, str):
+                continue
+            overlay_lag_map = {
+                str(lag): f"{str(variant['relative_dir'])}/{camera}_rgb.png"
+                for lag, variant in lag_variants_by_tick.items()
+                if isinstance(variant.get("cameras"), list) and camera in variant["cameras"]
+            }
+            actual_lag_map = {
+                str(lag): f"{str(variant['relative_dir'])}/{camera}_actual_rgb.png"
+                for lag, variant in lag_variants_by_tick.items()
+                if isinstance(variant.get("cameras"), list) and camera in variant["cameras"]
+            }
+            actual_lag_ms_map = {
+                str(lag): float(variant.get("lag_ms", 0.0) or 0.0)
+                for lag, variant in lag_variants_by_tick.items()
+                if isinstance(variant.get("cameras"), list) and camera in variant["cameras"]
+            }
+            target_lag_map = {}
+            target_lag_ms_map = {}
+            for lag, variant in target_variants_by_tick.items():
+                cameras = variant.get("cameras")
+                if not isinstance(cameras, list) or camera not in cameras:
+                    continue
+                suffix = str(variant.get("_raw_suffix") or "_rgb.png")
+                target_lag_map[str(lag)] = f"{str(variant['relative_dir'])}/{camera}{suffix}"
+                target_lag_ms_map[str(lag)] = float(variant.get("lag_ms", 0.0) or 0.0)
+            phase_end_views.append(
+                f'''<figure class="proof-view proof-lag-view">
+  <img src="{html.escape(f"{default_variant_dir}/{camera}_rgb.png")}"
+       alt="{html.escape(phase_name)} phase-end {html.escape(camera)} overlay"
+       loading="lazy"
+       data-phase-lag-image
+       data-phase-name="{html.escape(phase_name)}"
+       data-camera="{html.escape(camera)}"
+       data-overlay-variants="{html.escape(json.dumps(overlay_lag_map), quote=True)}"
+       data-actual-variants="{html.escape(json.dumps(actual_lag_map), quote=True)}"
+       data-actual-lag-ms="{html.escape(json.dumps(actual_lag_ms_map), quote=True)}"
+       data-target-variants="{html.escape(json.dumps(target_lag_map), quote=True)}"
+       data-target-lag-ms="{html.escape(json.dumps(target_lag_ms_map), quote=True)}" />
+  <figcaption>{html.escape(camera)} · <span data-phase-lag-label>T+{display_target_lag} ({default_target_variant_ms:.0f} ms) · A+{display_lag} ({default_variant_ms:.0f} ms)</span></figcaption>
+</figure>'''
+            )
+
+        phase_cards.append(
+            f'''<article class="proof-checkpoint-card phase-review-card">
+  <div class="proof-checkpoint-head">
+    <div>
+      <h3>{html.escape(phase_name)}</h3>
+      <p class="muted">Midpoint capture at tick {midpoint_tick}; phase-end review anchored at tick {end_tick}.</p>
+    </div>
+    <div class="proof-checkpoint-meta">
+      <span>{html.escape(f"start {start_tick}")}</span>
+      <span>{html.escape(f"end {end_tick}")}</span>
+    </div>
+  </div>
+  <div class="phase-checkpoint-stack">
+    <div>
+      <h4>Midpoint</h4>
+      <div class="proof-view-grid">
+        {midpoint_views}
+      </div>
+    </div>
+    <div>
+      <h4>Phase End</h4>
+      <div class="proof-view-grid">
+        {''.join(phase_end_views)}
+      </div>
+    </div>
+  </div>
+</article>'''
+        )
+
+    diagnostic_cards: list[str] = []
+    for checkpoint in diagnostic_checkpoints:
+        if not isinstance(checkpoint, dict):
+            continue
+        relative_dir = checkpoint.get("relative_dir")
+        cameras = checkpoint.get("cameras")
+        if not isinstance(relative_dir, str) or not isinstance(cameras, list):
+            continue
+        diagnostic_cards.append(
+            f'''<article class="diagnostic-card">
+  <div class="proof-checkpoint-head">
+    <div>
+      <h3>{html.escape(str(checkpoint.get("name", "diagnostic")))}</h3>
+      <p class="muted">{html.escape(str(checkpoint.get("selection_reason", "")))}</p>
+    </div>
+    <div class="proof-checkpoint-meta">
+      <span>{html.escape(f"tick {checkpoint.get('tick', '-')}")}</span>
+    </div>
+  </div>
+  <div class="proof-view-grid">
+    {''.join(
+        f'<figure class="proof-view"><img src="{html.escape(f"{relative_dir}/{camera}_rgb.png")}" alt="{html.escape(str(checkpoint.get("name", "diagnostic")))} {html.escape(camera)} overlay" loading="lazy" /><figcaption>{html.escape(camera)}</figcaption></figure>'
+        for camera in cameras
+        if isinstance(camera, str)
+    )}
+  </div>
+</article>'''
+        )
+
+    lag_button_html = "".join(
+        f'<button type="button" class="phase-lag-button" data-lag="{lag}">+{lag}</button>'
+        for lag in lag_options
+    )
+    target_lag_button_html = "".join(
+        f'<button type="button" class="phase-lag-button" data-lag="{lag}">+{lag}</button>'
+        for lag in target_lag_options
+    )
+    default_lag_ms_text = (
+        f"{float(default_lag_ms):.0f} ms"
+        if isinstance(default_lag_ms, (int, float))
+        else "n/a"
+    )
+    default_target_lag_ms_text = (
+        f"{float(default_target_lag_ms):.0f} ms"
+        if isinstance(default_target_lag_ms, (int, float))
+        else "n/a"
+    )
+
+    diagnostics_html = (
+        f'''<section class="card diagnostics-section">
+  <h2>Diagnostics</h2>
+  <p class="muted">Generic evidence checkpoints stay available as secondary diagnostics instead of the primary story.</p>
+  <div class="proof-checkpoint-grid diagnostic-grid">
+    {''.join(diagnostic_cards)}
+  </div>
+</section>'''
+        if diagnostic_cards
+        else ""
+    )
+
+    return f'''<section class="overview" id="visual-checkpoints">
+  <div class="phase-review-header">
+    <div>
+      <h2>Phase review</h2>
+      <p class="muted">The proof pack follows the authored phase timeline directly, so the staged locomotion story reads as stand → accelerate → turn → run → settle instead of generic checkpoint archaeology.</p>
+    </div>
+    <div class="proof-checkpoint-meta">
+      <span>{html.escape(f"default target +{default_target_lag_ticks}")}</span>
+      <span>{html.escape(default_target_lag_ms_text)}</span>
+      <span>{html.escape(f"default actual +{default_lag_ticks}")}</span>
+      <span>{html.escape(default_lag_ms_text)}</span>
+    </div>
+  </div>
+  <div class="phase-timeline-grid" id="phase-timeline">
+    {''.join(timeline_cards)}
+  </div>
+  <div class="phase-lag-controls">
+    <div class="phase-lag-selector" id="phase-target-lag-selector" data-default-lag="{default_target_lag_ticks}">
+      <span class="muted">Target timestamp selector</span>
+      <div class="phase-lag-buttons">
+        {target_lag_button_html}
+      </div>
+    </div>
+    <div class="phase-lag-selector" id="phase-lag-selector" data-default-lag="{default_lag_ticks}">
+      <span class="muted">Actual / robot timestamp selector</span>
+      <div class="phase-lag-buttons">
+        {lag_button_html}
+      </div>
+    </div>
+  </div>
+  <div class="proof-checkpoint-grid phase-review-grid">
+    {''.join(phase_cards)}
+  </div>
+</section>
+{diagnostics_html}'''
 
 
 def render_policy_link_card(
@@ -1525,6 +1781,19 @@ def showcase_styles() -> str:
     .proof-view { margin: 0; }
     .proof-view img { width: 100%; height: auto; display: block; border-radius: 14px; border: 1px solid var(--border); background: #f8fafc; }
     .proof-view figcaption { margin-top: 8px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; font-size: 0.78rem; }
+    .phase-review-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
+    .phase-timeline-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); margin-bottom: 18px; }
+    .phase-timeline-card { border: 1px solid var(--border); border-radius: 18px; padding: 14px 16px; background: linear-gradient(180deg, #fbfdff, #f2f7ff); }
+    .phase-timeline-card h3 { margin-bottom: 6px; }
+    .phase-lag-controls { display: grid; gap: 12px; margin-bottom: 18px; }
+    .phase-lag-selector { display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap; padding: 14px 16px; border: 1px solid var(--border); border-radius: 18px; background: #f7f9fc; margin-bottom: 0; }
+    .phase-lag-buttons { display: flex; gap: 10px; flex-wrap: wrap; }
+    .phase-lag-button { border: 1px solid var(--border); background: white; color: #0f172a; border-radius: 999px; padding: 8px 12px; font: inherit; font-weight: 700; cursor: pointer; }
+    .phase-lag-button[data-active="true"] { background: #0f766e; border-color: #0f766e; color: white; }
+    .phase-checkpoint-stack { display: grid; gap: 18px; }
+    .phase-checkpoint-stack h4 { margin-bottom: 10px; font-size: 0.96rem; letter-spacing: 0.02em; }
+    .diagnostics-section { margin-top: 18px; }
+    .diagnostic-grid .diagnostic-card { background: #ffffff; border: 1px solid var(--border); border-radius: 18px; padding: 16px; }
     ul { margin-bottom: 0; }
     @media (max-width: 720px) {
       main { width: min(100% - 20px, 1180px); padding-top: 20px; }
@@ -1624,6 +1893,264 @@ def viewer_loader_script(viewer_module_path: str) -> str:
       for (const stage of stages.slice(1)) {{
         observer.observe(stage);
       }}
+    }}
+
+    function chooseLag(available, requested) {{
+      if (available.includes(requested)) {{
+        return requested;
+      }}
+      const lowerOrEqual = available.filter((value) => value <= requested);
+      if (lowerOrEqual.length > 0) {{
+        return lowerOrEqual[lowerOrEqual.length - 1];
+      }}
+      return available[available.length - 1];
+    }}
+
+    const rawImageCache = new Map();
+    const composedOverlayCache = new Map();
+
+    function parseLagMap(encoded) {{
+      if (!encoded) {{
+        return {{}};
+      }}
+      try {{
+        const parsed = JSON.parse(encoded);
+        return parsed && typeof parsed === "object" ? parsed : {{}};
+      }} catch (_error) {{
+        return {{}};
+      }}
+    }}
+
+    function lagKeys(variants) {{
+      return Object.keys(variants)
+        .map((value) => Number.parseInt(value, 10))
+        .filter((value) => Number.isFinite(value))
+        .sort((left, right) => left - right);
+    }}
+
+    function markLagButtons(selector, selectedLag) {{
+      if (!selector) {{
+        return;
+      }}
+      selector.dataset.selectedLag = String(selectedLag);
+      for (const button of selector.querySelectorAll(".phase-lag-button[data-lag]")) {{
+        button.dataset.active = button.dataset.lag === String(selectedLag) ? "true" : "false";
+      }}
+    }}
+
+    function formatLagLabel(prefix, lagTicks, lagMs) {{
+      const msText = Number.isFinite(lagMs) ? `${{Math.round(lagMs)}} ms` : "n/a";
+      return `${{prefix}}+${{lagTicks}} (${{msText}})`;
+    }}
+
+    async function loadRawImage(url) {{
+      if (rawImageCache.has(url)) {{
+        return rawImageCache.get(url);
+      }}
+      const promise = new Promise((resolve, reject) => {{
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error(`failed to load ${{url}}`));
+        image.src = url;
+      }});
+      rawImageCache.set(url, promise);
+      return promise;
+    }}
+
+    function applyColorLayer(backdrop, color, alpha) {{
+      return [
+        Math.round((backdrop[0] * (1 - alpha)) + (color[0] * alpha)),
+        Math.round((backdrop[1] * (1 - alpha)) + (color[1] * alpha)),
+        Math.round((backdrop[2] * (1 - alpha)) + (color[2] * alpha)),
+      ];
+    }}
+
+    async function composePhaseLagOverlay(targetUrl, actualUrl) {{
+      const cacheKey = `${{targetUrl}}|${{actualUrl}}`;
+      if (composedOverlayCache.has(cacheKey)) {{
+        return composedOverlayCache.get(cacheKey);
+      }}
+      const promise = (async () => {{
+        const [targetImage, actualImage] = await Promise.all([
+          loadRawImage(targetUrl),
+          loadRawImage(actualUrl),
+        ]);
+        const width = actualImage.naturalWidth || actualImage.width;
+        const height = actualImage.naturalHeight || actualImage.height;
+        const sourceCanvas = document.createElement("canvas");
+        sourceCanvas.width = width;
+        sourceCanvas.height = height;
+        const sourceCtx = sourceCanvas.getContext("2d", {{ willReadFrequently: true }});
+        const outputCanvas = document.createElement("canvas");
+        outputCanvas.width = width;
+        outputCanvas.height = height;
+        const outputCtx = outputCanvas.getContext("2d");
+        if (!sourceCtx || !outputCtx) {{
+          throw new Error("2d canvas context unavailable");
+        }}
+
+        sourceCtx.clearRect(0, 0, width, height);
+        sourceCtx.drawImage(actualImage, 0, 0, width, height);
+        const actualData = sourceCtx.getImageData(0, 0, width, height).data;
+        sourceCtx.clearRect(0, 0, width, height);
+        sourceCtx.drawImage(targetImage, 0, 0, width, height);
+        const targetData = sourceCtx.getImageData(0, 0, width, height).data;
+        const output = outputCtx.createImageData(width, height);
+
+        for (let index = 0; index < output.data.length; index += 4) {{
+          const actualGray = (
+            (actualData[index] * 0.299) +
+            (actualData[index + 1] * 0.587) +
+            (actualData[index + 2] * 0.114)
+          );
+          const targetGray = (
+            (targetData[index] * 0.299) +
+            (targetData[index + 1] * 0.587) +
+            (targetData[index + 2] * 0.114)
+          );
+
+          let pixel = [
+            (246 * 0.84) + (actualGray * 0.16),
+            (248 * 0.84) + (actualGray * 0.16),
+            (251 * 0.84) + (actualGray * 0.16),
+          ];
+
+          if (targetGray > 8) {{
+            pixel = applyColorLayer(pixel, [59, 130, 246], 0.50);
+          }}
+          if (actualGray > 8) {{
+            pixel = applyColorLayer(pixel, [249, 115, 22], 0.62);
+          }}
+
+          output.data[index] = pixel[0];
+          output.data[index + 1] = pixel[1];
+          output.data[index + 2] = pixel[2];
+          output.data[index + 3] = 255;
+        }}
+
+        outputCtx.putImageData(output, 0, 0);
+        outputCtx.fillStyle = "rgba(255, 255, 255, 0.92)";
+        outputCtx.beginPath();
+        outputCtx.roundRect(12, 12, 282, 48, 8);
+        outputCtx.fill();
+        outputCtx.fillStyle = "rgba(23, 23, 23, 1)";
+        outputCtx.font = '600 18px "IBM Plex Sans", "Segoe UI", sans-serif';
+        outputCtx.fillText("Blue = target   Orange = actual", 24, 41);
+        return outputCanvas.toDataURL("image/png");
+      }})();
+      composedOverlayCache.set(cacheKey, promise);
+      return promise;
+    }}
+
+    async function updatePhaseLagImage(image, requestedTargetLag, requestedActualLag) {{
+      const overlayVariants = parseLagMap(image.getAttribute("data-overlay-variants"));
+      const actualVariants = parseLagMap(image.getAttribute("data-actual-variants"));
+      const actualLagMs = parseLagMap(image.getAttribute("data-actual-lag-ms"));
+      const targetVariants = parseLagMap(image.getAttribute("data-target-variants"));
+      const targetLagMs = parseLagMap(image.getAttribute("data-target-lag-ms"));
+      const availableActual = lagKeys(actualVariants);
+      const availableTarget = lagKeys(targetVariants);
+      if (availableActual.length === 0 || availableTarget.length === 0) {{
+        return;
+      }}
+
+      const appliedActualLag = chooseLag(availableActual, requestedActualLag);
+      const appliedTargetLag = chooseLag(availableTarget, requestedTargetLag);
+      const overlaySrc = overlayVariants[String(appliedActualLag)];
+      const actualSrc = actualVariants[String(appliedActualLag)];
+      const targetSrc = targetVariants[String(appliedTargetLag)];
+      const label = image.parentElement?.querySelector("[data-phase-lag-label]");
+      if (label) {{
+        label.textContent = `${{formatLagLabel("T", appliedTargetLag, Number(targetLagMs[String(appliedTargetLag)]))}} · ${{formatLagLabel("A", appliedActualLag, Number(actualLagMs[String(appliedActualLag)]))}}`;
+      }}
+
+      if (appliedTargetLag === 0 && typeof overlaySrc === "string" && overlaySrc.length > 0) {{
+        image.setAttribute("src", overlaySrc);
+        return;
+      }}
+      if (typeof actualSrc !== "string" || actualSrc.length === 0) {{
+        if (typeof overlaySrc === "string" && overlaySrc.length > 0) {{
+          image.setAttribute("src", overlaySrc);
+        }}
+        return;
+      }}
+      if (typeof targetSrc !== "string" || targetSrc.length === 0) {{
+        if (typeof overlaySrc === "string" && overlaySrc.length > 0) {{
+          image.setAttribute("src", overlaySrc);
+        }}
+        return;
+      }}
+
+      const renderKey = `${{targetSrc}}|${{actualSrc}}`;
+      image.dataset.renderKey = renderKey;
+      try {{
+        const composedSrc = await composePhaseLagOverlay(targetSrc, actualSrc);
+        if (image.dataset.renderKey === renderKey) {{
+          image.setAttribute("src", composedSrc);
+        }}
+      }} catch (error) {{
+        console.error("failed to compose phase lag overlay", error);
+        if (typeof overlaySrc === "string" && overlaySrc.length > 0) {{
+          image.setAttribute("src", overlaySrc);
+        }}
+      }}
+    }}
+
+    async function applyPhaseLagSelection(requestedActualLag, requestedTargetLag) {{
+      const actualSelector = document.getElementById("phase-lag-selector");
+      const targetSelector = document.getElementById("phase-target-lag-selector");
+      if (!actualSelector) {{
+        return;
+      }}
+      const actualLag = Number.isFinite(requestedActualLag) ? requestedActualLag : 0;
+      const targetLag = Number.isFinite(requestedTargetLag) ? requestedTargetLag : 0;
+      markLagButtons(actualSelector, actualLag);
+      markLagButtons(targetSelector, targetLag);
+      const images = [...document.querySelectorAll("[data-phase-lag-image]")];
+      await Promise.all(images.map((image) => updatePhaseLagImage(image, targetLag, actualLag)));
+    }}
+
+    const lagSelector = document.getElementById("phase-lag-selector");
+    const targetLagSelector = document.getElementById("phase-target-lag-selector");
+    if (lagSelector) {{
+      const defaultLag = Number.parseInt(lagSelector.dataset.defaultLag || "0", 10);
+      const defaultTargetLag = targetLagSelector
+        ? Number.parseInt(targetLagSelector.dataset.defaultLag || "0", 10)
+        : 0;
+      if (targetLagSelector) {{
+        for (const button of targetLagSelector.querySelectorAll(".phase-lag-button[data-lag]")) {{
+          button.addEventListener("click", () => {{
+            const requestedTargetLag = Number.parseInt(button.dataset.lag || "0", 10);
+            const requestedActualLag = Number.parseInt(
+              lagSelector.dataset.selectedLag || lagSelector.dataset.defaultLag || "0",
+              10
+            );
+            void applyPhaseLagSelection(
+              Number.isFinite(requestedActualLag) ? requestedActualLag : 0,
+              Number.isFinite(requestedTargetLag) ? requestedTargetLag : 0
+            );
+          }});
+        }}
+      }}
+      for (const button of lagSelector.querySelectorAll(".phase-lag-button[data-lag]")) {{
+        button.addEventListener("click", () => {{
+          const requestedActualLag = Number.parseInt(button.dataset.lag || "0", 10);
+          const requestedTargetLag = targetLagSelector
+            ? Number.parseInt(
+                targetLagSelector.dataset.selectedLag || targetLagSelector.dataset.defaultLag || "0",
+                10
+              )
+            : 0;
+          void applyPhaseLagSelection(
+            Number.isFinite(requestedActualLag) ? requestedActualLag : 0,
+            Number.isFinite(requestedTargetLag) ? requestedTargetLag : 0
+          );
+        }});
+      }}
+      void applyPhaseLagSelection(
+        Number.isFinite(defaultLag) ? defaultLag : 0,
+        Number.isFinite(defaultTargetLag) ? defaultTargetLag : 0
+      );
     }}
   </script>"""
 
