@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import html
 import json
 from pathlib import Path
 
@@ -100,6 +101,13 @@ def validate_proof_pack_capture(root: Path, entry: dict[str, object], detail_tex
             raise SystemExit(f"{card_id}: phase-aware detail page missing actual timestamp selector")
         if 'id="phase-target-lag-selector"' not in detail_text:
             raise SystemExit(f"{card_id}: phase-aware detail page missing target timestamp selector")
+        if f'data-selected-lag="{proof_pack_manifest.get("default_lag_ticks")}"' not in detail_text:
+            raise SystemExit(f"{card_id}: phase-aware detail page missing static actual selected lag")
+        if (
+            f'data-selected-lag="{proof_pack_manifest.get("default_target_lag_ticks")}"'
+            not in detail_text
+        ):
+            raise SystemExit(f"{card_id}: phase-aware detail page missing static target selected lag")
 
         phase_timeline = proof_pack_manifest.get("phase_timeline")
         phase_checkpoints = proof_pack_manifest.get("phase_checkpoints")
@@ -121,6 +129,19 @@ def validate_proof_pack_capture(root: Path, entry: dict[str, object], detail_tex
             raise SystemExit(
                 f"{card_id}: phase-aware proof-pack manifest missing default_target_lag_ticks"
             )
+        for phase_entry in phase_timeline:
+            if not isinstance(phase_entry, dict):
+                raise SystemExit(f"{card_id}: phase-aware timeline entry is not an object")
+            phase_name = phase_entry.get("phase_name")
+            if not isinstance(phase_name, str) or not phase_name:
+                raise SystemExit(f"{card_id}: phase-aware timeline entry missing phase_name")
+            debug_marker = (
+                f'data-phase-debug-phase="{html.escape(phase_name, quote=True)}"'
+            )
+            if debug_marker not in detail_text:
+                raise SystemExit(
+                    f"{card_id}: phase-aware detail page missing debug metadata for {phase_name}"
+                )
 
         for checkpoint in phase_checkpoints:
             if not isinstance(checkpoint, dict):

@@ -153,11 +153,43 @@ Each `phase_end` checkpoint also carries:
   captures
 
 The phase-first detail page renders this contract with `id="phase-timeline"`
-and `id="phase-lag-selector"`, defaulting to `+3` lag review while still
-showing the derived millisecond value from `default_lag_ms`.
+and dual selectors `id="phase-target-lag-selector"` /
+`id="phase-lag-selector"`, defaulting to target `+0` and actual `+3` lag
+review while still showing the derived millisecond values from
+`default_target_lag_ms` and `default_lag_ms`.
+
+Each phase card also embeds a collapsed `Debug metadata` block in the static
+HTML. That block serializes the phase timeline, midpoint anchor, canonical
+phase-end anchor, default review pair, and the full target/actual variant
+tables with ticks and relative asset directories. The point is deliberate:
+most proof-pack debugging should stay possible from the generated HTML and
+manifest alone, without opening browser DevTools or reproducing the click path.
 
 The staged velocity showcases reserve at least five post-phase review ticks so
 the published `+0..+5` lag contract is truthful instead of synthetic.
+
+## Optional browser smoke check
+
+The primary debug path remains static: manifest inspection, generated HTML, and
+runtime metrics. When you do want to prove that the page JavaScript updates the
+selectors and overlays correctly in a real browser, use the optional local
+smoke command:
+
+```bash
+make site-browser-smoke SITE_BROWSER_POLICY=gear_sonic
+```
+
+That command starts a temporary local HTTP server, drives headless Chrome
+against the selected detail page, clicks the target/actual lag controls, and
+asserts the expected transition path:
+
+- target lag change switches from the precomputed overlay asset to the
+  browser-composed cross-timestamp overlay
+- actual lag change updates the captions and selected state consistently
+- resetting target lag to `+0` returns to the precomputed overlay asset path
+
+It is intentionally separate from the default `make showcase-verify` path so
+normal CI/debug loops stay lightweight.
 
 ## Tracking sidecars
 

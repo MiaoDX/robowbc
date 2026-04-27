@@ -620,6 +620,10 @@ frequency_hz = 50
         self.assertIn('id="phase-target-lag-selector"', detail)
         self.assertIn('data-default-lag="3"', detail)
         self.assertIn('data-default-lag="0"', detail)
+        self.assertIn('data-selected-lag="3"', detail)
+        self.assertIn('data-selected-lag="0"', detail)
+        self.assertIn('data-active="true"', detail)
+        self.assertIn('aria-pressed="true"', detail)
         for lag in range(6):
             self.assertIn(f'data-lag="{lag}"', detail)
             self.assertIn(f'>{f"+{lag}"}<', detail)
@@ -627,6 +631,9 @@ frequency_hz = 50
         self.assertIn("A+3 (60 ms)", detail)
         self.assertIn("stand", detail)
         self.assertIn("run", detail)
+        self.assertIn('data-phase-debug-phase="stand"', detail)
+        self.assertIn("actual_variants", detail)
+        self.assertIn("target_variants", detail)
         self.assertIn("Diagnostics", detail)
         self.assertIn("peak_latency", detail)
 

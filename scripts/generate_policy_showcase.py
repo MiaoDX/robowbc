@@ -1373,6 +1373,25 @@ def render_proof_pack_section(proof_pack_manifest: dict[str, object] | None) -> 
             continue
         checkpoint_map.setdefault(phase_name, {})[phase_kind] = checkpoint
 
+    def debug_variant_summary(variant: dict[str, object]) -> dict[str, object]:
+        return {
+            "lag_ticks": int(variant.get("lag_ticks", 0) or 0),
+            "lag_ms": float(variant.get("lag_ms", 0.0) or 0.0),
+            "tick": int(variant.get("tick", 0) or 0),
+            "frame_index": int(variant.get("frame_index", 0) or 0),
+            "sim_time_secs": float(variant.get("sim_time_secs", 0.0) or 0.0),
+            "relative_dir": str(variant.get("relative_dir", "")),
+            "frame_source": str(variant.get("frame_source", "")),
+            "selection_reason": str(variant.get("selection_reason", "")),
+            "cameras": [str(camera) for camera in variant.get("cameras", []) if isinstance(camera, str)],
+        }
+
+    def render_lag_buttons(lags: list[int], selected_lag: int) -> str:
+        return "".join(
+            f'<button type="button" class="phase-lag-button" data-lag="{lag}" data-active="{"true" if lag == selected_lag else "false"}" aria-pressed="{"true" if lag == selected_lag else "false"}">+{lag}</button>'
+            for lag in lags
+        )
+
     timeline_cards: list[str] = []
     phase_cards: list[str] = []
     for entry in phase_timeline:
@@ -1467,6 +1486,12 @@ def render_proof_pack_section(proof_pack_manifest: dict[str, object] | None) -> 
         )
         default_target_variant = target_variants_by_tick[display_target_lag]
         default_target_variant_ms = float(default_target_variant.get("lag_ms", 0.0) or 0.0)
+        default_actual_tick = int(default_variant.get("tick", end_tick) or end_tick)
+        default_actual_frame_index = int(default_variant.get("frame_index", end_tick) or end_tick)
+        default_target_tick = int(default_target_variant.get("tick", end_tick) or end_tick)
+        default_target_frame_index = int(
+            default_target_variant.get("frame_index", end_tick) or end_tick
+        )
         end_cameras = default_variant.get("cameras")
         if not isinstance(end_cameras, list):
             raise SystemExit(f"phase-end checkpoint for {phase_name} is missing camera data")
@@ -1506,17 +1531,61 @@ def render_proof_pack_section(proof_pack_manifest: dict[str, object] | None) -> 
        data-phase-lag-image
        data-phase-name="{html.escape(phase_name)}"
        data-camera="{html.escape(camera)}"
+       data-phase-end-tick="{end_tick}"
+       data-default-actual-tick="{default_actual_tick}"
+       data-default-actual-frame-index="{default_actual_frame_index}"
+       data-default-target-tick="{default_target_tick}"
+       data-default-target-frame-index="{default_target_frame_index}"
        data-overlay-variants="{html.escape(json.dumps(overlay_lag_map), quote=True)}"
        data-actual-variants="{html.escape(json.dumps(actual_lag_map), quote=True)}"
        data-actual-lag-ms="{html.escape(json.dumps(actual_lag_ms_map), quote=True)}"
        data-target-variants="{html.escape(json.dumps(target_lag_map), quote=True)}"
        data-target-lag-ms="{html.escape(json.dumps(target_lag_ms_map), quote=True)}" />
-  <figcaption>{html.escape(camera)} · <span data-phase-lag-label>T+{display_target_lag} ({default_target_variant_ms:.0f} ms) · A+{display_lag} ({default_variant_ms:.0f} ms)</span></figcaption>
+  <figcaption>{html.escape(camera)} · <span data-phase-lag-label aria-live="polite">T+{display_target_lag} ({default_target_variant_ms:.0f} ms) · A+{display_lag} ({default_variant_ms:.0f} ms)</span></figcaption>
 </figure>'''
             )
 
+        phase_end_anchor = debug_variant_summary(phase_end_checkpoint)
+        phase_end_anchor["phase_end_tick"] = int(
+            phase_end_checkpoint.get("phase_end_tick", end_tick) or end_tick
+        )
+        phase_debug_payload = {
+            "phase_name": phase_name,
+            "timeline": {
+                "start_tick": start_tick,
+                "midpoint_tick": midpoint_tick,
+                "end_tick": end_tick,
+                "duration_ticks": duration_ticks,
+                "duration_secs": duration_secs,
+            },
+            "midpoint": debug_variant_summary(midpoint_checkpoint),
+            "phase_end_anchor": phase_end_anchor,
+            "default_review": {
+                "target_lag_ticks": display_target_lag,
+                "target_lag_ms": default_target_variant_ms,
+                "target_tick": default_target_tick,
+                "target_frame_index": default_target_frame_index,
+                "target_relative_dir": str(default_target_variant.get("relative_dir", "")),
+                "actual_lag_ticks": display_lag,
+                "actual_lag_ms": default_variant_ms,
+                "actual_tick": default_actual_tick,
+                "actual_frame_index": default_actual_frame_index,
+                "actual_relative_dir": default_variant_dir,
+            },
+            "actual_variants": [
+                debug_variant_summary(lag_variants_by_tick[lag]) for lag in available_lags
+            ],
+            "target_variants": [
+                debug_variant_summary(target_variants_by_tick[lag])
+                for lag in available_target_lags
+            ],
+        }
+        phase_debug_json = html.escape(
+            json.dumps(phase_debug_payload, indent=2, sort_keys=True)
+        )
+
         phase_cards.append(
-            f'''<article class="proof-checkpoint-card phase-review-card">
+            f'''<article class="proof-checkpoint-card phase-review-card" data-phase-review-phase="{html.escape(phase_name)}">
   <div class="proof-checkpoint-head">
     <div>
       <h3>{html.escape(phase_name)}</h3>
@@ -1541,6 +1610,11 @@ def render_proof_pack_section(proof_pack_manifest: dict[str, object] | None) -> 
       </div>
     </div>
   </div>
+  <details class="phase-debug-panel" data-phase-debug-phase="{html.escape(phase_name)}">
+    <summary>Debug metadata</summary>
+    <p class="muted">Static tick and asset-path contract for manual debugging without driving the browser controls.</p>
+    <pre>{phase_debug_json}</pre>
+  </details>
 </article>'''
         )
 
@@ -1573,13 +1647,9 @@ def render_proof_pack_section(proof_pack_manifest: dict[str, object] | None) -> 
 </article>'''
         )
 
-    lag_button_html = "".join(
-        f'<button type="button" class="phase-lag-button" data-lag="{lag}">+{lag}</button>'
-        for lag in lag_options
-    )
-    target_lag_button_html = "".join(
-        f'<button type="button" class="phase-lag-button" data-lag="{lag}">+{lag}</button>'
-        for lag in target_lag_options
+    lag_button_html = render_lag_buttons(lag_options, default_lag_ticks)
+    target_lag_button_html = render_lag_buttons(
+        target_lag_options, default_target_lag_ticks
     )
     default_lag_ms_text = (
         f"{float(default_lag_ms):.0f} ms"
@@ -1621,13 +1691,13 @@ def render_proof_pack_section(proof_pack_manifest: dict[str, object] | None) -> 
     {''.join(timeline_cards)}
   </div>
   <div class="phase-lag-controls">
-    <div class="phase-lag-selector" id="phase-target-lag-selector" data-default-lag="{default_target_lag_ticks}">
+    <div class="phase-lag-selector" id="phase-target-lag-selector" data-default-lag="{default_target_lag_ticks}" data-selected-lag="{default_target_lag_ticks}">
       <span class="muted">Target timestamp selector</span>
       <div class="phase-lag-buttons">
         {target_lag_button_html}
       </div>
     </div>
-    <div class="phase-lag-selector" id="phase-lag-selector" data-default-lag="{default_lag_ticks}">
+    <div class="phase-lag-selector" id="phase-lag-selector" data-default-lag="{default_lag_ticks}" data-selected-lag="{default_lag_ticks}">
       <span class="muted">Actual / robot timestamp selector</span>
       <div class="phase-lag-buttons">
         {lag_button_html}
@@ -1792,6 +1862,10 @@ def showcase_styles() -> str:
     .phase-lag-button[data-active="true"] { background: #0f766e; border-color: #0f766e; color: white; }
     .phase-checkpoint-stack { display: grid; gap: 18px; }
     .phase-checkpoint-stack h4 { margin-bottom: 10px; font-size: 0.96rem; letter-spacing: 0.02em; }
+    .phase-debug-panel { margin-top: 16px; border: 1px solid var(--border); border-radius: 16px; background: #ffffff; padding: 12px 14px; }
+    .phase-debug-panel summary { cursor: pointer; font-weight: 700; }
+    .phase-debug-panel p { margin: 10px 0 0; }
+    .phase-debug-panel pre { margin: 10px 0 0; padding: 12px; border-radius: 12px; background: #0f172a; color: #e2e8f0; overflow-x: auto; font-size: 0.82rem; line-height: 1.45; }
     .diagnostics-section { margin-top: 18px; }
     .diagnostic-grid .diagnostic-card { background: #ffffff; border: 1px solid var(--border); border-radius: 18px; padding: 16px; }
     ul { margin-bottom: 0; }
@@ -1934,7 +2008,9 @@ def viewer_loader_script(viewer_module_path: str) -> str:
       }}
       selector.dataset.selectedLag = String(selectedLag);
       for (const button of selector.querySelectorAll(".phase-lag-button[data-lag]")) {{
-        button.dataset.active = button.dataset.lag === String(selectedLag) ? "true" : "false";
+        const isActive = button.dataset.lag === String(selectedLag);
+        button.dataset.active = isActive ? "true" : "false";
+        button.setAttribute("aria-pressed", isActive ? "true" : "false");
       }}
     }}
 
