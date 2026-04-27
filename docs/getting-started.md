@@ -121,7 +121,10 @@ narrow standing-placeholder tracking path instead, set
 `standing_placeholder_tracking = true` under `[runtime]` in
 `configs/sonic_g1.toml`. That path runs the encoder+decoder tracking contract
 with a zero-motion standing reference, does not execute `planner_sonic.onnx` on
-that tick, and is not a generic motion-reference API.
+that tick, and is not a generic motion-reference API. GEAR-Sonic runtime
+configs support `cpu`, `cuda`, and `tensor_rt`, but the checked-in
+`configs/sonic_g1.toml` keeps all three model blocks on CPU until you opt into
+a machine with matching ONNX Runtime and NVIDIA runtime dependencies.
 
 ## Run BFM-Zero with the public G1 bundle
 

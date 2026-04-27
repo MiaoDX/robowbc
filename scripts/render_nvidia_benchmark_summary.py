@@ -95,6 +95,20 @@ def status_class(artifact: dict[str, Any] | None) -> str:
     return "blocked"
 
 
+def case_group(case_id: str) -> str:
+    if case_id.startswith("gear_sonic/planner_only_"):
+        return "Planner only"
+    if case_id == "gear_sonic/encoder_decoder_only_tracking_tick":
+        return "Encoder + decoder only"
+    if case_id.startswith("gear_sonic/full_velocity_tick_"):
+        return "Full velocity tick"
+    if case_id == "gear_sonic/end_to_end_cli_loop":
+        return "GEAR-Sonic end-to-end"
+    if case_id.startswith("decoupled_wbc/"):
+        return "Decoupled WBC"
+    return "Other"
+
+
 def build_summary(registry: dict[str, Any], output_root: Path) -> dict[str, Any]:
     official_artifacts = []
     robowbc_artifacts = []
@@ -112,6 +126,7 @@ def build_summary(registry: dict[str, Any], output_root: Path) -> dict[str, Any]
         rows.append(
             {
                 "case_id": case_id,
+                "group": case_group(case_id),
                 "description": str(case.get("description", "")),
                 "interpretation": str(case["interpretation"]),
                 "official": official,
@@ -166,8 +181,8 @@ def render_markdown(summary: dict[str, Any]) -> str:
         "",
         "## Case Matrix",
         "",
-        "| Case ID | RoboWBC | Official NVIDIA | RoboWBC / Official (p50) | Why it matters |",
-        "|---------|---------|------------------|---------------------------|----------------|",
+        "| Path Group | Case ID | RoboWBC | Official NVIDIA | RoboWBC / Official (p50) | Why it matters |",
+        "|------------|---------|---------|------------------|---------------------------|----------------|",
     ]
 
     for row in summary["rows"]:
@@ -175,6 +190,7 @@ def render_markdown(summary: dict[str, Any]) -> str:
             "| "
             + " | ".join(
                 [
+                    row["group"],
                     f"`{row['case_id']}`",
                     artifact_cell(row["robowbc"]),
                     artifact_cell(row["official"]),
@@ -245,6 +261,7 @@ def render_html(summary: dict[str, Any]) -> str:
     for row in summary["rows"]:
         rows_html.append(
             f"""<tr>
+  <td><span class="group-pill">{html.escape(row['group'])}</span></td>
   <td>
     <code>{html.escape(row['case_id'])}</code>
     <div class="case-detail">{html.escape(row['description'])}</div>
@@ -308,6 +325,7 @@ def render_html(summary: dict[str, Any]) -> str:
     .metric-card {{ background: #f7f9fc; border: 1px solid var(--border); border-radius: 18px; padding: 14px 16px; }}
     .metric-card span {{ display: block; color: var(--muted); font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }}
     .metric-card strong {{ font-size: 1rem; }}
+    .group-pill {{ display: inline-flex; align-items: center; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border); background: #eef4ff; color: var(--accent); font-size: 0.82rem; font-weight: 600; }}
     table {{ width: 100%; border-collapse: collapse; }}
     th, td {{ text-align: left; padding: 14px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }}
     th {{ font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }}
@@ -352,6 +370,7 @@ def render_html(summary: dict[str, Any]) -> str:
       <table>
         <thead>
           <tr>
+            <th>Path group</th>
             <th>Case</th>
             <th>RoboWBC</th>
             <th>Official NVIDIA</th>

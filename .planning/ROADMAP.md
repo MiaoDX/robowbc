@@ -15,6 +15,8 @@ runtime execution, control timing, and MuJoCo stepping.
 - [x] **Phase 2: Generate per-run roboharness proof packs from robowbc artifacts**
 - [x] **Phase 3: Expose a live PyO3 MuJoCo session for direct roboharness backends**
 - [x] **Phase 4: Make the visual harness phase-aware with lag-selectable phase-end comparisons**
+- [x] **Phase 5: Make the NVIDIA parity benchmark provider-truthful across RoboWBC and official GEAR-Sonic paths**
+- [x] **Phase 6: Publish the split-path NVIDIA HTML report and guard it with full-site/browser regression checks**
 
 ## Delivered
 
@@ -31,6 +33,14 @@ runtime execution, control timing, and MuJoCo stepping.
   propagating named schedule phases through the CLI artifacts, proof-pack
   manifests, static detail pages, and bundle validator, while keeping tracking
   demos generic unless an explicit sibling `.phases.toml` sidecar is present.
+- Phase 5 made the NVIDIA comparison provider-truthful by splitting GEAR-Sonic
+  into planner-only, encoder+decoder-only, and full live velocity rows;
+  threading `cpu`, `cuda`, and `tensor_rt` through both comparison stacks; and
+  emitting blocked artifacts instead of silently relabeling CPU results.
+- Phase 6 grouped those rows in the generated Markdown/HTML summaries, updated
+  public docs around provider truthfulness and CPU defaults, and verified the
+  generated site plus browser-driven GEAR-Sonic detail page against the full
+  showcase harness path.
 
 ## Verification Notes
 
@@ -47,6 +57,15 @@ runtime execution, control timing, and MuJoCo stepping.
   `MUJOCO_DOWNLOAD_DIR=/tmp/mujoco cargo check --manifest-path crates/robowbc-py/Cargo.toml`,
   `LD_LIBRARY_PATH=/tmp/mujoco/mujoco-3.6.0/lib MUJOCO_DOWNLOAD_DIR=/tmp/mujoco cargo clippy --manifest-path crates/robowbc-py/Cargo.toml -- -D warnings`,
   and `python3 -m py_compile` on the updated scripts/example.
+- Phase 5/6 verification passed:
+  `cargo test -p robowbc-ort`,
+  `python3 -m unittest tests.test_nvidia_benchmarks tests.test_site_browser_smoke tests.test_policy_showcase tests.test_validate_site_bundle`,
+  `cargo test --workspace --all-targets`,
+  `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo fmt --all -- --check`,
+  `cargo doc --workspace --no-deps`,
+  `make showcase-verify PYTHON=python3 SITE_OUTPUT_DIR=/tmp/robowbc-site MUJOCO_DOWNLOAD_DIR=/tmp/mujoco`,
+  and `make site-browser-smoke PYTHON=python3 SITE_OUTPUT_DIR=/tmp/robowbc-site SITE_BROWSER_POLICY=gear_sonic`.
 - Known baseline issue: `LD_LIBRARY_PATH=/tmp/mujoco/mujoco-3.6.0/lib MUJOCO_DOWNLOAD_DIR=/tmp/mujoco cargo test -p robowbc-sim --features mujoco-auto-download`
   still reports five existing MuJoCo transport test failures:
   `find_sensor_span_prefers_primary_named_imu_sensor`,
@@ -142,5 +161,47 @@ ends.
 
 Plans:
 - [x] `04-01-PLAN.md`
+
+### Phase 5: Make the NVIDIA parity benchmark provider-truthful across RoboWBC and official GEAR-Sonic paths
+
+**Status:** Complete
+**Goal:** replace the ambiguous GEAR-Sonic latency rows with provider-matched,
+truthful benchmark seams that make RoboWBC and the official NVIDIA path measure
+the same thing.
+**Requirements**:
+- split GEAR-Sonic latency into planner-only, encoder+decoder-only, and full
+  live velocity rows instead of one ambiguous `replan_tick` bucket
+- pass `cpu`, `cuda`, and `tensor_rt` labels end to end through RoboWBC and the
+  official harness and fail loudly when provider initialization is unavailable
+- keep `configs/sonic_g1.toml` CPU by default while benchmark wrappers rewrite
+  all three provider blocks together for temporary comparison runs
+- emit `status = "blocked"` artifacts when a provider/path combination is not
+  wired fairly instead of silently relabeling a CPU measurement
+**Depends on:** Phase 4
+**Plans:** 1 plan
+
+Plans:
+- [x] `05-01-PLAN.md`
+
+### Phase 6: Publish the split-path NVIDIA HTML report and guard it with full-site/browser regression checks
+
+**Status:** Complete
+**Goal:** publish the provider-matched benchmark story in the generated
+Markdown/HTML surfaces and verify that the full site/report/browser path shows
+no regressions.
+**Requirements**:
+- render the benchmark split as explicit path groups in the generated Markdown
+  and HTML report instead of a flat case list
+- update public docs and onboarding notes so provider truthfulness, blocked GPU
+  rows, and the checked-in CPU default are explicit
+- verify the full generated site bundle, benchmark HTML, proof-pack manifests,
+  and browser-driven GEAR-Sonic detail page against the existing showcase path
+- keep the no-regression workflow scripted through the existing `make
+  showcase-verify` and `make site-browser-smoke` commands
+**Depends on:** Phase 5
+**Plans:** 1 plan
+
+Plans:
+- [x] `06-01-PLAN.md`
 
 ---
