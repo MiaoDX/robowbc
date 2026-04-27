@@ -166,6 +166,7 @@ class NvidiaBenchmarkTests(unittest.TestCase):
                 """
                 #!/usr/bin/env python3
                 import json
+                import os
                 import pathlib
                 import re
                 import sys
@@ -178,6 +179,11 @@ class NvidiaBenchmarkTests(unittest.TestCase):
 
                     config_path = pathlib.Path(args[args.index("--config") + 1])
                     config_text = config_path.read_text(encoding="utf-8")
+                    mujoco_download_dir = os.environ.get("MUJOCO_DOWNLOAD_DIR")
+                    if not mujoco_download_dir:
+                        raise SystemExit("MUJOCO_DOWNLOAD_DIR was not provided to cargo run")
+                    if not pathlib.Path(mujoco_download_dir).is_absolute():
+                        raise SystemExit("MUJOCO_DOWNLOAD_DIR must be absolute")
                     match = re.search(r'^output_path\\s*=\\s*"([^"]+)"\\s*$', config_text, re.MULTILINE)
                     if match is None:
                         raise SystemExit("report output_path missing from generated config")

@@ -20,7 +20,7 @@
       "case_id": "gear_sonic_velocity/cold_start_tick",
       "family": "gear_sonic",
       "kind": "microbenchmark",
-      "description": "First velocity tick after reset; forces a fresh planner path.",
+      "description": "First full velocity-policy tick after reset; seeds planner motion and runs the encoder plus decoder path.",
       "criterion_id": "policy/gear_sonic_velocity/cold_start_tick",
       "command_fixture": {
         "kind": "velocity",
@@ -35,7 +35,7 @@
       "case_id": "gear_sonic_velocity/warm_steady_state_tick",
       "family": "gear_sonic",
       "kind": "microbenchmark",
-      "description": "Velocity interpolation tick after an initial plan; planner stays idle.",
+      "description": "Full velocity-policy tick after planner bootstrap with no replan request pending.",
       "criterion_id": "policy/gear_sonic_velocity/warm_steady_state_tick",
       "command_fixture": {
         "kind": "velocity",
@@ -50,7 +50,7 @@
       "case_id": "gear_sonic_velocity/replan_tick",
       "family": "gear_sonic",
       "kind": "microbenchmark",
-      "description": "Velocity tick that crosses the replan boundary and executes planner_sonic.onnx.",
+      "description": "Full velocity-policy tick at the default slow-walk replan boundary; measures control-loop work while a fresh planner path is requested asynchronously.",
       "criterion_id": "policy/gear_sonic_velocity/replan_tick",
       "command_fixture": {
         "kind": "velocity",
@@ -59,7 +59,7 @@
       "warmup_policy": "reset_then_prime_until_replan_boundary",
       "robowbc_command": "GEAR_SONIC_MODEL_DIR=models/gear-sonic cargo bench -p robowbc-ort --bench inference -- --output-format bencher 'policy/gear_sonic_velocity/replan_tick'",
       "official_command": "python3 scripts/bench_nvidia_official.py --case gear_sonic_velocity/replan_tick",
-      "interpretation": "If replan ticks miss parity, the planner path needs attention before stronger NVIDIA comparison claims."
+      "interpretation": "If this row regresses, the control loop is spending too much work at the replanning boundary even before any background planner cost is considered."
     },
     {
       "case_id": "gear_sonic_tracking/standing_placeholder_tick",

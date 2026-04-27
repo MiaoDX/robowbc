@@ -6,6 +6,7 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <limits>
 #include <numeric>
@@ -31,7 +32,11 @@ namespace {
 constexpr std::size_t kPlannerQposDim = 36;
 constexpr std::size_t kPlannerJointOffset = 7;
 constexpr std::size_t kPlannerContextLen = 4;
-constexpr std::size_t kReplanIntervalTicks = 5;
+constexpr std::size_t kReplanIntervalTicksDefault = 50;
+constexpr std::size_t kReplanIntervalTicksRunning = 5;
+constexpr std::size_t kPlannerThreadIntervalTicks = 5;
+constexpr std::size_t kPlannerLookAheadSteps = 2;
+constexpr std::size_t kPlannerBlendFrames = 8;
 constexpr std::size_t kAllowedPredNumTokens = 11;
 constexpr std::array<std::int64_t, kAllowedPredNumTokens> kAllowedPredNumTokensMask = {
     0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0,
@@ -40,12 +45,12 @@ constexpr float kDefaultHeightMeters = 0.74f;
 constexpr float kOfficialDefaultHeightMeters = 0.788740f;
 constexpr float kDefaultHeightSentinel = -1.0f;
 constexpr std::int64_t kDefaultModeWalk = 2;
+constexpr std::int64_t kDefaultModeRun = 3;
 constexpr std::int64_t kDefaultModeIdle = 0;
 constexpr std::int64_t kDefaultModeSlowWalk = 1;
 constexpr std::size_t kReferenceFutureFrames = 10;
 constexpr std::size_t kReferenceFrameStep = 5;
 constexpr float kControlDtSeconds = 1.0f / 50.0f;
-constexpr float kPlannerInterpStep = 30.0f / 50.0f;
 constexpr std::size_t kEncoderDim = 64;
 constexpr std::size_t kEncoderObsDictDim = 1762;
 constexpr std::size_t kDecoderObsDictDim = 994;
@@ -164,14 +169,48 @@ PlannerCommand derive_planner_command(float& facing_yaw_rad, const Twist& twist)
     const float local_movement_angle = std::atan2(twist.linear[1], twist.linear[0]);
     const auto [movement_angle, slow_walk_speed] =
         bin_angle_to_8_directions(facing_yaw_rad + local_movement_angle);
+    const auto [mode, target_vel] =
+        command_norm < 0.8f
+            ? std::pair{kDefaultModeSlowWalk, slow_walk_speed}
+            : (command_norm < 2.5f
+                   ? std::pair{kDefaultModeWalk, -1.0f}
+                   : std::pair{kDefaultModeRun, -1.0f});
 
     return PlannerCommand{
-        kDefaultModeSlowWalk,
-        slow_walk_speed,
+        mode,
+        target_vel,
         kDefaultHeightSentinel,
         {std::cos(movement_angle), std::sin(movement_angle), 0.0f},
         facing_direction,
     };
+}
+
+bool planner_command_changed(
+    const std::optional<PlannerCommand>& previous,
+    const PlannerCommand& next
+) {
+    const auto vec3_distance = [](const std::array<float, 3>& a, const std::array<float, 3>& b) {
+        const float dx = a[0] - b[0];
+        const float dy = a[1] - b[1];
+        const float dz = a[2] - b[2];
+        return std::sqrt(dx * dx + dy * dy + dz * dz);
+    };
+
+    if (!previous.has_value()) {
+        return true;
+    }
+
+    return previous->mode != next.mode
+        || std::abs(previous->target_vel - next.target_vel) > 0.05f
+        || std::abs(previous->height - next.height) > 1e-3f
+        || vec3_distance(previous->movement_direction, next.movement_direction) > 0.1f
+        || vec3_distance(previous->facing_direction, next.facing_direction) > 0.1f;
+}
+
+std::size_t planner_replan_interval_ticks(const PlannerCommand& command) {
+    return command.mode == kDefaultModeRun
+        ? kReplanIntervalTicksRunning
+        : kReplanIntervalTicksDefault;
 }
 
 std::vector<float> default_pose() {
@@ -296,14 +335,26 @@ Ort::Session make_session(Ort::Env& env, const fs::path& model_path) {
 
 struct PlannerState {
     std::deque<std::vector<float>> context;
-    std::vector<std::vector<float>> trajectory;
-    std::size_t traj_index = 0;
-    float interp_phase = 0.0f;
-    std::size_t steps_since_plan = kReplanIntervalTicks;
+    std::size_t steps_since_plan = kReplanIntervalTicksDefault;
     std::vector<float> last_context_frame;
+    std::vector<std::vector<float>> motion_qpos_50hz;
+    std::vector<std::vector<float>> motion_joint_velocities_isaaclab;
+    std::size_t current_motion_frame = 0;
+    float facing_yaw_rad = 0.0f;
+    std::optional<std::array<double, 4>> init_base_quat_wxyz;
+    std::optional<std::array<double, 4>> init_ref_root_quat_wxyz;
+    std::optional<PlannerCommand> last_command;
+
+    struct PendingPlannerReplan {
+        std::size_t request_motion_frame = 0;
+        PlannerCommand command{};
+        std::future<std::vector<std::vector<float>>> future;
+    };
+
+    std::optional<PendingPlannerReplan> pending_replan;
 
     PlannerState()
-        : context(), trajectory(), last_context_frame()
+        : context(), last_context_frame()
     {
         reset();
     }
@@ -314,11 +365,16 @@ struct PlannerState {
         for (std::size_t index = 0; index < kPlannerContextLen; ++index) {
             context.push_back(standing);
         }
-        trajectory.clear();
-        traj_index = 0;
-        interp_phase = 0.0f;
-        steps_since_plan = kReplanIntervalTicks;
+        steps_since_plan = kReplanIntervalTicksDefault;
         last_context_frame = standing;
+        motion_qpos_50hz.clear();
+        motion_joint_velocities_isaaclab.clear();
+        current_motion_frame = 0;
+        facing_yaw_rad = 0.0f;
+        init_base_quat_wxyz.reset();
+        init_ref_root_quat_wxyz.reset();
+        last_command.reset();
+        pending_replan.reset();
     }
 
     static std::vector<float> make_standing_qpos() {
@@ -406,27 +462,116 @@ public:
     }
 
     std::vector<float> velocity_tick() {
-        const auto context_frame = planner_context_frame(planner_state_.last_context_frame, velocity_obs_);
-        if (planner_state_.context.size() >= kPlannerContextLen) {
-            planner_state_.context.pop_front();
-        }
-        planner_state_.context.push_back(context_frame);
-        planner_state_.last_context_frame = context_frame;
+        maybe_apply_pending_planner_replan();
 
-        if (planner_state_.steps_since_plan >= kReplanIntervalTicks || planner_state_.trajectory.empty()) {
-            planner_state_.trajectory = run_planner(planner_state_.context, velocity_command());
-            planner_state_.traj_index = 0;
-            planner_state_.interp_phase = 0.0f;
+        const Twist twist = velocity_command();
+        const float command_speed = std::sqrt(
+            twist.linear[0] * twist.linear[0] + twist.linear[1] * twist.linear[1]
+        );
+        const auto live_command = derive_planner_command(planner_state_.facing_yaw_rad, twist);
+        const bool initializing_planner = planner_state_.motion_qpos_50hz.empty();
+        const auto planner_command =
+            initializing_planner && command_speed <= 0.01f
+                ? idle_planner_command()
+                : live_command;
+        const bool needs_replan =
+            initializing_planner
+            || (planner_state_.pending_replan.has_value()
+                    ? false
+                    : (planner_command_changed(planner_state_.last_command, live_command)
+                        || planner_state_.steps_since_plan
+                            >= planner_replan_interval_ticks(live_command)));
+
+        if (needs_replan) {
+            if (!planner_state_.motion_qpos_50hz.empty()) {
+                planner_state_.context = rebuild_planner_context_from_motion(
+                    planner_state_.motion_qpos_50hz,
+                    planner_state_.current_motion_frame
+                );
+                if (!planner_state_.context.empty()) {
+                    planner_state_.last_context_frame = planner_state_.context.back();
+                }
+            }
+            if (initializing_planner) {
+                commit_planner_motion(
+                    0,
+                    planner_command,
+                    resample_planner_trajectory_to_50hz(
+                        run_planner_command(planner_state_.context, planner_command)
+                    )
+                );
+            } else {
+                start_async_planner_replan(planner_command);
+            }
             planner_state_.steps_since_plan = 0;
         }
 
         planner_state_.steps_since_plan += 1;
-        const auto frame = next_planner_frame(planner_state_);
-        planner_state_.last_context_frame = frame;
-        return std::vector<float>(
-            frame.begin() + static_cast<std::ptrdiff_t>(kPlannerJointOffset),
-            frame.end()
+        if (planner_state_.motion_qpos_50hz.empty()) {
+            throw std::runtime_error("planner motion buffer is empty after velocity bootstrap");
+        }
+
+        const auto obs = motion_observation_from_planner_frame(
+            planner_state_.motion_qpos_50hz,
+            planner_state_.motion_joint_velocities_isaaclab,
+            planner_state_.current_motion_frame
         );
+        const auto init_base_quat =
+            planner_state_.init_base_quat_wxyz.value_or(obs.base_quat_wxyz);
+        const auto init_ref_root_quat =
+            planner_state_.init_ref_root_quat_wxyz.value_or(
+                planner_frame_root_quaternion(planner_state_.motion_qpos_50hz.front())
+            );
+        const auto encoder_obs = build_velocity_encoder_obs_dict(
+            planner_state_.motion_qpos_50hz,
+            planner_state_.motion_joint_velocities_isaaclab,
+            planner_state_.current_motion_frame,
+            obs.base_quat_wxyz,
+            init_base_quat,
+            init_ref_root_quat
+        );
+        const auto tokens = run_single_f32(
+            encoder_,
+            "obs_dict",
+            "encoded_tokens",
+            encoder_obs,
+            kEncoderObsDictDim
+        );
+        if (tokens.size() != kEncoderDim) {
+            throw std::runtime_error(
+                "encoder output dimension mismatch: expected " + std::to_string(kEncoderDim) +
+                ", got " + std::to_string(tokens.size())
+            );
+        }
+
+        tracking_state_.push(obs, latest_action_);
+        const auto decoder_obs = build_decoder_obs_dict(tokens);
+        const auto raw_actions = run_single_f32(
+            decoder_,
+            "obs_dict",
+            "action",
+            decoder_obs,
+            kDecoderObsDictDim
+        );
+        if (raw_actions.size() != G1_NUM_MOTOR) {
+            throw std::runtime_error(
+                "decoder output dimension mismatch: expected " + std::to_string(G1_NUM_MOTOR) +
+                ", got " + std::to_string(raw_actions.size())
+            );
+        }
+
+        std::vector<float> positions(G1_NUM_MOTOR, 0.0f);
+        for (int mujoco_index = 0; mujoco_index < G1_NUM_MOTOR; ++mujoco_index) {
+            const int isaaclab_index = isaaclab_to_mujoco[static_cast<std::size_t>(mujoco_index)];
+            const float action = raw_actions[static_cast<std::size_t>(isaaclab_index)];
+            const float scaled = action * static_cast<float>(g1_action_scale[static_cast<std::size_t>(mujoco_index)]);
+            positions[static_cast<std::size_t>(mujoco_index)] =
+                static_cast<float>(default_angles[static_cast<std::size_t>(mujoco_index)]) + scaled;
+        }
+
+        latest_action_ = raw_actions;
+        advance_planner_motion_frame();
+        return positions;
     }
 
     std::vector<float> tracking_tick() {
@@ -481,7 +626,7 @@ public:
         const auto idle_planned_30hz = run_planner_command(context, idle_planner_command());
         const auto bootstrap_motion_50hz = resample_planner_trajectory_to_50hz(idle_planned_30hz);
 
-        constexpr std::size_t kFirstLiveReplanTick = kReplanIntervalTicks;
+        constexpr std::size_t kFirstLiveReplanTick = kPlannerThreadIntervalTicks;
         const auto planner_context =
             rebuild_planner_context_from_motion(bootstrap_motion_50hz, kFirstLiveReplanTick);
 
@@ -604,7 +749,7 @@ public:
         const auto idle_planned_30hz = run_planner_command(context, idle_planner_command());
         const auto bootstrap_motion_50hz = resample_planner_trajectory_to_50hz(idle_planned_30hz);
 
-        constexpr std::size_t kFirstLiveReplanTick = kReplanIntervalTicks;
+        constexpr std::size_t kFirstLiveReplanTick = kPlannerThreadIntervalTicks;
         const auto planner_context =
             rebuild_planner_context_from_motion(bootstrap_motion_50hz, kFirstLiveReplanTick);
 
@@ -834,6 +979,85 @@ private:
         return qpos;
     }
 
+    void commit_planner_motion(
+        std::size_t request_motion_frame,
+        const PlannerCommand& planner_command,
+        const std::vector<std::vector<float>>& planned_50hz
+    ) {
+        if (planned_50hz.empty()) {
+            throw std::runtime_error("planner produced an empty 50Hz motion sequence");
+        }
+
+        planner_state_.motion_qpos_50hz =
+            planner_state_.motion_qpos_50hz.empty()
+                ? planned_50hz
+                : blend_planner_motion(
+                      planner_state_.motion_qpos_50hz,
+                      planner_state_.current_motion_frame,
+                      request_motion_frame,
+                      planned_50hz
+                  );
+        planner_state_.motion_joint_velocities_isaaclab =
+            compute_motion_joint_velocities_isaaclab(planner_state_.motion_qpos_50hz);
+        planner_state_.current_motion_frame = 0;
+        if (planner_state_.motion_qpos_50hz.empty()) {
+            planner_state_.init_ref_root_quat_wxyz.reset();
+        } else {
+            planner_state_.init_ref_root_quat_wxyz =
+                planner_frame_root_quaternion(planner_state_.motion_qpos_50hz.front());
+        }
+        if (!planner_state_.init_base_quat_wxyz.has_value()) {
+            planner_state_.init_base_quat_wxyz = velocity_obs_.base_quat_wxyz;
+        }
+        planner_state_.last_command = planner_command;
+    }
+
+    void maybe_apply_pending_planner_replan() {
+        if (!planner_state_.pending_replan.has_value()) {
+            return;
+        }
+
+        auto& pending = planner_state_.pending_replan.value();
+        if (pending.future.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+            return;
+        }
+
+        auto ready = std::move(pending);
+        planner_state_.pending_replan.reset();
+        commit_planner_motion(
+            ready.request_motion_frame,
+            ready.command,
+            ready.future.get()
+        );
+    }
+
+    void start_async_planner_replan(const PlannerCommand& planner_command) {
+        PlannerState::PendingPlannerReplan pending;
+        pending.request_motion_frame = planner_state_.current_motion_frame;
+        pending.command = planner_command;
+        const auto context = planner_state_.context;
+        pending.future = std::async(
+            std::launch::async,
+            [this, context, planner_command]() {
+                return resample_planner_trajectory_to_50hz(
+                    run_planner_command(context, planner_command)
+                );
+            }
+        );
+        planner_state_.last_command = planner_command;
+        planner_state_.pending_replan = std::move(pending);
+    }
+
+    void advance_planner_motion_frame() {
+        if (planner_state_.motion_qpos_50hz.empty()) {
+            return;
+        }
+        planner_state_.current_motion_frame = std::min(
+            planner_state_.current_motion_frame + 1,
+            planner_state_.motion_qpos_50hz.size() - 1
+        );
+    }
+
     std::vector<std::vector<float>> run_planner(
         const std::deque<std::vector<float>>& context,
         const Twist& twist
@@ -1044,30 +1268,6 @@ private:
         return trajectory;
     }
 
-    static std::vector<float> next_planner_frame(PlannerState& state) {
-        if (state.trajectory.empty()) {
-            return state.last_context_frame;
-        }
-        if (state.trajectory.size() < 2) {
-            return state.trajectory.front();
-        }
-
-        const std::size_t index = std::min(state.traj_index, state.trajectory.size() - 2);
-        const auto& frame_a = state.trajectory[index];
-        const auto& frame_b = state.trajectory[std::min(index + 1, state.trajectory.size() - 1)];
-        std::vector<float> interpolated(frame_a.size(), 0.0f);
-        for (std::size_t i = 0; i < frame_a.size(); ++i) {
-            interpolated[i] = frame_a[i] + state.interp_phase * (frame_b[i] - frame_a[i]);
-        }
-
-        state.interp_phase += kPlannerInterpStep;
-        while (state.interp_phase >= 1.0f && state.traj_index < state.trajectory.size() - 2) {
-            state.interp_phase -= 1.0f;
-            state.traj_index += 1;
-        }
-        return interpolated;
-    }
-
     static std::array<double, 4> planner_frame_root_quaternion(const std::vector<float>& frame) {
         return quat_unit_d({
             static_cast<double>(frame[3]),
@@ -1220,9 +1420,6 @@ private:
         if (existing_motion_qpos.empty()) {
             return new_motion_qpos;
         }
-
-        constexpr std::size_t kPlannerLookAheadSteps = 2;
-        constexpr std::size_t kPlannerBlendFrames = 8;
 
         const auto gen_frame = request_motion_frame + kPlannerLookAheadSteps;
         const auto lead_frames =
@@ -1787,7 +1984,7 @@ int main(int argc, char** argv) {
                     harness,
                     options.samples,
                     [&]() {
-                        for (std::size_t tick = 0; tick < kReplanIntervalTicks; ++tick) {
+                        for (std::size_t tick = 0; tick < kReplanIntervalTicksDefault; ++tick) {
                             harness.velocity_tick();
                         }
                     },

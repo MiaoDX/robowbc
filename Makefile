@@ -111,6 +111,7 @@ site-render-check: ## Verify the MuJoCo offscreen renderer works before building
 	$(PYTHON) scripts/check_mujoco_headless.py
 
 benchmark-robowbc: ## Regenerate normalized RoboWBC benchmark artifacts.
+	MUJOCO_DOWNLOAD_DIR="$(abspath $(MUJOCO_DOWNLOAD_DIR))" \
 	$(PYTHON) scripts/bench_robowbc_compare.py --all
 
 benchmark-official: ## Regenerate normalized official NVIDIA benchmark artifacts.

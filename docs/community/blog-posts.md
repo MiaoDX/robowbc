@@ -103,7 +103,7 @@ cases:
 
 | Case ID | Reader-facing meaning |
 |--------|------------------------|
-| `gear_sonic_velocity/replan_tick` | Planner-heavy path for locomotion |
+| `gear_sonic_velocity/replan_tick` | Control-loop path at the locomotion replanning boundary |
 | `gear_sonic_tracking/standing_placeholder_tick` | Encoder+decoder tracking path |
 | `decoupled_wbc/walk_predict` | Movement command through the walk checkpoint |
 | `decoupled_wbc/balance_predict` | Near-zero command through the balance checkpoint |
@@ -222,7 +222,7 @@ cargo run --release --bin robowbc -- run --config configs/hover_h1.toml
 
 | Case ID | 面向读者的含义 |
 |------|----------------|
-| `gear_sonic_velocity/replan_tick` | 规划器最重的 locomotion 路径 |
+| `gear_sonic_velocity/replan_tick` | locomotion 重规划边界上的控制环路径 |
 | `gear_sonic_tracking/standing_placeholder_tick` | 编码器+解码器跟踪路径 |
 | `decoupled_wbc/walk_predict` | 行走指令命中 walk checkpoint |
 | `decoupled_wbc/balance_predict` | 零速度附近命中 balance checkpoint |
