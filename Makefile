@@ -12,6 +12,7 @@ SITE_OUTPUT_DIR ?= /tmp/robowbc-site
 SITE_BIND ?= 127.0.0.1
 SITE_PORT ?= 8000
 SITE_OPEN ?= 0
+SITE_BROWSER_POLICY ?= gear_sonic
 MUJOCO_DOWNLOAD_DIR ?= $(CURDIR)/.cache/mujoco
 MUJOCO_DYNAMIC_LINK_DIR ?= $(abspath $(MUJOCO_DOWNLOAD_DIR))/mujoco-$(MUJOCO_VERSION)/lib
 SHOWCASE_MUJOCO_GL ?= egl
@@ -24,7 +25,7 @@ PYTHON_SDK_TARGET_DIR ?= $(CURDIR)/target/python-sdk-wheel
 
 .DEFAULT_GOAL := help
 
-.PHONY: help toolchain build build-release check test sim-feature-test clippy fmt fmt-check rust-doc mdbook-install docs-book docs verify smoke models-public site-python-deps site-render-check benchmark-robowbc benchmark-official benchmark-summary benchmark-nvidia site showcase-verify site-smoke site-serve-check site-serve python-sdk-deps python-sdk-build python-sdk-install python-sdk-smoke python-sdk-verify ci
+.PHONY: help toolchain build build-release check test sim-feature-test clippy fmt fmt-check rust-doc mdbook-install docs-book docs verify smoke models-public site-python-deps site-render-check benchmark-robowbc benchmark-official benchmark-summary benchmark-nvidia site showcase-verify site-smoke site-browser-smoke site-serve-check site-serve python-sdk-deps python-sdk-build python-sdk-install python-sdk-smoke python-sdk-verify ci
 
 help: ## Show available targets and useful variables.
 	@awk 'BEGIN {FS = ":.*## "; print "Targets:"} /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -42,6 +43,7 @@ help: ## Show available targets and useful variables.
 	@printf "  %-20s %s\n" "PYTHON_SDK_TARGET_DIR" "$(PYTHON_SDK_TARGET_DIR)"
 	@printf "  %-20s %s\n" "SITE_PORT" "$(SITE_PORT)"
 	@printf "  %-20s %s\n" "SITE_OPEN" "$(SITE_OPEN)"
+	@printf "  %-20s %s\n" "SITE_BROWSER_POLICY" "$(SITE_BROWSER_POLICY)"
 
 toolchain: ## Print the Rust toolchain versions used by this repo.
 	rustc --version
@@ -140,6 +142,12 @@ showcase-verify: ## Run the same showcase build + bundle validation path used in
 
 site-smoke: ## Validate the generated site bundle layout and embedded playback paths.
 	$(PYTHON) scripts/validate_site_bundle.py --root "$(SITE_OUTPUT_DIR)"
+
+site-browser-smoke: site-smoke ## Run the optional headless browser lag-selector smoke test for one policy page.
+	$(PYTHON) scripts/site_browser_smoke.py \
+		--root "$(SITE_OUTPUT_DIR)" \
+		--policy "$(SITE_BROWSER_POLICY)" \
+		--bind "$(SITE_BIND)"
 
 site-serve-check: ## Start the local site server briefly to confirm it boots, then stop it automatically.
 	status=0; \

@@ -200,8 +200,9 @@ class ValidateSiteBundleTests(unittest.TestCase):
             detail_sections.extend(
                 [
                     '<section id="phase-timeline"></section>',
-                    '<div id="phase-target-lag-selector" data-default-lag="0"></div>',
-                    '<div id="phase-lag-selector" data-default-lag="3"></div>',
+                    '<div id="phase-target-lag-selector" data-default-lag="0" data-selected-lag="0"></div>',
+                    '<div id="phase-lag-selector" data-default-lag="3" data-selected-lag="3"></div>',
+                    '<details class="phase-debug-panel" data-phase-debug-phase="stand"></details>',
                 ]
             )
         (policy_dir / "index.html").write_text(
