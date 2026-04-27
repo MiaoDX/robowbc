@@ -104,6 +104,99 @@ When multiple evidence rules collapse onto the same frame, the script fills the
 gap with deterministic fallback midpoints so the proof pack stays diffable in
 CI.
 
+## Phase-aware proof-pack contract
+
+Phase-aware review is an explicit capability layered on top of the older
+generic proof-pack contract. MuJoCo proof packs without that capability still
+use the legacy `checkpoints` list and render the generic evidence-driven UI.
+
+Phase-aware proof packs opt in with this manifest block:
+
+```json
+{
+  "phase_review": {
+    "enabled": true,
+    "version": 1,
+    "source": "velocity_schedule"
+  }
+}
+```
+
+The authority chain is intentionally one-way:
+
+1. named `runtime.velocity_schedule.segments[].phase_name` values define the
+   semantic phases once in the authored config
+2. the Rust CLI emits that data as authoritative `phase_timeline` metadata in
+   the run artifacts
+3. `scripts/roboharness_report.py` copies the contract into
+   `proof_pack_manifest.json`
+4. `scripts/generate_policy_showcase.py` and
+   `scripts/validate_site_bundle.py` consume only the manifest contract
+
+When `phase_review.enabled = true`, the manifest adds these fields:
+
+- `phase_timeline`: ordered phases with `phase_name`, `start_tick`,
+  `midpoint_tick`, `end_tick`, `duration_ticks`, and `duration_secs`
+- `phase_checkpoints`: primary midpoint and `phase_end` captures for each phase
+- `diagnostic_checkpoints`: secondary generic evidence such as `peak_latency`
+  or fallback movement checkpoints
+- `lag_options`: globally supported positive lag offsets, currently `0..5`
+- `default_lag_ticks`: default phase-end lag selection, currently `3`
+- `default_lag_ms`: the same default converted from ticks using the run control
+  frequency
+
+Each `phase_end` checkpoint also carries:
+
+- `phase_end_tick`: the canonical authored boundary
+- `lag_options`: the offsets actually available for that phase end
+- `lag_variants`: per-offset image directories and provenance for `+0..+5`
+  captures
+
+The phase-first detail page renders this contract with `id="phase-timeline"`
+and `id="phase-lag-selector"`, defaulting to `+3` lag review while still
+showing the derived millisecond value from `default_lag_ms`.
+
+The staged velocity showcases reserve at least five post-phase review ticks so
+the published `+0..+5` lag contract is truthful instead of synthetic.
+
+## Tracking sidecars
+
+Tracking demos stay on the generic checkpoint flow unless you add an explicit
+sibling sidecar beside the checked-in config:
+
+```text
+configs/showcase/gear_sonic_tracking_real.toml
+configs/showcase/gear_sonic_tracking_real.phases.toml
+```
+
+Example sidecar:
+
+```toml
+default_lag_ticks = 2
+
+[[phases]]
+phase_name = "lift"
+start_tick = 0
+end_tick = 24
+
+[[phases]]
+phase_name = "place"
+start_tick = 25
+end_tick = 54
+```
+
+Rules:
+
+- the sidecar must be a sibling of the config and must resolve inside the repo
+  root
+- if the sidecar is absent, tracking demos keep the generic checkpoint flow
+- if the sidecar is present but invalid, the report build fails loudly instead
+  of silently flattening back to generic checkpoints
+
+Invalid metadata includes duplicate or unsafe phase names, overlapping or
+unsorted tick ranges, out-of-bounds `end_tick` values, and `default_lag_ticks`
+outside `0..5`.
+
 ## Replay behavior
 
 `scripts/roboharness_report.py` now prefers the canonical replay trace when it
@@ -164,6 +257,9 @@ For full local parity with the GitHub showcase job, prefer `make
 showcase-verify` from the repo root. That path now runs a fail-fast MuJoCo EGL
 render smoke check before it builds the site and rejects any generated bundle
 that still reports `capture_status != "ok"` for MuJoCo-backed proof packs.
+It is also the end-to-end validation command for the phase-aware proof-pack
+contract, including manifest capability checks, lag asset presence, and the
+phase-first showcase detail page.
 
 ## Meshless fallback
 

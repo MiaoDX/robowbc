@@ -23,11 +23,23 @@ def load_json(path: Path) -> object:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def resolve_relative_child(root: Path, relative_path: str, *, label: str) -> Path:
+    candidate = Path(relative_path)
+    if candidate.is_absolute():
+        raise SystemExit(f"{label} must be repo-relative, got absolute path {candidate}")
+    resolved = (root / candidate).resolve()
+    try:
+        resolved.relative_to(root.resolve())
+    except ValueError as exc:
+        raise SystemExit(f"{label} escapes the site bundle root: {relative_path}") from exc
+    return resolved
+
+
 def detail_dir(root: Path, entry: dict[str, object]) -> Path:
     detail_page = entry.get("detail_page")
     if not isinstance(detail_page, str) or not detail_page:
         raise SystemExit("detail_page missing from manifest entry")
-    return root / detail_page
+    return resolve_relative_child(root, detail_page, label="detail_page")
 
 
 def validate_detail_page(detail_path: Path) -> str:
@@ -60,7 +72,9 @@ def validate_proof_pack_capture(root: Path, entry: dict[str, object], detail_tex
     if not isinstance(manifest_rel, str) or not manifest_rel:
         raise SystemExit(f"{card_id}: missing proof_pack_manifest_file")
 
-    manifest_path = root / manifest_rel
+    manifest_path = resolve_relative_child(
+        root, manifest_rel, label=f"{card_id}: proof_pack_manifest_file"
+    )
     if not manifest_path.is_file():
         raise SystemExit(f"{card_id}: missing proof-pack manifest: {manifest_path}")
 
@@ -74,14 +88,147 @@ def validate_proof_pack_capture(root: Path, entry: dict[str, object], detail_tex
             f"{card_id}: expected proof-pack capture_status=ok, found {capture_status!r}"
         )
 
-    checkpoints = proof_pack_manifest.get("checkpoints")
-    if not isinstance(checkpoints, list) or not checkpoints:
-        raise SystemExit(f"{card_id}: proof-pack manifest has no checkpoints")
-
     if "Screenshots unavailable for this build" in detail_text:
         raise SystemExit(f"{card_id}: detail page still shows screenshot fallback copy")
 
     proof_pack_root = manifest_path.parent
+    phase_review = proof_pack_manifest.get("phase_review")
+    if isinstance(phase_review, dict) and phase_review.get("enabled") is True:
+        if 'id="phase-timeline"' not in detail_text:
+            raise SystemExit(f"{card_id}: phase-aware detail page missing phase timeline section")
+        if 'id="phase-lag-selector"' not in detail_text:
+            raise SystemExit(f"{card_id}: phase-aware detail page missing actual timestamp selector")
+        if 'id="phase-target-lag-selector"' not in detail_text:
+            raise SystemExit(f"{card_id}: phase-aware detail page missing target timestamp selector")
+
+        phase_timeline = proof_pack_manifest.get("phase_timeline")
+        phase_checkpoints = proof_pack_manifest.get("phase_checkpoints")
+        lag_options = proof_pack_manifest.get("lag_options")
+        default_lag_ticks = proof_pack_manifest.get("default_lag_ticks")
+        target_lag_options = proof_pack_manifest.get("target_lag_options")
+        default_target_lag_ticks = proof_pack_manifest.get("default_target_lag_ticks")
+        if not isinstance(phase_timeline, list) or not phase_timeline:
+            raise SystemExit(f"{card_id}: phase-aware proof-pack manifest missing phase_timeline")
+        if not isinstance(phase_checkpoints, list) or not phase_checkpoints:
+            raise SystemExit(f"{card_id}: phase-aware proof-pack manifest missing phase_checkpoints")
+        if not isinstance(lag_options, list) or not lag_options:
+            raise SystemExit(f"{card_id}: phase-aware proof-pack manifest missing lag_options")
+        if not isinstance(default_lag_ticks, int):
+            raise SystemExit(f"{card_id}: phase-aware proof-pack manifest missing default_lag_ticks")
+        if not isinstance(target_lag_options, list) or not target_lag_options:
+            raise SystemExit(f"{card_id}: phase-aware proof-pack manifest missing target_lag_options")
+        if not isinstance(default_target_lag_ticks, int):
+            raise SystemExit(
+                f"{card_id}: phase-aware proof-pack manifest missing default_target_lag_ticks"
+            )
+
+        for checkpoint in phase_checkpoints:
+            if not isinstance(checkpoint, dict):
+                raise SystemExit(f"{card_id}: phase-aware checkpoint payload is not an object")
+            phase_kind = checkpoint.get("phase_kind")
+            cameras = checkpoint.get("cameras")
+            if phase_kind == "phase_end":
+                lag_variants = checkpoint.get("lag_variants")
+                checkpoint_lag_options = checkpoint.get("lag_options")
+                target_variants = checkpoint.get("target_lag_variants")
+                checkpoint_target_lag_options = checkpoint.get("target_lag_options")
+                if not isinstance(lag_variants, list) or not lag_variants:
+                    raise SystemExit(f"{card_id}: phase-end checkpoint missing lag_variants")
+                if not isinstance(checkpoint_lag_options, list) or not checkpoint_lag_options:
+                    raise SystemExit(f"{card_id}: phase-end checkpoint missing lag_options")
+                if not isinstance(target_variants, list) or not target_variants:
+                    raise SystemExit(f"{card_id}: phase-end checkpoint missing target_lag_variants")
+                if not isinstance(checkpoint_target_lag_options, list) or not checkpoint_target_lag_options:
+                    raise SystemExit(f"{card_id}: phase-end checkpoint missing target_lag_options")
+                for variant in lag_variants:
+                    if not isinstance(variant, dict):
+                        raise SystemExit(f"{card_id}: lag variant payload is not an object")
+                    variant_dir = variant.get("relative_dir")
+                    variant_cameras = variant.get("cameras")
+                    if not isinstance(variant_dir, str) or not variant_dir:
+                        raise SystemExit(f"{card_id}: lag variant missing relative_dir")
+                    if not isinstance(variant_cameras, list) or not variant_cameras:
+                        raise SystemExit(f"{card_id}: lag variant missing camera list")
+                    resolved_variant_dir = resolve_relative_child(
+                        proof_pack_root,
+                        variant_dir,
+                        label=f"{card_id}: lag variant relative_dir",
+                    )
+                    if not resolved_variant_dir.is_dir():
+                        raise SystemExit(
+                            f"{card_id}: missing lag checkpoint directory: {resolved_variant_dir}"
+                        )
+                    for camera in variant_cameras:
+                        if not isinstance(camera, str) or not camera:
+                            raise SystemExit(f"{card_id}: invalid lag camera entry: {camera!r}")
+                        image_path = resolved_variant_dir / f"{camera}_rgb.png"
+                        if not image_path.is_file():
+                            raise SystemExit(
+                                f"{card_id}: missing lag screenshot for +{variant.get('lag_ticks')}: {image_path}"
+                            )
+                        actual_image_path = resolved_variant_dir / f"{camera}_actual_rgb.png"
+                        if not actual_image_path.is_file():
+                            raise SystemExit(
+                                f"{card_id}: missing raw actual lag screenshot for +{variant.get('lag_ticks')}: {actual_image_path}"
+                            )
+                        target_image_path = resolved_variant_dir / f"{camera}_target_rgb.png"
+                        if not target_image_path.is_file():
+                            raise SystemExit(
+                                f"{card_id}: missing raw target lag screenshot for +{variant.get('lag_ticks')}: {target_image_path}"
+                            )
+                for variant in target_variants:
+                    if not isinstance(variant, dict):
+                        raise SystemExit(f"{card_id}: target lag variant payload is not an object")
+                    variant_dir = variant.get("relative_dir")
+                    variant_cameras = variant.get("cameras")
+                    if not isinstance(variant_dir, str) or not variant_dir:
+                        raise SystemExit(f"{card_id}: target lag variant missing relative_dir")
+                    if not isinstance(variant_cameras, list) or not variant_cameras:
+                        raise SystemExit(f"{card_id}: target lag variant missing camera list")
+                    resolved_variant_dir = resolve_relative_child(
+                        proof_pack_root,
+                        variant_dir,
+                        label=f"{card_id}: target lag variant relative_dir",
+                    )
+                    if not resolved_variant_dir.is_dir():
+                        raise SystemExit(
+                            f"{card_id}: missing target lag checkpoint directory: {resolved_variant_dir}"
+                        )
+                    for camera in variant_cameras:
+                        if not isinstance(camera, str) or not camera:
+                            raise SystemExit(
+                                f"{card_id}: invalid target lag camera entry: {camera!r}"
+                            )
+                        image_path = resolved_variant_dir / f"{camera}_rgb.png"
+                        if not image_path.is_file():
+                            raise SystemExit(
+                                f"{card_id}: missing target lag screenshot for +{variant.get('lag_ticks')}: {image_path}"
+                            )
+                continue
+
+            relative_dir = checkpoint.get("relative_dir")
+            if not isinstance(relative_dir, str) or not relative_dir:
+                raise SystemExit(f"{card_id}: phase midpoint checkpoint missing relative_dir")
+            if not isinstance(cameras, list) or not cameras:
+                raise SystemExit(f"{card_id}: phase midpoint checkpoint missing camera list")
+            checkpoint_dir = resolve_relative_child(
+                proof_pack_root,
+                relative_dir,
+                label=f"{card_id}: checkpoint relative_dir",
+            )
+            if not checkpoint_dir.is_dir():
+                raise SystemExit(f"{card_id}: missing proof-pack checkpoint directory: {checkpoint_dir}")
+            for camera in cameras:
+                if not isinstance(camera, str) or not camera:
+                    raise SystemExit(f"{card_id}: invalid proof-pack camera entry: {camera!r}")
+                image_path = checkpoint_dir / f"{camera}_rgb.png"
+                if not image_path.is_file():
+                    raise SystemExit(f"{card_id}: missing proof-pack screenshot: {image_path}")
+        return
+
+    checkpoints = proof_pack_manifest.get("checkpoints")
+    if not isinstance(checkpoints, list) or not checkpoints:
+        raise SystemExit(f"{card_id}: proof-pack manifest has no checkpoints")
     for checkpoint in checkpoints:
         if not isinstance(checkpoint, dict):
             raise SystemExit(f"{card_id}: proof-pack checkpoint payload is not an object")
@@ -92,7 +239,11 @@ def validate_proof_pack_capture(root: Path, entry: dict[str, object], detail_tex
         if not isinstance(cameras, list) or not cameras:
             raise SystemExit(f"{card_id}: proof-pack checkpoint missing camera list")
 
-        checkpoint_dir = proof_pack_root / relative_dir
+        checkpoint_dir = resolve_relative_child(
+            proof_pack_root,
+            relative_dir,
+            label=f"{card_id}: checkpoint relative_dir",
+        )
         if not checkpoint_dir.is_dir():
             raise SystemExit(f"{card_id}: missing proof-pack checkpoint directory: {checkpoint_dir}")
 

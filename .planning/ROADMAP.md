@@ -4,7 +4,7 @@
 
 ### v0.1 Roboharness Visual Harness Integration
 
-**Status:** In Progress
+**Status:** Complete
 **Goal:** supplement the current HTML reporting surfaces with a truthful
 roboharness-backed visual proof path while keeping RoboWBC as the owner of
 runtime execution, control timing, and MuJoCo stepping.
@@ -14,7 +14,7 @@ runtime execution, control timing, and MuJoCo stepping.
 - [x] **Phase 1: Define the canonical replay trace and metrics contract for roboharness**
 - [x] **Phase 2: Generate per-run roboharness proof packs from robowbc artifacts**
 - [x] **Phase 3: Expose a live PyO3 MuJoCo session for direct roboharness backends**
-- [ ] **Phase 4: Make the visual harness phase-aware with lag-selectable phase-end comparisons**
+- [x] **Phase 4: Make the visual harness phase-aware with lag-selectable phase-end comparisons**
 
 ## Delivered
 
@@ -27,11 +27,20 @@ runtime execution, control timing, and MuJoCo stepping.
   optional showcase link-outs when proof-pack artifacts are co-located.
 - Phase 3 exposed a live Python-facing `robowbc.MujocoSession` API on top of
   Rust-owned MuJoCo stepping, plus a reference roboharness adapter example.
+- Phase 4 made the staged velocity showcases phase-aware end to end by
+  propagating named schedule phases through the CLI artifacts, proof-pack
+  manifests, static detail pages, and bundle validator, while keeping tracking
+  demos generic unless an explicit sibling `.phases.toml` sidecar is present.
 
 ## Verification Notes
 
 - Workspace baseline passed: `cargo test`, `cargo clippy -- -D warnings`,
   `cargo fmt --check`, and `cargo doc --no-deps`.
+- Phase 4 verification passed:
+  `cargo test -p robowbc-cli velocity_schedule`,
+  `python3 -m unittest tests.test_roboharness_report tests.test_policy_showcase tests.test_validate_site_bundle`,
+  `python3 -m py_compile scripts/roboharness_report.py scripts/generate_policy_showcase.py scripts/validate_site_bundle.py tests/test_roboharness_report.py tests/test_policy_showcase.py tests/test_validate_site_bundle.py`,
+  and `make showcase-verify`.
 - MuJoCo-backed replay/reporting path passed:
   `LD_LIBRARY_PATH=/tmp/mujoco/mujoco-3.6.0/lib MUJOCO_DOWNLOAD_DIR=/tmp/mujoco cargo test -p robowbc-cli --features sim-auto-download`.
 - Standalone Python SDK verification passed:
@@ -109,7 +118,7 @@ Plans:
 
 ### Phase 4: Make the visual harness phase-aware with lag-selectable phase-end comparisons
 
-**Status:** Ready for planning
+**Status:** Complete
 **Goal:** make the proof-pack and showcase views read like the staged demo the
 user commanded: explicit stand/accelerate/turn/run/settle phases, phase-aware
 visual checkpoints, and more intuitive target-vs-actual comparison at phase
@@ -129,9 +138,9 @@ ends.
 - improve the report layout and camera presets so locomotion progress and turn
   completion are easier to read than the current fixed checkpoint strip
 **Depends on:** Phase 3
-**Plans:** 0 plans
+**Plans:** 1 plan
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 4 to break down)
+- [x] `04-01-PLAN.md`
 
 ---

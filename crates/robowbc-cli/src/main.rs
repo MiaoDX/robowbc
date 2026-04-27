@@ -7,6 +7,7 @@ use robowbc_core::{
 };
 use robowbc_registry::{RegistryError, WbcRegistry};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -54,6 +55,18 @@ struct VelocityScheduleSegmentConfig {
     duration_secs: f32,
     start: [f32; 3],
     end: [f32; 3],
+    #[serde(default)]
+    phase_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+struct PhaseTimelineEntry {
+    phase_name: String,
+    start_tick: usize,
+    midpoint_tick: usize,
+    end_tick: usize,
+    duration_ticks: usize,
+    duration_secs: f32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -67,10 +80,56 @@ impl VelocityScheduleConfig {
             return Err("runtime.velocity_schedule.segments must not be empty".to_owned());
         }
 
+        let has_named_phases = self
+            .segments
+            .iter()
+            .any(|segment| segment.phase_name.is_some());
+        let mut seen_phase_names = HashSet::new();
+
         for (index, segment) in self.segments.iter().enumerate() {
             if !segment.duration_secs.is_finite() || segment.duration_secs <= 0.0 {
                 return Err(format!(
                     "runtime.velocity_schedule.segments[{index}].duration_secs must be a positive finite number"
+                ));
+            }
+
+            if has_named_phases {
+                let Some(phase_name) = segment.phase_name.as_deref() else {
+                    return Err(
+                        "runtime.velocity_schedule.segments[].phase_name must be set on every segment once any phase_name is present"
+                            .to_owned(),
+                    );
+                };
+                let phase_name = phase_name.trim();
+                if phase_name.is_empty() {
+                    return Err(format!(
+                        "runtime.velocity_schedule.segments[{index}].phase_name must not be empty"
+                    ));
+                }
+                if phase_name.contains('/')
+                    || phase_name.contains('\\')
+                    || phase_name.contains("..")
+                {
+                    return Err(format!(
+                        "runtime.velocity_schedule.segments[{index}].phase_name must not contain path separators or '..'"
+                    ));
+                }
+                if !seen_phase_names.insert(phase_name.to_owned()) {
+                    return Err(format!(
+                        "runtime.velocity_schedule.segments[{index}].phase_name must be unique; duplicate {phase_name:?}"
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_for_frequency(&self, frequency_hz: u32) -> Result<(), String> {
+        for (index, segment) in self.segments.iter().enumerate() {
+            if velocity_schedule_segment_ticks(segment.duration_secs, frequency_hz) == 0 {
+                return Err(format!(
+                    "runtime.velocity_schedule.segments[{index}] rounds to 0 control ticks at {frequency_hz} Hz; increase duration_secs"
                 ));
             }
         }
@@ -111,10 +170,68 @@ impl VelocityScheduleConfig {
         }
         flattened
     }
+
+    fn phase_timeline(&self, frequency_hz: u32) -> Option<Vec<PhaseTimelineEntry>> {
+        if !self
+            .segments
+            .iter()
+            .all(|segment| segment.phase_name.is_some())
+        {
+            return None;
+        }
+
+        let mut cursor = 0usize;
+        let mut timeline = Vec::with_capacity(self.segments.len());
+        for segment in &self.segments {
+            let duration_ticks =
+                velocity_schedule_segment_ticks(segment.duration_secs, frequency_hz);
+            let start_tick = cursor;
+            let end_tick = start_tick + duration_ticks.saturating_sub(1);
+            let midpoint_tick = start_tick + ((end_tick.saturating_sub(start_tick)) / 2);
+            let phase_name = segment
+                .phase_name
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or_default()
+                .to_owned();
+            timeline.push(PhaseTimelineEntry {
+                phase_name,
+                start_tick,
+                midpoint_tick,
+                end_tick,
+                duration_ticks,
+                duration_secs: segment.duration_secs,
+            });
+            cursor = cursor.saturating_add(duration_ticks);
+        }
+
+        Some(timeline)
+    }
+
+    fn phase_name_for_tick(&self, tick: usize, frequency_hz: u32) -> Option<String> {
+        self.phase_timeline(frequency_hz).and_then(|timeline| {
+            timeline
+                .into_iter()
+                .find(|phase| tick >= phase.start_tick && tick <= phase.end_tick)
+                .map(|phase| phase.phase_name)
+        })
+    }
 }
 
 fn lerp_f32(start: f32, end: f32, alpha: f32) -> f32 {
     start + alpha * (end - start)
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
+fn velocity_schedule_segment_ticks(duration_secs: f32, frequency_hz: u32) -> usize {
+    // Phase review uses one canonical tick rule everywhere: round the authored
+    // segment duration to control ticks, then derive inclusive start/end bounds
+    // and midpoint ticks from that integer span.
+    (duration_secs * frequency_hz as f32).round() as usize
 }
 
 #[allow(clippy::cast_precision_loss)]
@@ -302,6 +419,20 @@ impl ParsedRuntimeCommand {
             Self::VelocitySchedule(schedule) => schedule.flatten_for_report(),
             Self::MotionTokens(tokens) => tokens.clone(),
             Self::StandingPlaceholderTracking | Self::ReferenceMotionTracking => Vec::new(),
+        }
+    }
+
+    fn phase_timeline(&self, frequency_hz: u32) -> Option<Vec<PhaseTimelineEntry>> {
+        match self {
+            Self::VelocitySchedule(schedule) => schedule.phase_timeline(frequency_hz),
+            _ => None,
+        }
+    }
+
+    fn phase_name_for_tick(&self, tick: usize, frequency_hz: u32) -> Option<String> {
+        match self {
+            Self::VelocitySchedule(schedule) => schedule.phase_name_for_tick(tick, frequency_hz),
+            _ => None,
         }
     }
 
@@ -561,6 +692,8 @@ struct ReportFrame {
     tick: usize,
     command_data: Vec<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    phase_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     base_pose: Option<ReportBasePose>,
     actual_positions: Vec<f32>,
     actual_velocities: Vec<f32>,
@@ -573,6 +706,8 @@ struct ReplayFrame {
     tick: usize,
     sim_time_secs: f64,
     command_data: Vec<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    phase_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     base_pose: Option<ReportBasePose>,
     actual_positions: Vec<f32>,
@@ -590,6 +725,7 @@ impl From<&ReplayFrame> for ReportFrame {
         Self {
             tick: frame.tick,
             command_data: frame.command_data.clone(),
+            phase_name: frame.phase_name.clone(),
             base_pose: frame.base_pose,
             actual_positions: frame.actual_positions.clone(),
             actual_velocities: frame.actual_velocities.clone(),
@@ -662,6 +798,8 @@ struct RunReport {
     command_data: Vec<f32>,
     control_frequency_hz: u32,
     requested_max_ticks: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    phase_timeline: Option<Vec<PhaseTimelineEntry>>,
     metrics: Metrics,
     frames: Vec<ReportFrame>,
 }
@@ -677,6 +815,8 @@ struct ReplayTrace {
     command_data: Vec<f32>,
     control_frequency_hz: u32,
     requested_max_ticks: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    phase_timeline: Option<Vec<PhaseTimelineEntry>>,
     transport: ReplayTransportMetadata,
     frames: Vec<ReplayFrame>,
 }
@@ -733,6 +873,9 @@ fn validate_config(config: &AppConfig) -> Result<ParsedRuntimeCommand, String> {
     }
     if config.inference.device.trim().is_empty() {
         return Err("inference.device must not be empty".to_owned());
+    }
+    if let Some(schedule) = &config.runtime.velocity_schedule {
+        schedule.validate_for_frequency(config.comm.frequency_hz)?;
     }
     ParsedRuntimeCommand::from_app_config(config)
 }
@@ -1128,6 +1271,7 @@ fn run_control_loop_inner<T: RobotTransport + ReportTelemetryProvider>(
                 tick: tick_index,
                 sim_time_secs,
                 command_data: runtime_command.command_data_for_tick(tick_index, comm.frequency_hz),
+                phase_name: runtime_command.phase_name_for_tick(tick_index, comm.frequency_hz),
                 base_pose,
                 actual_positions: obs.joint_positions.clone(),
                 actual_velocities: obs.joint_velocities.clone(),
@@ -1424,6 +1568,7 @@ fn run_control_loop(
     };
 
     if let Some(report_cfg) = report_config {
+        let phase_timeline = runtime_command.phase_timeline(comm.frequency_hz);
         let report = RunReport {
             report_version: 2,
             policy_name: policy_name.to_owned(),
@@ -1433,6 +1578,7 @@ fn run_control_loop(
             command_data: runtime_command.report_command_data(),
             control_frequency_hz: policy.control_frequency_hz(),
             requested_max_ticks,
+            phase_timeline: phase_timeline.clone(),
             metrics: metrics.clone(),
             frames: report_frames,
         };
@@ -1449,6 +1595,7 @@ fn run_control_loop(
             command_data: runtime_command.report_command_data(),
             control_frequency_hz: policy.control_frequency_hz(),
             requested_max_ticks,
+            phase_timeline,
             transport: replay_transport,
             frames: replay_frames,
         };
@@ -1567,6 +1714,7 @@ mod tests {
             tick,
             sim_time_secs: f64::from(tick_u32) * 0.02,
             command_data,
+            phase_name: None,
             base_pose,
             actual_positions: vec![],
             actual_velocities: vec![],
@@ -1765,11 +1913,13 @@ device = "cpu"
 max_ticks = 200
 
 [[runtime.velocity_schedule.segments]]
+phase_name = "accelerate"
 duration_secs = 2.0
 start = [0.0, 0.0, 0.0]
 end = [0.6, 0.0, 0.0]
 
 [[runtime.velocity_schedule.segments]]
+phase_name = "turn"
 duration_secs = 1.0
 start = [0.6, 0.0, -1.5707964]
 end = [0.6, 0.0, -1.5707964]
@@ -1782,6 +1932,10 @@ end = [0.6, 0.0, -1.5707964]
             .as_ref()
             .expect("velocity schedule should deserialize");
         assert_eq!(schedule.segments.len(), 2);
+        assert_eq!(
+            schedule.segments[0].phase_name.as_deref(),
+            Some("accelerate")
+        );
 
         let runtime_command = validate_config(&parsed).expect("schedule should validate");
         assert_eq!(runtime_command.report_command_kind(), "velocity_schedule");
@@ -1905,6 +2059,79 @@ end = [0.6, 0.0, 0.0]
     }
 
     #[test]
+    fn runtime_rejects_partially_named_velocity_schedule() {
+        let config = r#"
+[policy]
+name = "gear_sonic"
+
+[robot]
+config_path = "configs/robots/unitree_g1_mock.toml"
+
+[communication]
+frequency_hz = 50
+
+[inference]
+backend = "ort"
+device = "cpu"
+
+[runtime]
+max_ticks = 50
+
+[[runtime.velocity_schedule.segments]]
+phase_name = "stand"
+duration_secs = 1.0
+start = [0.0, 0.0, 0.0]
+end = [0.0, 0.0, 0.0]
+
+[[runtime.velocity_schedule.segments]]
+duration_secs = 1.0
+start = [0.0, 0.0, 0.0]
+end = [0.4, 0.0, 0.0]
+"#;
+
+        let parsed: AppConfig = toml::from_str(config).expect("config should parse");
+        let err = validate_config(&parsed).expect_err("partial phase names should fail");
+        assert!(err.contains("phase_name must be set on every segment"));
+    }
+
+    #[test]
+    fn runtime_rejects_duplicate_velocity_schedule_phase_names() {
+        let config = r#"
+[policy]
+name = "gear_sonic"
+
+[robot]
+config_path = "configs/robots/unitree_g1_mock.toml"
+
+[communication]
+frequency_hz = 50
+
+[inference]
+backend = "ort"
+device = "cpu"
+
+[runtime]
+max_ticks = 50
+
+[[runtime.velocity_schedule.segments]]
+phase_name = "stand"
+duration_secs = 1.0
+start = [0.0, 0.0, 0.0]
+end = [0.0, 0.0, 0.0]
+
+[[runtime.velocity_schedule.segments]]
+phase_name = "stand"
+duration_secs = 1.0
+start = [0.0, 0.0, 0.0]
+end = [0.4, 0.0, 0.0]
+"#;
+
+        let parsed: AppConfig = toml::from_str(config).expect("config should parse");
+        let err = validate_config(&parsed).expect_err("duplicate phase names should fail");
+        assert!(err.contains("must be unique"));
+    }
+
+    #[test]
     fn runtime_rejects_empty_motion_tokens_payload() {
         let config = r#"
 [policy]
@@ -1960,6 +2187,74 @@ motion_tokens = []
 
         let err = validate_config(&config).expect_err("empty velocity schedule should fail");
         assert!(err.contains("segments must not be empty"));
+    }
+
+    #[test]
+    fn velocity_schedule_phase_timeline_uses_canonical_tick_math() {
+        let schedule = VelocityScheduleConfig {
+            segments: vec![
+                VelocityScheduleSegmentConfig {
+                    duration_secs: 0.03,
+                    start: [0.0, 0.0, 0.0],
+                    end: [0.0, 0.0, 0.0],
+                    phase_name: Some("stand".to_owned()),
+                },
+                VelocityScheduleSegmentConfig {
+                    duration_secs: 0.05,
+                    start: [0.0, 0.0, 0.0],
+                    end: [0.4, 0.0, 0.0],
+                    phase_name: Some("accelerate".to_owned()),
+                },
+            ],
+        };
+
+        let timeline = schedule
+            .phase_timeline(50)
+            .expect("named schedule should produce a phase timeline");
+        assert_eq!(timeline.len(), 2);
+        assert_eq!(timeline[0].phase_name, "stand");
+        assert_eq!(timeline[0].start_tick, 0);
+        assert_eq!(timeline[0].midpoint_tick, 0);
+        assert_eq!(timeline[0].end_tick, 1);
+        assert_eq!(timeline[0].duration_ticks, 2);
+        assert_eq!(timeline[1].phase_name, "accelerate");
+        assert_eq!(timeline[1].start_tick, 2);
+        assert_eq!(timeline[1].midpoint_tick, 3);
+        assert_eq!(timeline[1].end_tick, 4);
+        assert_eq!(timeline[1].duration_ticks, 3);
+    }
+
+    #[test]
+    fn showcase_velocity_schedules_leave_review_tail_for_positive_lag() {
+        let configs = [
+            "configs/showcase/gear_sonic_real.toml",
+            "configs/showcase/decoupled_wbc_real.toml",
+            "configs/showcase/wbc_agile_real.toml",
+        ];
+        let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+
+        for config_path in configs {
+            let resolved_path = workspace_root.join(config_path);
+            let raw = std::fs::read_to_string(&resolved_path).expect("config should be readable");
+            let parsed: AppConfig = toml::from_str(&raw).expect("config should parse");
+            let schedule = parsed
+                .runtime
+                .velocity_schedule
+                .as_ref()
+                .expect("showcase config should use a velocity schedule");
+            let max_ticks = parsed
+                .runtime
+                .max_ticks
+                .expect("showcase config should pin max_ticks");
+            let timeline = schedule
+                .phase_timeline(parsed.comm.frequency_hz)
+                .expect("showcase config should have named phases");
+            let final_phase = timeline.last().expect("timeline should not be empty");
+            assert!(
+                max_ticks > final_phase.end_tick + 5,
+                "{config_path} must leave at least five review ticks after the final phase"
+            );
+        }
     }
 
     #[test]
@@ -2044,6 +2339,7 @@ standing_placeholder_tracking = true
             command_data: vec![0.2, 0.0, 0.1],
             control_frequency_hz: 50,
             requested_max_ticks: Some(1),
+            phase_timeline: None,
             metrics: Metrics {
                 ticks: 1,
                 dropped_frames: 0,
@@ -2054,6 +2350,7 @@ standing_placeholder_tracking = true
             frames: vec![ReportFrame {
                 tick: 0,
                 command_data: vec![0.2, 0.0, 0.1],
+                phase_name: None,
                 base_pose: None,
                 actual_positions: vec![0.1],
                 actual_velocities: vec![0.0],
@@ -2089,6 +2386,7 @@ standing_placeholder_tracking = true
             command_data: vec![0.2, 0.0, 0.1],
             control_frequency_hz: 50,
             requested_max_ticks: Some(1),
+            phase_timeline: None,
             transport: ReplayTransportMetadata::synthetic(),
             frames: vec![replay_frame(
                 0,
