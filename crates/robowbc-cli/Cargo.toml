@@ -16,6 +16,7 @@ sim-auto-download = ["sim", "robowbc-sim/mujoco-auto-download"]
 vis = ["dep:robowbc-vis", "robowbc-vis/rerun"]
 
 [dependencies]
+anyhow = "1"
 robowbc-comm = { path = "../robowbc-comm" }
 robowbc-core = { path = "../robowbc-core" }
 robowbc-ort = { path = "../robowbc-ort" }
