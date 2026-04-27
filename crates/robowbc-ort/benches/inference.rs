@@ -16,9 +16,10 @@
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use robowbc_core::{JointLimit, Observation, PdGains, RobotConfig, WbcCommand, WbcPolicy};
 use robowbc_ort::{
-    DecoupledObservationContract, DecoupledWbcConfig, DecoupledWbcPolicy, GearSonicConfig,
-    GearSonicPolicy, OrtBackend, OrtConfig,
+    DecoupledObservationContract, DecoupledWbcConfig, DecoupledWbcPolicy, ExecutionProvider,
+    GearSonicConfig, GearSonicPolicy, OptimizationLevel, OrtBackend, OrtConfig, OrtTensorInput,
 };
+use std::cell::RefCell;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -38,11 +39,23 @@ fn relu_model() -> PathBuf {
     fixture_dir().join("test_relu.onnx")
 }
 
-fn test_ort_config(model_path: PathBuf) -> OrtConfig {
+const BENCH_PROVIDER_ENV: &str = "ROBOWBC_BENCH_PROVIDER";
+
+fn benchmark_execution_provider() -> ExecutionProvider {
+    std::env::var(BENCH_PROVIDER_ENV)
+        .ok()
+        .as_deref()
+        .map(str::parse)
+        .transpose()
+        .expect("benchmark provider should parse from ROBOWBC_BENCH_PROVIDER")
+        .unwrap_or(ExecutionProvider::Cpu)
+}
+
+fn bench_ort_config(model_path: PathBuf, execution_provider: &ExecutionProvider) -> OrtConfig {
     OrtConfig {
         model_path,
-        execution_provider: robowbc_ort::ExecutionProvider::Cpu,
-        optimization_level: robowbc_ort::OptimizationLevel::Extended,
+        execution_provider: execution_provider.clone(),
+        optimization_level: OptimizationLevel::Extended,
         num_threads: 1,
     }
 }
@@ -148,12 +161,179 @@ fn bench_dynamic_identity_scaling(c: &mut Criterion) {
 // ambiguous "predict" bucket.
 // ---------------------------------------------------------------------------
 
+const GEAR_SONIC_ALLOWED_PRED_NUM_TOKENS_MASK: [i64; 11] = [0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0];
+const GEAR_SONIC_DEFAULT_HEIGHT_METERS: f32 = 0.74;
+const GEAR_SONIC_DEFAULT_HEIGHT_SENTINEL: f32 = -1.0;
+const GEAR_SONIC_DEFAULT_MODE_SLOW_WALK: i64 = 1;
+const GEAR_SONIC_PLANNER_CONTEXT_LEN: i64 = 4;
+const GEAR_SONIC_PLANNER_QPOS_DIM: i64 = 36;
+
 // The benchmark fixture uses a 0.3 m/s forward command, which stays in the
 // published slow-walk bucket. That path only becomes eligible for a fresh
 // planner request after 50 control ticks, not after the 5-tick running path.
 const GEAR_SONIC_SLOW_WALK_REPLAN_INTERVAL_TICKS: usize = 50;
 
-fn load_gear_sonic_policy() -> Option<GearSonicPolicy> {
+fn gear_sonic_planner_qpos_dim_usize() -> usize {
+    usize::try_from(GEAR_SONIC_PLANNER_QPOS_DIM)
+        .expect("planner qpos dimension should fit in usize")
+}
+
+fn gear_sonic_planner_context_capacity() -> usize {
+    usize::try_from(GEAR_SONIC_PLANNER_CONTEXT_LEN * GEAR_SONIC_PLANNER_QPOS_DIM)
+        .expect("planner context capacity should fit in usize")
+}
+
+fn allowed_pred_num_tokens_len_i64() -> i64 {
+    i64::try_from(GEAR_SONIC_ALLOWED_PRED_NUM_TOKENS_MASK.len())
+        .expect("allowed token mask length should fit in i64")
+}
+
+fn load_unitree_g1_robot() -> RobotConfig {
+    let robot_config_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs/robots/unitree_g1.toml");
+    if robot_config_path.exists() {
+        robowbc_core::RobotConfig::from_toml_file(&robot_config_path)
+            .expect("robot config should load")
+    } else {
+        test_robot_config(29)
+    }
+}
+
+fn gear_sonic_standing_qpos(robot: &RobotConfig) -> Vec<f32> {
+    let planner_qpos_dim = gear_sonic_planner_qpos_dim_usize();
+    let mut qpos = vec![0.0_f32; planner_qpos_dim];
+    qpos[2] = GEAR_SONIC_DEFAULT_HEIGHT_METERS;
+    qpos[3] = 1.0;
+    let joint_count = robot.joint_count.min(planner_qpos_dim.saturating_sub(7));
+    qpos[7..7 + joint_count].copy_from_slice(&robot.default_pose[..joint_count]);
+    qpos
+}
+
+struct GearSonicPlannerBench {
+    backend: OrtBackend,
+    context_mujoco_qpos: Vec<f32>,
+    target_vel: [f32; 1],
+    mode: [i64; 1],
+    movement_direction: [f32; 3],
+    facing_direction: [f32; 3],
+    height: [f32; 1],
+    random_seed: [i64; 1],
+    has_specific_target: [i64; 1],
+    specific_target_positions: Vec<f32>,
+    specific_target_headings: Vec<f32>,
+}
+
+impl GearSonicPlannerBench {
+    fn new(model_path: PathBuf, robot: &RobotConfig, provider: &ExecutionProvider) -> Self {
+        let standing = gear_sonic_standing_qpos(robot);
+        let mut context_mujoco_qpos = Vec::with_capacity(gear_sonic_planner_context_capacity());
+        for _ in 0..GEAR_SONIC_PLANNER_CONTEXT_LEN {
+            context_mujoco_qpos.extend_from_slice(&standing);
+        }
+
+        Self {
+            backend: OrtBackend::new(&bench_ort_config(model_path, provider))
+                .expect("planner benchmark session should build"),
+            context_mujoco_qpos,
+            target_vel: [0.3],
+            mode: [GEAR_SONIC_DEFAULT_MODE_SLOW_WALK],
+            movement_direction: [1.0, 0.0, 0.0],
+            facing_direction: [1.0, 0.0, 0.0],
+            height: [GEAR_SONIC_DEFAULT_HEIGHT_SENTINEL],
+            random_seed: [0],
+            has_specific_target: [0],
+            specific_target_positions: vec![0.0; 4 * 3],
+            specific_target_headings: vec![0.0; 4],
+        }
+    }
+
+    fn run(&mut self) -> f32 {
+        let context_shape = [
+            1_i64,
+            GEAR_SONIC_PLANNER_CONTEXT_LEN,
+            GEAR_SONIC_PLANNER_QPOS_DIM,
+        ];
+        let vec3_shape = [1_i64, 3_i64];
+        let target_shape = [1_i64];
+        let scalar_shape = [1_i64];
+        let has_target_shape = [1_i64, 1_i64];
+        let specific_positions_shape = [1_i64, 4_i64, 3_i64];
+        let specific_headings_shape = [1_i64, 4_i64];
+        let allowed_tokens_shape = [1_i64, allowed_pred_num_tokens_len_i64()];
+
+        let outputs = self
+            .backend
+            .run_typed(&[
+                OrtTensorInput::F32 {
+                    name: "context_mujoco_qpos",
+                    data: &self.context_mujoco_qpos,
+                    shape: &context_shape,
+                },
+                OrtTensorInput::F32 {
+                    name: "target_vel",
+                    data: &self.target_vel,
+                    shape: &target_shape,
+                },
+                OrtTensorInput::I64 {
+                    name: "mode",
+                    data: &self.mode,
+                    shape: &scalar_shape,
+                },
+                OrtTensorInput::F32 {
+                    name: "movement_direction",
+                    data: &self.movement_direction,
+                    shape: &vec3_shape,
+                },
+                OrtTensorInput::F32 {
+                    name: "facing_direction",
+                    data: &self.facing_direction,
+                    shape: &vec3_shape,
+                },
+                OrtTensorInput::F32 {
+                    name: "height",
+                    data: &self.height,
+                    shape: &scalar_shape,
+                },
+                OrtTensorInput::I64 {
+                    name: "random_seed",
+                    data: &self.random_seed,
+                    shape: &scalar_shape,
+                },
+                OrtTensorInput::I64 {
+                    name: "has_specific_target",
+                    data: &self.has_specific_target,
+                    shape: &has_target_shape,
+                },
+                OrtTensorInput::F32 {
+                    name: "specific_target_positions",
+                    data: &self.specific_target_positions,
+                    shape: &specific_positions_shape,
+                },
+                OrtTensorInput::F32 {
+                    name: "specific_target_headings",
+                    data: &self.specific_target_headings,
+                    shape: &specific_headings_shape,
+                },
+                OrtTensorInput::I64 {
+                    name: "allowed_pred_num_tokens",
+                    data: &GEAR_SONIC_ALLOWED_PRED_NUM_TOKENS_MASK,
+                    shape: &allowed_tokens_shape,
+                },
+            ])
+            .expect("planner benchmark inference should succeed");
+
+        let trajectory = outputs
+            .iter()
+            .find(|output| output.name == "mujoco_qpos")
+            .and_then(|output| output.as_f32())
+            .expect("planner benchmark should return mujoco_qpos");
+        *trajectory
+            .first()
+            .expect("planner benchmark mujoco_qpos should not be empty")
+    }
+}
+
+fn load_gear_sonic_policy(provider: &ExecutionProvider) -> Option<GearSonicPolicy> {
     // GearSonicPolicy requires real ONNX checkpoints because the encoder
     // receives proprioceptive state (n+n+3 floats) and the decoder must output
     // exactly n floats. Test-fixture identity models cannot satisfy both
@@ -180,23 +360,37 @@ fn load_gear_sonic_policy() -> Option<GearSonicPolicy> {
         }
     }
 
-    let robot_config_path =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs/robots/unitree_g1.toml");
-    let robot = if robot_config_path.exists() {
-        robowbc_core::RobotConfig::from_toml_file(&robot_config_path)
-            .expect("robot config should load")
-    } else {
-        test_robot_config(29)
-    };
+    let robot = load_unitree_g1_robot();
 
     let config = GearSonicConfig {
-        encoder: test_ort_config(encoder_path),
-        decoder: test_ort_config(decoder_path),
-        planner: test_ort_config(planner_path),
+        encoder: bench_ort_config(encoder_path, provider),
+        decoder: bench_ort_config(decoder_path, provider),
+        planner: bench_ort_config(planner_path, provider),
         reference_motion: None,
         robot,
     };
     Some(GearSonicPolicy::new(config).expect("policy should build"))
+}
+
+fn load_gear_sonic_planner(
+    provider: &ExecutionProvider,
+    robot: &RobotConfig,
+) -> Option<GearSonicPlannerBench> {
+    let model_dir = if let Ok(d) = std::env::var("GEAR_SONIC_MODEL_DIR") {
+        PathBuf::from(d)
+    } else {
+        eprintln!("skipping gear_sonic planner benchmark: GEAR_SONIC_MODEL_DIR not set");
+        return None;
+    };
+    let planner_path = model_dir.join("planner_sonic.onnx");
+    if !planner_path.exists() {
+        eprintln!(
+            "skipping gear_sonic planner benchmark: model not found at {}",
+            planner_path.display()
+        );
+        return None;
+    }
+    Some(GearSonicPlannerBench::new(planner_path, robot, provider))
 }
 
 fn gear_sonic_velocity_obs(joint_count: usize) -> Observation {
@@ -227,15 +421,46 @@ fn gear_sonic_tracking_obs(joint_count: usize) -> Observation {
 }
 
 fn bench_gear_sonic_modes(c: &mut Criterion) {
-    let Some(policy) = load_gear_sonic_policy() else {
+    let provider = benchmark_execution_provider();
+    let Some(policy) = load_gear_sonic_policy(&provider) else {
         return;
     };
-    let joint_count = policy.supported_robots()[0].joint_count;
+    let robot = policy.supported_robots()[0].clone();
+    let Some(planner) = load_gear_sonic_planner(&provider, &robot) else {
+        return;
+    };
+    let planner = RefCell::new(planner);
+    let joint_count = robot.joint_count;
     let velocity_obs = gear_sonic_velocity_obs(joint_count);
     let tracking_obs = gear_sonic_tracking_obs(joint_count);
 
-    let mut velocity_group = c.benchmark_group("policy/gear_sonic_velocity");
-    velocity_group.bench_function("cold_start_tick", |b| {
+    let mut group = c.benchmark_group("policy/gear_sonic");
+    group.bench_function("planner_only_cold_start", |b| {
+        b.iter(|| planner.borrow_mut().run());
+    });
+    group.bench_function("planner_only_steady_state", |b| {
+        b.iter_batched(
+            || {
+                let _ = planner.borrow_mut().run();
+            },
+            |()| planner.borrow_mut().run(),
+            BatchSize::SmallInput,
+        );
+    });
+    group.bench_function("encoder_decoder_only_tracking_tick", |b| {
+        b.iter_batched(
+            || {
+                policy.reset().expect("reset should succeed");
+            },
+            |()| {
+                policy
+                    .predict(&tracking_obs)
+                    .expect("tracking-only tick should succeed");
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.bench_function("full_velocity_tick_cold_start", |b| {
         b.iter_batched(
             || {
                 policy.reset().expect("reset should succeed");
@@ -243,70 +468,53 @@ fn bench_gear_sonic_modes(c: &mut Criterion) {
             |()| {
                 policy
                     .predict(&velocity_obs)
-                    .expect("cold-start planner tick should succeed");
+                    .expect("cold-start full velocity tick should succeed");
             },
             BatchSize::SmallInput,
         );
     });
-    velocity_group.bench_function("warm_steady_state_tick", |b| {
+    group.bench_function("full_velocity_tick_steady_state", |b| {
         b.iter_batched(
             || {
                 policy.reset().expect("reset should succeed");
                 policy
                     .predict(&velocity_obs)
-                    .expect("warmup planner tick should succeed");
+                    .expect("warmup full velocity tick should succeed");
             },
             |()| {
                 policy
                     .predict(&velocity_obs)
-                    .expect("warm steady-state tick should succeed");
+                    .expect("steady-state full velocity tick should succeed");
             },
             BatchSize::SmallInput,
         );
     });
-    velocity_group.bench_function("replan_tick", |b| {
+    group.bench_function("full_velocity_tick_replan_boundary", |b| {
         b.iter_batched(
             || {
                 policy.reset().expect("reset should succeed");
                 for _ in 0..GEAR_SONIC_SLOW_WALK_REPLAN_INTERVAL_TICKS {
                     policy
                         .predict(&velocity_obs)
-                        .expect("preparing replan tick should succeed");
+                        .expect("preparing replan-boundary tick should succeed");
                 }
             },
             |()| {
                 policy
                     .predict(&velocity_obs)
-                    .expect("replan tick should succeed");
+                    .expect("replan-boundary full velocity tick should succeed");
             },
             BatchSize::SmallInput,
         );
     });
-    velocity_group.finish();
-
-    c.bench_function(
-        "policy/gear_sonic_tracking/standing_placeholder_tick",
-        |b| {
-            b.iter_batched(
-                || {
-                    policy.reset().expect("reset should succeed");
-                },
-                |()| {
-                    policy
-                        .predict(&tracking_obs)
-                        .expect("standing-placeholder tracking tick should succeed");
-                },
-                BatchSize::SmallInput,
-            );
-        },
-    );
+    group.finish();
 }
 
 // ---------------------------------------------------------------------------
 // DecoupledWbcPolicy: RL lower-body + analytical upper-body
 // ---------------------------------------------------------------------------
 
-fn load_decoupled_wbc_policy() -> Option<DecoupledWbcPolicy> {
+fn load_decoupled_wbc_policy(provider: &ExecutionProvider) -> Option<DecoupledWbcPolicy> {
     let model_dir = if let Ok(d) = std::env::var("DECOUPLED_WBC_MODEL_DIR") {
         PathBuf::from(d)
     } else {
@@ -325,18 +533,11 @@ fn load_decoupled_wbc_policy() -> Option<DecoupledWbcPolicy> {
         }
     }
 
-    let robot_config_path =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../configs/robots/unitree_g1.toml");
-    let robot = if robot_config_path.exists() {
-        robowbc_core::RobotConfig::from_toml_file(&robot_config_path)
-            .expect("robot config should load")
-    } else {
-        test_robot_config(29)
-    };
+    let robot = load_unitree_g1_robot();
 
     let config = DecoupledWbcConfig {
-        rl_model: test_ort_config(walk_model),
-        stand_model: Some(test_ort_config(balance_model)),
+        rl_model: bench_ort_config(walk_model, provider),
+        stand_model: Some(bench_ort_config(balance_model, provider)),
         robot: robot.clone(),
         lower_body_joints: (0..15).collect(),
         upper_body_joints: (15..robot.joint_count).collect(),
@@ -362,7 +563,8 @@ fn decoupled_wbc_obs(joint_count: usize, vx: f32, yaw_rate: f32) -> Observation 
 }
 
 fn bench_decoupled_wbc_modes(c: &mut Criterion) {
-    let Some(policy) = load_decoupled_wbc_policy() else {
+    let provider = benchmark_execution_provider();
+    let Some(policy) = load_decoupled_wbc_policy(&provider) else {
         eprintln!(
             "skipping decoupled_wbc benchmarks: real GR00T WholeBodyControl checkpoints are required"
         );

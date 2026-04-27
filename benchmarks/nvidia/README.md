@@ -38,15 +38,34 @@ Every normalized artifact must include:
 If a case cannot be measured fairly, the wrapper must emit a `status = "blocked"`
 artifact with the exact blocker rather than silently substituting a nearby path.
 
-## Current status
+## Canonical GEAR-Sonic split
 
-The current committed CPU artifact set contains measured RoboWBC and official
-NVIDIA rows for all eight canonical GEAR-Sonic and Decoupled cases.
+The GEAR-Sonic package is now explicit about component boundaries:
 
-If a future rerun loses prerequisites or the pinned upstream stack stops
-exposing a clean non-interactive seam, the wrapper must fall back to a blocked
-artifact with the exact blocker. That is intentional. A blocked artifact is the
-honest output for an unavailable path; it is not a placeholder.
+- planner only
+- encoder + decoder only
+- full live velocity tick
+
+The old ambiguous `gear_sonic_velocity/replan_tick` naming is gone. The new
+`gear_sonic/full_velocity_tick_replan_boundary` row says exactly what it is:
+one live control tick at the default `0.3 m/s` slow-walk replan boundary.
+
+## Provider truthfulness
+
+Provider parity is a hard fairness rule.
+
+- `cpu`, `cuda`, and `tensor_rt` are the only supported GEAR-Sonic benchmark labels
+- a requested provider must be applied uniformly to planner, encoder, and decoder for that row
+- unavailable providers are emitted as `blocked`; they are never silently relabeled as CPU
+- the checked-in `configs/sonic_g1.toml` remains CPU by default outside benchmark wrappers
+
+Blocked GPU rows are the honest outcome when the local environment lacks:
+
+- ONNX Runtime CUDA EP support
+- ONNX Runtime TensorRT EP support
+- required CUDA or TensorRT shared libraries
+- a compatible NVIDIA host
+- successful provider-specific session initialization
 
 ## How to rerun
 
@@ -55,9 +74,9 @@ honest output for an unavailable path; it is not a placeholder.
    `bash scripts/download_gear_sonic_models.sh`
    `bash scripts/download_decoupled_wbc_models.sh`
 2. Emit the RoboWBC artifacts:
-   `python3 scripts/bench_robowbc_compare.py --all`
+   `python3 scripts/bench_robowbc_compare.py --all --provider cpu`
 3. Emit the official-wrapper artifacts:
-   `python3 scripts/bench_nvidia_official.py --all`
+   `python3 scripts/bench_nvidia_official.py --all --provider cpu`
 4. Render the Markdown summary:
    `python3 scripts/render_nvidia_benchmark_summary.py --output artifacts/benchmarks/nvidia/SUMMARY.md`
 5. Inspect `artifacts/benchmarks/nvidia/SUMMARY.md` plus the paired results
@@ -71,7 +90,7 @@ static HTML report at `benchmarks/nvidia/index.html` from the same JSON rows.
 
 | Outcome | What it means | Next action |
 |---------|---------------|-------------|
-| Favorable | RoboWBC is near parity on the matched path and the DX story is stronger | Publish the comparison prominently and move the story toward multi-model portability |
+| Favorable | RoboWBC is near parity on the matched provider path and the DX story is stronger | Publish the comparison prominently and move the story toward multi-model portability |
 | Neutral | RoboWBC is slower but still inside budget and the integration story is better | Publish the latency caveat explicitly and lean into setup friction and model-switch wins |
 | Unfavorable | RoboWBC is materially slower or cannot match the path cleanly | Stop making parity claims for that path and prioritize provider or architecture follow-up |
 
@@ -79,6 +98,6 @@ static HTML report at `benchmarks/nvidia/index.html` from the same JSON rows.
 
 - Use the exact case IDs from `cases.json`
 - Record the upstream commit and model revision used for the run
-- Do not compare CPU and TensorRT under the same row label
+- Match the execution provider on both sides of each row
 - Keep raw wrapper output next to the normalized artifact when possible
-- Update the public docs only after the new artifacts exist
+- Update public docs only after the new artifacts exist

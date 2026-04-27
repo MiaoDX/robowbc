@@ -45,6 +45,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::OnceLock;
 use std::sync::{mpsc, Arc, Mutex};
@@ -129,6 +130,40 @@ pub enum ExecutionProvider {
         /// CUDA device ordinal for `TensorRT` (0-based).
         device_id: i32,
     },
+}
+
+/// Parse failure for [`ExecutionProvider`] string labels.
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+#[error("unsupported execution provider label `{label}`; expected one of: cpu, cuda, tensor_rt")]
+pub struct ExecutionProviderParseError {
+    label: String,
+}
+
+impl ExecutionProvider {
+    /// Returns the canonical `snake_case` label used by benchmark tooling.
+    #[must_use]
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Cpu => "cpu",
+            Self::Cuda { .. } => "cuda",
+            Self::TensorRt { .. } => "tensor_rt",
+        }
+    }
+}
+
+impl FromStr for ExecutionProvider {
+    type Err = ExecutionProviderParseError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value.trim() {
+            "cpu" => Ok(Self::Cpu),
+            "cuda" => Ok(Self::Cuda { device_id: 0 }),
+            "tensor_rt" => Ok(Self::TensorRt { device_id: 0 }),
+            other => Err(ExecutionProviderParseError {
+                label: other.to_owned(),
+            }),
+        }
+    }
 }
 
 /// Graph optimization level for ONNX Runtime.
@@ -480,14 +515,16 @@ impl OrtBackend {
             ExecutionProvider::Cuda { device_id } => builder
                 .with_execution_providers([ort::ep::CUDA::default()
                     .with_device_id(*device_id)
-                    .build()])
+                    .build()
+                    .error_on_failure()])
                 .map_err(|e| OrtError::SessionCreation {
                     reason: e.to_string(),
                 })?,
             ExecutionProvider::TensorRt { device_id } => builder
                 .with_execution_providers([ort::ep::TensorRT::default()
                     .with_device_id(*device_id)
-                    .build()])
+                    .build()
+                    .error_on_failure()])
                 .map_err(|e| OrtError::SessionCreation {
                     reason: e.to_string(),
                 })?,
@@ -2973,6 +3010,36 @@ mod tests {
         assert_eq!(config.execution_provider, ExecutionProvider::Cpu);
         assert_eq!(config.optimization_level, OptimizationLevel::Extended);
         assert_eq!(config.num_threads, 1);
+    }
+
+    #[test]
+    fn execution_provider_labels_round_trip_from_strings() {
+        let cases = [
+            ("cpu", ExecutionProvider::Cpu),
+            ("cuda", ExecutionProvider::Cuda { device_id: 0 }),
+            ("tensor_rt", ExecutionProvider::TensorRt { device_id: 0 }),
+        ];
+
+        for (label, expected) in cases {
+            let parsed = label
+                .parse::<ExecutionProvider>()
+                .expect("provider label should parse");
+            assert_eq!(parsed, expected);
+            assert_eq!(parsed.label(), label);
+        }
+    }
+
+    #[test]
+    fn execution_provider_rejects_unknown_labels() {
+        let error = "tpu"
+            .parse::<ExecutionProvider>()
+            .expect_err("unknown provider should be rejected");
+        assert_eq!(
+            error,
+            ExecutionProviderParseError {
+                label: "tpu".to_owned(),
+            }
+        );
     }
 
     #[test]

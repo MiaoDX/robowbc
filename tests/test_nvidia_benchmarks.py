@@ -1,3 +1,4 @@
+import argparse
 import importlib.util
 import json
 import os
@@ -12,10 +13,12 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-REGISTRY_PATH = ROOT / "artifacts/benchmarks/nvidia/cases.json"
+REGISTRY_PATH = ROOT / "benchmarks/nvidia/cases.json"
 NORMALIZER_PATH = ROOT / "scripts/normalize_nvidia_benchmarks.py"
 RENDER_PATH = ROOT / "scripts/render_nvidia_benchmark_summary.py"
 ROBOHARNESS_REPORT_PATH = ROOT / "scripts/roboharness_report.py"
+ROBOWBC_COMPARE_PATH = ROOT / "scripts/bench_robowbc_compare.py"
+OFFICIAL_COMPARE_PATH = ROOT / "scripts/bench_nvidia_official.py"
 
 SPEC = importlib.util.spec_from_file_location("normalize_nvidia_benchmarks", NORMALIZER_PATH)
 NORMALIZER = importlib.util.module_from_spec(SPEC)
@@ -33,6 +36,20 @@ ROBOHARNESS_SPEC = importlib.util.spec_from_file_location(
 ROBOHARNESS = importlib.util.module_from_spec(ROBOHARNESS_SPEC)
 assert ROBOHARNESS_SPEC.loader is not None
 ROBOHARNESS_SPEC.loader.exec_module(ROBOHARNESS)
+
+ROBO_COMPARE_SPEC = importlib.util.spec_from_file_location(
+    "bench_robowbc_compare", ROBOWBC_COMPARE_PATH
+)
+ROBO_COMPARE = importlib.util.module_from_spec(ROBO_COMPARE_SPEC)
+assert ROBO_COMPARE_SPEC.loader is not None
+ROBO_COMPARE_SPEC.loader.exec_module(ROBO_COMPARE)
+
+OFFICIAL_COMPARE_SPEC = importlib.util.spec_from_file_location(
+    "bench_nvidia_official", OFFICIAL_COMPARE_PATH
+)
+OFFICIAL_COMPARE = importlib.util.module_from_spec(OFFICIAL_COMPARE_SPEC)
+assert OFFICIAL_COMPARE_SPEC.loader is not None
+OFFICIAL_COMPARE_SPEC.loader.exec_module(OFFICIAL_COMPARE)
 
 
 class NvidiaBenchmarkTests(unittest.TestCase):
@@ -216,6 +233,40 @@ class NvidiaBenchmarkTests(unittest.TestCase):
         cargo_path.chmod(cargo_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
         return fake_bin
 
+    def make_failing_bench_cargo(self, root: Path) -> Path:
+        fake_bin = root / "fake-bench-bin"
+        fake_bin.mkdir(parents=True)
+        cargo_path = fake_bin / "cargo"
+        cargo_path.write_text(
+            textwrap.dedent(
+                """
+                #!/usr/bin/env python3
+                import os
+                import sys
+
+
+                def main() -> int:
+                    args = sys.argv[1:]
+                    if not args or args[0] != "bench":
+                        raise SystemExit(f"unexpected cargo invocation: {args!r}")
+                    provider = os.environ.get("ROBOWBC_BENCH_PROVIDER", "<missing>")
+                    print(
+                        f"provider init failed for {provider}: missing runtime dependency libcuda.so.1",
+                        file=sys.stderr,
+                    )
+                    return 1
+
+
+                if __name__ == "__main__":
+                    raise SystemExit(main())
+                """
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        cargo_path.chmod(cargo_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        return fake_bin
+
     def make_fake_robowbc_binary(self, root: Path) -> Path:
         fake_bin = root / "fake-robowbc"
         fake_bin.write_text(
@@ -276,22 +327,148 @@ class NvidiaBenchmarkTests(unittest.TestCase):
         fake_bin.chmod(fake_bin.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
         return fake_bin
 
+    def make_fake_gear_sonic_harness(self, root: Path) -> Path:
+        harness_path = root / "fake-gear-sonic-harness"
+        harness_path.write_text(
+            textwrap.dedent(
+                """
+                #!/usr/bin/env python3
+                import sys
+
+
+                def main() -> int:
+                    args = sys.argv[1:]
+                    if "--provider" not in args:
+                        raise SystemExit("missing --provider")
+                    provider = args[args.index("--provider") + 1]
+                    print(
+                        f"requested provider {provider} failed: CUDAExecutionProvider not available",
+                        file=sys.stderr,
+                    )
+                    return 1
+
+
+                if __name__ == "__main__":
+                    raise SystemExit(main())
+                """
+            ).strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        harness_path.chmod(
+            harness_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+        )
+        return harness_path
+
     def test_registry_validates_and_contains_expected_cases(self) -> None:
         registry = NORMALIZER.load_registry(REGISTRY_PATH)
         case_ids = {case["case_id"] for case in registry["cases"]}
         self.assertEqual(
             case_ids,
             {
-                "gear_sonic_velocity/cold_start_tick",
-                "gear_sonic_velocity/warm_steady_state_tick",
-                "gear_sonic_velocity/replan_tick",
-                "gear_sonic_tracking/standing_placeholder_tick",
+                "gear_sonic/planner_only_cold_start",
+                "gear_sonic/planner_only_steady_state",
+                "gear_sonic/encoder_decoder_only_tracking_tick",
+                "gear_sonic/full_velocity_tick_cold_start",
+                "gear_sonic/full_velocity_tick_steady_state",
+                "gear_sonic/full_velocity_tick_replan_boundary",
                 "decoupled_wbc/walk_predict",
                 "decoupled_wbc/balance_predict",
                 "gear_sonic/end_to_end_cli_loop",
                 "decoupled_wbc/end_to_end_cli_loop",
             },
         )
+
+    def test_wrappers_list_cases_match_the_registry(self) -> None:
+        registry = NORMALIZER.load_registry(REGISTRY_PATH)
+        expected = [case["case_id"] for case in registry["cases"]]
+
+        for script_path in (ROBOWBC_COMPARE_PATH, OFFICIAL_COMPARE_PATH):
+            result = subprocess.run(
+                ["python3", str(script_path), "--list-cases"],
+                check=True,
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+            )
+            self.assertEqual(result.stdout.strip().splitlines(), expected)
+
+    def test_robowbc_source_command_for_case_includes_provider(self) -> None:
+        args = argparse.Namespace(
+            output_root=Path("/tmp/robowbc-bench-out"),
+            provider="cuda",
+        )
+        command = ROBO_COMPARE.source_command_for_case(
+            args, "gear_sonic/full_velocity_tick_steady_state"
+        )
+        self.assertEqual(
+            command,
+            "python3 scripts/bench_robowbc_compare.py --case "
+            "gear_sonic/full_velocity_tick_steady_state --provider cuda "
+            "--output-root /tmp/robowbc-bench-out",
+        )
+
+    def test_official_source_command_for_case_includes_provider_and_overrides(self) -> None:
+        args = argparse.Namespace(
+            provider="tensor_rt",
+            repo_dir=Path("/tmp/official-src"),
+            output_root=Path("/tmp/official-bench-out"),
+            samples=9,
+            ticks=17,
+            control_frequency_hz=60,
+        )
+        command = OFFICIAL_COMPARE.source_command_for_case(
+            args, "gear_sonic/planner_only_cold_start"
+        )
+        self.assertEqual(
+            command,
+            "python3 scripts/bench_nvidia_official.py --case "
+            "gear_sonic/planner_only_cold_start --provider tensor_rt "
+            "--repo-dir /tmp/official-src --output-root /tmp/official-bench-out "
+            "--samples 9 --ticks 17 --control-frequency-hz 60",
+        )
+
+    def test_rewrite_gear_sonic_provider_blocks_updates_all_sections(self) -> None:
+        config_text = (ROOT / "configs/sonic_g1.toml").read_text(encoding="utf-8")
+
+        for provider, expected in (
+            ("cpu", {"type": "cpu"}),
+            ("cuda", {"type": "cuda", "device_id": 0}),
+            ("tensor_rt", {"type": "tensor_rt", "device_id": 0}),
+        ):
+            with self.subTest(provider=provider):
+                rewritten = ROBO_COMPARE.rewrite_gear_sonic_provider_blocks(
+                    config_text, provider
+                )
+                parsed = tomllib.loads(rewritten)
+                self.assertEqual(parsed["policy"]["config"]["encoder"]["execution_provider"], expected)
+                self.assertEqual(parsed["policy"]["config"]["decoder"]["execution_provider"], expected)
+                self.assertEqual(parsed["policy"]["config"]["planner"]["execution_provider"], expected)
+
+    def test_compose_benchmark_cli_config_rewrites_providers_and_appends_report(self) -> None:
+        config_text = (ROOT / "configs/sonic_g1.toml").read_text(encoding="utf-8")
+        report_path = Path("/tmp/gear-sonic-bench-report.json")
+
+        composed = ROBO_COMPARE.compose_benchmark_cli_config(
+            config_text,
+            provider="cuda",
+            report_path=report_path,
+            rewrite_gear_sonic_providers=True,
+        )
+
+        parsed = tomllib.loads(composed)
+        expected_provider = {"type": "cuda", "device_id": 0}
+        self.assertEqual(
+            parsed["policy"]["config"]["encoder"]["execution_provider"], expected_provider
+        )
+        self.assertEqual(
+            parsed["policy"]["config"]["decoder"]["execution_provider"], expected_provider
+        )
+        self.assertEqual(
+            parsed["policy"]["config"]["planner"]["execution_provider"], expected_provider
+        )
+        self.assertEqual(parsed["report"]["output_path"], str(report_path))
+        self.assertEqual(parsed["report"]["max_frames"], 200)
 
     def test_normalize_criterion_samples(self) -> None:
         registry = NORMALIZER.load_registry(REGISTRY_PATH)
@@ -419,6 +596,8 @@ class NvidiaBenchmarkTests(unittest.TestCase):
             self.assertIn("decoupled_wbc/walk_predict", html_summary)
             self.assertIn("robowbc/decoupled_wbc__walk_predict.json", html_summary)
             self.assertIn("official/decoupled_wbc__walk_predict.json", html_summary)
+            self.assertIn("Path group", html_summary)
+            self.assertIn("Decoupled WBC", html_summary)
             self.assertIn("Site home", html_summary)
             self.assertIn("Markdown summary", html_summary)
             self.assertIn("Case registry", html_summary)
@@ -449,6 +628,36 @@ class NvidiaBenchmarkTests(unittest.TestCase):
             self.assertEqual(artifact["status"], "blocked")
             self.assertEqual(artifact["stack"], "official_nvidia")
             self.assertIn("scripts/download_decoupled_wbc_models.sh", artifact["notes"])
+
+    def test_official_wrapper_blocks_decoupled_non_cpu_provider_without_relabeling(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_dir = self.make_stub_decoupled_repo(Path(tmpdir))
+            output_dir = Path(tmpdir) / "official-artifacts"
+
+            subprocess.run(
+                [
+                    "python3",
+                    str(ROOT / "scripts/bench_nvidia_official.py"),
+                    "--case",
+                    "decoupled_wbc/walk_predict",
+                    "--provider",
+                    "cuda",
+                    "--repo-dir",
+                    str(repo_dir),
+                    "--output-root",
+                    str(output_dir),
+                ],
+                check=True,
+                cwd=ROOT,
+            )
+
+            artifact = json.loads(
+                (output_dir / "decoupled_wbc__walk_predict.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(artifact["status"], "blocked")
+            self.assertEqual(artifact["provider"], "cuda")
+            self.assertIn("stays CPU-only in this phase", artifact["notes"])
+            self.assertIn("quietly relabeling a CPU measurement", artifact["notes"])
 
     def test_official_wrapper_runs_decoupled_cases_and_blocks_gear_sonic_cases(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -509,8 +718,7 @@ class NvidiaBenchmarkTests(unittest.TestCase):
             )
             self.assertFalse(policy_dir.exists(), msg="official harness should not mutate the repo")
 
-    def test_robowbc_cli_wrapper_records_stable_case_command(self) -> None:
-        registry = NORMALIZER.load_registry(REGISTRY_PATH)
+    def test_robowbc_cli_wrapper_records_actual_case_command(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
             fake_bin = self.make_fake_cargo(tmp_path)
@@ -540,12 +748,132 @@ class NvidiaBenchmarkTests(unittest.TestCase):
                     env=env,
                 )
 
-                case = NORMALIZER.registry_case(registry, case_id)
                 artifact_path = output_dir / f"{case_id.replace('/', '__')}.json"
                 artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
                 self.assertEqual(artifact["status"], "ok")
-                self.assertEqual(artifact["source_command"], case["robowbc_command"])
+                self.assertEqual(
+                    artifact["source_command"],
+                    ROBO_COMPARE.source_command_for_case(
+                        argparse.Namespace(output_root=output_dir, provider="cpu"),
+                        case_id,
+                    ),
+                )
                 self.assertAlmostEqual(artifact["hz"], 41.25)
+
+    def test_robowbc_wrapper_blocks_decoupled_non_cpu_provider_without_relabeling(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "robowbc-artifacts"
+            subprocess.run(
+                [
+                    "python3",
+                    str(ROOT / "scripts/bench_robowbc_compare.py"),
+                    "--case",
+                    "decoupled_wbc/walk_predict",
+                    "--provider",
+                    "cuda",
+                    "--output-root",
+                    str(output_dir),
+                ],
+                check=True,
+                cwd=ROOT,
+            )
+
+            artifact = json.loads(
+                (output_dir / "decoupled_wbc__walk_predict.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(artifact["status"], "blocked")
+            self.assertEqual(artifact["provider"], "cuda")
+            self.assertIn("stays CPU-only in this phase", artifact["notes"])
+            self.assertIn("quietly relabeling a CPU measurement", artifact["notes"])
+
+    def test_robowbc_microbench_provider_failure_emits_blocked_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            fake_bin = self.make_failing_bench_cargo(tmp_path)
+            gear_sonic_model_dir = self.make_gear_sonic_model_dir(tmp_path)
+            output_dir = tmp_path / "robowbc-artifacts"
+            env = os.environ.copy()
+            env["PATH"] = str(fake_bin) + os.pathsep + env["PATH"]
+            env["GEAR_SONIC_MODEL_DIR"] = str(gear_sonic_model_dir)
+
+            subprocess.run(
+                [
+                    "python3",
+                    str(ROOT / "scripts/bench_robowbc_compare.py"),
+                    "--case",
+                    "gear_sonic/planner_only_cold_start",
+                    "--provider",
+                    "cuda",
+                    "--output-root",
+                    str(output_dir),
+                ],
+                check=True,
+                cwd=ROOT,
+                env=env,
+            )
+
+            artifact = json.loads(
+                (output_dir / "gear_sonic__planner_only_cold_start.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(artifact["status"], "blocked")
+            self.assertEqual(artifact["provider"], "cuda")
+            self.assertIn(
+                "Requested provider `cuda` could not run on the RoboWBC benchmark path.",
+                artifact["notes"],
+            )
+            self.assertIn(
+                "provider init failed for cuda: missing runtime dependency libcuda.so.1",
+                artifact["notes"],
+            )
+            self.assertIn("--provider cuda", artifact["source_command"])
+
+    def test_official_gear_sonic_provider_failure_emits_blocked_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            repo_dir = self.make_stub_decoupled_repo(tmp_path)
+            gear_sonic_model_dir = self.make_gear_sonic_model_dir(tmp_path)
+            fake_harness = self.make_fake_gear_sonic_harness(tmp_path)
+            output_dir = tmp_path / "official-artifacts"
+            env = os.environ.copy()
+            env["GEAR_SONIC_MODEL_DIR"] = str(gear_sonic_model_dir)
+            env["GEAR_SONIC_OFFICIAL_HARNESS_BIN"] = str(fake_harness)
+
+            subprocess.run(
+                [
+                    "python3",
+                    str(ROOT / "scripts/bench_nvidia_official.py"),
+                    "--case",
+                    "gear_sonic/planner_only_cold_start",
+                    "--provider",
+                    "tensor_rt",
+                    "--repo-dir",
+                    str(repo_dir),
+                    "--output-root",
+                    str(output_dir),
+                ],
+                check=True,
+                cwd=ROOT,
+                env=env,
+            )
+
+            artifact = json.loads(
+                (output_dir / "gear_sonic__planner_only_cold_start.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(artifact["status"], "blocked")
+            self.assertEqual(artifact["provider"], "tensor_rt")
+            self.assertIn(
+                "Requested provider `tensor_rt` could not run on the official GEAR-Sonic harness.",
+                artifact["notes"],
+            )
+            self.assertIn(
+                "requested provider tensor_rt failed: CUDAExecutionProvider not available",
+                artifact["notes"],
+            )
+            self.assertIn("--provider tensor_rt", artifact["source_command"])
 
     def test_roboharness_compose_run_config_injects_sections_and_updates_runtime(self) -> None:
         base_toml = textwrap.dedent(
