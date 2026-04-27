@@ -2,8 +2,13 @@
 gsd_state_version: 1.0
 milestone: v0.1
 milestone_name: Roboharness Visual Harness Integration
-status: complete
-last_updated: "2026-04-27T21:41:22+08:00"
+current_phase: Archived
+current_phase_name: Between milestones
+current_plan: Complete
+status: archived
+stopped_at: Between milestones
+last_updated: "2026-04-27T13:58:25.134Z"
+last_activity: 2026-04-27
 progress:
   total_phases: 6
   completed_phases: 6
@@ -16,14 +21,14 @@ progress:
 
 ## Current Position
 
-**Current Phase:** Complete
-**Current Phase Name:** Milestone complete
+**Current Phase:** Archived
+**Current Phase Name:** Between milestones
 **Total Phases:** 6
 **Current Plan:** Complete
 **Total Plans in Phase:** 1
-**Status:** Phase 5 and 6 executed, verified, and summarized; milestone work is complete
+**Status:** v0.1 milestone archived; ready for the next milestone
 **Last Activity:** 2026-04-27
-**Last Activity Description:** Completed the provider-truthful NVIDIA benchmark split, published the grouped HTML summary/docs updates, and verified the full showcase/browser path against the generated site bundle
+**Last Activity Description:** v0.1 milestone completed and archived
 **Progress:** [██████████] 100%
 
 ## Decisions Made
@@ -57,6 +62,6 @@ progress:
 
 ## Session
 
-Last Date: 2026-04-27T21:41:22+08:00
-Stopped At: Milestone complete
-Resume File: .planning/phases/06-add-robowbc-trt-rs-native-rust-tensorrt-backend-prototype-be/06-01-SUMMARY.md
+Last Date: 2026-04-27T21:58:00+08:00
+Stopped At: Between milestones
+Resume File: .planning/milestones/v0.1-ROADMAP.md
