@@ -55,7 +55,7 @@ def parse_args() -> argparse.Namespace:
         "--output-root",
         type=Path,
         default=DEFAULT_OFFICIAL_OUTPUT_ROOT,
-        help="Directory for normalized artifacts",
+        help="Base directory for normalized artifacts; provider subdirectories are created automatically",
     )
     parser.add_argument(
         "--provider",
@@ -100,6 +100,10 @@ def relative_to_root(path: Path) -> str:
         return str(path.relative_to(ROOT_DIR))
     except ValueError:
         return str(path)
+
+
+def provider_output_root(output_root: Path, provider: str) -> Path:
+    return output_root / provider
 
 
 def run(
@@ -467,6 +471,7 @@ def source_command_for_case(args: argparse.Namespace, case_id: str) -> str:
 def run_case(args: argparse.Namespace, case_id: str, robowbc_commit: str) -> None:
     upstream_commit = git_rev_parse(args.repo_dir)
     source_command = source_command_for_case(args, case_id)
+    output_root = provider_output_root(args.output_root, args.provider)
     if upstream_commit is None:
         emit_blocked(
             case_id=case_id,
@@ -474,7 +479,7 @@ def run_case(args: argparse.Namespace, case_id: str, robowbc_commit: str) -> Non
             upstream_commit=None,
             robowbc_commit=robowbc_commit,
             reason=repo_checkout_blocker(args.repo_dir),
-            output_root=args.output_root,
+            output_root=output_root,
             source_command=source_command,
         )
         return
@@ -487,7 +492,7 @@ def run_case(args: argparse.Namespace, case_id: str, robowbc_commit: str) -> Non
             upstream_commit=upstream_commit,
             robowbc_commit=robowbc_commit,
             reason=blocked_reason,
-            output_root=args.output_root,
+            output_root=output_root,
             source_command=source_command,
         )
         return
@@ -503,11 +508,11 @@ def run_case(args: argparse.Namespace, case_id: str, robowbc_commit: str) -> Non
                     "Official GEAR-Sonic checkpoints are missing under "
                     f"{DEFAULT_GEAR_SONIC_MODEL_DIR}; run scripts/download_gear_sonic_models.sh first."
                 ),
-                output_root=args.output_root,
+                output_root=output_root,
                 source_command=source_command,
             )
             return
-        build_reason = ensure_gear_sonic_harness(args.repo_dir, args.output_root)
+        build_reason = ensure_gear_sonic_harness(args.repo_dir, output_root)
         if build_reason is not None:
             emit_blocked(
                 case_id=case_id,
@@ -515,7 +520,7 @@ def run_case(args: argparse.Namespace, case_id: str, robowbc_commit: str) -> Non
                 upstream_commit=upstream_commit,
                 robowbc_commit=robowbc_commit,
                 reason=build_reason,
-                output_root=args.output_root,
+                output_root=output_root,
                 source_command=source_command,
             )
             return
@@ -523,7 +528,7 @@ def run_case(args: argparse.Namespace, case_id: str, robowbc_commit: str) -> Non
             run_gear_sonic_case(
                 case_id=case_id,
                 model_dir=DEFAULT_GEAR_SONIC_MODEL_DIR,
-                output_root=args.output_root,
+                output_root=output_root,
                 provider=args.provider,
                 upstream_commit=upstream_commit,
                 robowbc_commit=robowbc_commit,
@@ -542,7 +547,7 @@ def run_case(args: argparse.Namespace, case_id: str, robowbc_commit: str) -> Non
                     f"Requested provider `{args.provider}` could not run on the official "
                     f"GEAR-Sonic harness. Exact runtime output:\n{describe_process_failure(error)}"
                 ),
-                output_root=args.output_root,
+                output_root=output_root,
                 source_command=source_command,
             )
         return
@@ -559,7 +564,7 @@ def run_case(args: argparse.Namespace, case_id: str, robowbc_commit: str) -> Non
                     "Official Decoupled WBC models are missing under "
                     f"{model_dir}; run scripts/download_decoupled_wbc_models.sh first."
                 ),
-                output_root=args.output_root,
+                output_root=output_root,
                 source_command=source_command,
             )
             return
@@ -568,7 +573,7 @@ def run_case(args: argparse.Namespace, case_id: str, robowbc_commit: str) -> Non
                 case_id=case_id,
                 repo_dir=args.repo_dir,
                 model_dir=model_dir,
-                output_root=args.output_root,
+                output_root=output_root,
                 provider=args.provider,
                 upstream_commit=upstream_commit,
                 robowbc_commit=robowbc_commit,
@@ -587,7 +592,7 @@ def run_case(args: argparse.Namespace, case_id: str, robowbc_commit: str) -> Non
                     f"Requested provider `{args.provider}` could not run on the official "
                     f"Decoupled WBC harness. Exact runtime output:\n{describe_process_failure(error)}"
                 ),
-                output_root=args.output_root,
+                output_root=output_root,
                 source_command=source_command,
             )
         return
@@ -598,7 +603,7 @@ def run_case(args: argparse.Namespace, case_id: str, robowbc_commit: str) -> Non
         upstream_commit=upstream_commit,
         robowbc_commit=robowbc_commit,
         reason=f"No official-wrapper mapping has been defined for {case_id}.",
-        output_root=args.output_root,
+        output_root=output_root,
         source_command=source_command,
     )
 

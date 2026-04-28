@@ -360,6 +360,9 @@ class NvidiaBenchmarkTests(unittest.TestCase):
         )
         return harness_path
 
+    def provider_artifact_path(self, root: Path, provider: str, case_id: str) -> Path:
+        return root / provider / f"{case_id.replace('/', '__')}.json"
+
     def test_registry_validates_and_contains_expected_cases(self) -> None:
         registry = NORMALIZER.load_registry(REGISTRY_PATH)
         case_ids = {case["case_id"] for case in registry["cases"]}
@@ -563,30 +566,39 @@ class NvidiaBenchmarkTests(unittest.TestCase):
         registry = NORMALIZER.load_registry(REGISTRY_PATH)
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            (root / "official").mkdir()
-            (root / "robowbc").mkdir()
-
             case = NORMALIZER.registry_case(registry, "decoupled_wbc/walk_predict")
-            for stack_name, output_dir, p50_ns in (
-                ("official_nvidia", root / "official", 170_000),
-                ("robowbc", root / "robowbc", 41_000),
+            for provider, status, p50_ns in (
+                ("cpu", "ok", 170_000),
+                ("cuda", "blocked", None),
+                ("tensor_rt", "blocked", None),
             ):
-                artifact = NORMALIZER.build_artifact(
-                    case=case,
-                    stack=stack_name,
-                    upstream_commit="bc38f6d0ce6cab4589e025037ad0bfbab7ba73d8",
-                    robowbc_commit="cab3f22490f43c4a366a9f4cf769a250bcbe4063",
-                    provider="cpu",
-                    host_fingerprint="ci-host",
-                    samples_ns=[p50_ns, p50_ns + 1_000, p50_ns + 2_000],
-                    hz=None,
-                    notes="html test",
-                    source_command="python3 script.py",
-                    raw_source="raw.json",
-                    status="ok",
-                )
-                output_path = output_dir / "decoupled_wbc__walk_predict.json"
-                output_path.write_text(json.dumps(artifact), encoding="utf-8")
+                for stack_name, output_dir, stack_p50_ns in (
+                    ("official_nvidia", root / "official", p50_ns),
+                    ("robowbc", root / "robowbc", 41_000 if p50_ns is not None else None),
+                ):
+                    artifact = NORMALIZER.build_artifact(
+                        case=case,
+                        stack=stack_name,
+                        upstream_commit="bc38f6d0ce6cab4589e025037ad0bfbab7ba73d8",
+                        robowbc_commit="cab3f22490f43c4a366a9f4cf769a250bcbe4063",
+                        provider=provider,
+                        host_fingerprint="ci-host",
+                        samples_ns=(
+                            [stack_p50_ns, stack_p50_ns + 1_000, stack_p50_ns + 2_000]
+                            if stack_p50_ns is not None
+                            else []
+                        ),
+                        hz=None,
+                        notes="html test" if status == "ok" else "blocked for provider test",
+                        source_command="python3 script.py",
+                        raw_source="raw.json",
+                        status=status,
+                    )
+                    output_path = self.provider_artifact_path(
+                        output_dir, provider, "decoupled_wbc/walk_predict"
+                    )
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    output_path.write_text(json.dumps(artifact), encoding="utf-8")
 
             summary = RENDER.build_summary(registry, root)
             html_summary = RENDER.render_html(summary)
@@ -594,10 +606,19 @@ class NvidiaBenchmarkTests(unittest.TestCase):
             self.assertIn("<!DOCTYPE html>", html_summary)
             self.assertIn("RoboWBC NVIDIA Comparison", html_summary)
             self.assertIn("decoupled_wbc/walk_predict", html_summary)
-            self.assertIn("robowbc/decoupled_wbc__walk_predict.json", html_summary)
-            self.assertIn("official/decoupled_wbc__walk_predict.json", html_summary)
+            self.assertEqual(summary["providers"], ["cpu", "cuda", "tensor_rt"])
+            self.assertIn('id="provider-cpu"', html_summary)
+            self.assertIn('id="provider-cuda"', html_summary)
+            self.assertIn('id="provider-tensor_rt"', html_summary)
+            self.assertIn("robowbc/cpu/decoupled_wbc__walk_predict.json", html_summary)
+            self.assertIn("official/cpu/decoupled_wbc__walk_predict.json", html_summary)
+            self.assertIn("robowbc/cuda/decoupled_wbc__walk_predict.json", html_summary)
+            self.assertIn("official/tensor_rt/decoupled_wbc__walk_predict.json", html_summary)
             self.assertIn("Path group", html_summary)
             self.assertIn("Decoupled WBC", html_summary)
+            self.assertIn("CPU Case Matrix", html_summary)
+            self.assertIn("CUDA Case Matrix", html_summary)
+            self.assertIn("TensorRT Case Matrix", html_summary)
             self.assertIn("Site home", html_summary)
             self.assertIn("Markdown summary", html_summary)
             self.assertIn("Case registry", html_summary)
@@ -622,7 +643,9 @@ class NvidiaBenchmarkTests(unittest.TestCase):
                 cwd=ROOT,
                 env=env,
             )
-            artifact_path = Path(tmpdir) / "decoupled_wbc__walk_predict.json"
+            artifact_path = self.provider_artifact_path(
+                Path(tmpdir), "cpu", "decoupled_wbc/walk_predict"
+            )
             artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
             self.assertEqual(artifact["case_id"], "decoupled_wbc/walk_predict")
             self.assertEqual(artifact["status"], "blocked")
@@ -652,7 +675,9 @@ class NvidiaBenchmarkTests(unittest.TestCase):
             )
 
             artifact = json.loads(
-                (output_dir / "decoupled_wbc__walk_predict.json").read_text(encoding="utf-8")
+                self.provider_artifact_path(output_dir, "cuda", "decoupled_wbc/walk_predict").read_text(
+                    encoding="utf-8"
+                )
             )
             self.assertEqual(artifact["status"], "blocked")
             self.assertEqual(artifact["provider"], "cuda")
@@ -690,7 +715,7 @@ class NvidiaBenchmarkTests(unittest.TestCase):
 
             registry = NORMALIZER.load_registry(REGISTRY_PATH)
             for case in registry["cases"]:
-                artifact_path = output_dir / f"{case['case_id'].replace('/', '__')}.json"
+                artifact_path = self.provider_artifact_path(output_dir, "cpu", case["case_id"])
                 self.assertTrue(artifact_path.is_file(), msg=f"missing {artifact_path}")
                 artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
                 self.assertEqual(artifact["case_id"], case["case_id"])
@@ -748,7 +773,7 @@ class NvidiaBenchmarkTests(unittest.TestCase):
                     env=env,
                 )
 
-                artifact_path = output_dir / f"{case_id.replace('/', '__')}.json"
+                artifact_path = self.provider_artifact_path(output_dir, "cpu", case_id)
                 artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
                 self.assertEqual(artifact["status"], "ok")
                 self.assertEqual(
@@ -779,7 +804,9 @@ class NvidiaBenchmarkTests(unittest.TestCase):
             )
 
             artifact = json.loads(
-                (output_dir / "decoupled_wbc__walk_predict.json").read_text(encoding="utf-8")
+                self.provider_artifact_path(output_dir, "cuda", "decoupled_wbc/walk_predict").read_text(
+                    encoding="utf-8"
+                )
             )
             self.assertEqual(artifact["status"], "blocked")
             self.assertEqual(artifact["provider"], "cuda")
@@ -813,9 +840,9 @@ class NvidiaBenchmarkTests(unittest.TestCase):
             )
 
             artifact = json.loads(
-                (output_dir / "gear_sonic__planner_only_cold_start.json").read_text(
-                    encoding="utf-8"
-                )
+                self.provider_artifact_path(
+                    output_dir, "cuda", "gear_sonic/planner_only_cold_start"
+                ).read_text(encoding="utf-8")
             )
             self.assertEqual(artifact["status"], "blocked")
             self.assertEqual(artifact["provider"], "cuda")
@@ -859,9 +886,9 @@ class NvidiaBenchmarkTests(unittest.TestCase):
             )
 
             artifact = json.loads(
-                (output_dir / "gear_sonic__planner_only_cold_start.json").read_text(
-                    encoding="utf-8"
-                )
+                self.provider_artifact_path(
+                    output_dir, "tensor_rt", "gear_sonic/planner_only_cold_start"
+                ).read_text(encoding="utf-8")
             )
             self.assertEqual(artifact["status"], "blocked")
             self.assertEqual(artifact["provider"], "tensor_rt")

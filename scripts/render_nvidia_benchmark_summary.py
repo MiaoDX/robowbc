@@ -9,6 +9,13 @@ import json
 from pathlib import Path
 from typing import Any
 
+PROVIDER_ORDER = ("cpu", "cuda", "tensor_rt")
+PROVIDER_LABELS = {
+    "cpu": "CPU",
+    "cuda": "CUDA",
+    "tensor_rt": "TensorRT",
+}
+
 
 def load_json(path: Path) -> Any:
     with path.open("r", encoding="utf-8") as handle:
@@ -44,6 +51,10 @@ def format_hz(value: float | None) -> str:
     return f"{value:.3f} Hz"
 
 
+def format_provider(provider: str) -> str:
+    return PROVIDER_LABELS.get(provider, provider)
+
+
 def ratio_string(robowbc: dict[str, Any] | None, official: dict[str, Any] | None) -> str:
     if not robowbc or not official:
         return "n/a"
@@ -70,16 +81,41 @@ def artifact_cell(artifact: dict[str, Any] | None) -> str:
     )
 
 
-def artifact_path(output_root: Path, stack: str, case_id: str) -> Path:
+def canonical_artifact_path(output_root: Path, stack: str, provider: str, case_id: str) -> Path:
+    return output_root / stack / provider / f"{case_id.replace('/', '__')}.json"
+
+
+def legacy_artifact_path(output_root: Path, stack: str, case_id: str) -> Path:
     return output_root / stack / f"{case_id.replace('/', '__')}.json"
 
 
-def artifact_relpath(stack: str, case_id: str) -> str:
-    return f"{stack}/{case_id.replace('/', '__')}.json"
+def relpath(root: Path, path: Path) -> str:
+    return str(path.relative_to(root)).replace("\\", "/")
+
+
+def locate_artifact(
+    output_root: Path, stack: str, provider: str, case_id: str
+) -> tuple[dict[str, Any] | None, str]:
+    canonical_path = canonical_artifact_path(output_root, stack, provider, case_id)
+    artifact = load_artifact(canonical_path)
+    if artifact is not None:
+        return artifact, relpath(output_root, canonical_path)
+
+    if provider == "cpu":
+        legacy_path = legacy_artifact_path(output_root, stack, case_id)
+        legacy_artifact = load_artifact(legacy_path)
+        if legacy_artifact is not None:
+            return legacy_artifact, relpath(output_root, legacy_path)
+
+    return None, relpath(output_root, canonical_path)
 
 
 def consistent_field(artifacts: list[dict[str, Any]], field: str) -> str:
-    values = {str(artifact.get(field, "")) for artifact in artifacts if artifact}
+    values = {
+        str(value)
+        for artifact in artifacts
+        if artifact and (value := artifact.get(field)) not in (None, "")
+    }
     if not values:
         return "n/a"
     if len(values) == 1:
@@ -109,15 +145,17 @@ def case_group(case_id: str) -> str:
     return "Other"
 
 
-def build_summary(registry: dict[str, Any], output_root: Path) -> dict[str, Any]:
-    official_artifacts = []
-    robowbc_artifacts = []
+def build_provider_section(
+    registry: dict[str, Any], output_root: Path, provider: str
+) -> dict[str, Any]:
+    official_artifacts: list[dict[str, Any]] = []
+    robowbc_artifacts: list[dict[str, Any]] = []
     rows: list[dict[str, Any]] = []
 
     for case in registry["cases"]:
         case_id = case["case_id"]
-        official = load_artifact(artifact_path(output_root, "official", case_id))
-        robowbc = load_artifact(artifact_path(output_root, "robowbc", case_id))
+        official, official_relpath = locate_artifact(output_root, "official", provider, case_id)
+        robowbc, robowbc_relpath = locate_artifact(output_root, "robowbc", provider, case_id)
         if official:
             official_artifacts.append(official)
         if robowbc:
@@ -125,6 +163,8 @@ def build_summary(registry: dict[str, Any], output_root: Path) -> dict[str, Any]
 
         rows.append(
             {
+                "provider": provider,
+                "provider_label": format_provider(provider),
                 "case_id": case_id,
                 "group": case_group(case_id),
                 "description": str(case.get("description", "")),
@@ -132,20 +172,15 @@ def build_summary(registry: dict[str, Any], output_root: Path) -> dict[str, Any]
                 "official": official,
                 "robowbc": robowbc,
                 "ratio": ratio_string(robowbc, official),
-                "official_relpath": artifact_relpath("official", case_id),
-                "robowbc_relpath": artifact_relpath("robowbc", case_id),
+                "official_relpath": official_relpath,
+                "robowbc_relpath": robowbc_relpath,
             }
         )
 
+    artifacts = official_artifacts + robowbc_artifacts
     return {
-        "provenance": {
-            "robowbc_commit": consistent_field(robowbc_artifacts, "robowbc_commit"),
-            "upstream_commit": consistent_field(official_artifacts, "upstream_commit"),
-            "provider": consistent_field(official_artifacts + robowbc_artifacts, "provider"),
-            "host_fingerprint": consistent_field(
-                official_artifacts + robowbc_artifacts, "host_fingerprint"
-            ),
-        },
+        "provider": provider,
+        "provider_label": format_provider(provider),
         "rows": rows,
         "case_count": len(rows),
         "ok_pair_count": sum(
@@ -161,11 +196,63 @@ def build_summary(registry: dict[str, Any], output_root: Path) -> dict[str, Any]
             for row in rows
             if status_class(row["official"]) != "ok" or status_class(row["robowbc"]) != "ok"
         ),
+        "provenance": {
+            "robowbc_commit": consistent_field(robowbc_artifacts, "robowbc_commit"),
+            "upstream_commit": consistent_field(official_artifacts, "upstream_commit"),
+            "host_fingerprint": consistent_field(artifacts, "host_fingerprint"),
+        },
     }
+
+
+def build_summary(registry: dict[str, Any], output_root: Path) -> dict[str, Any]:
+    provider_sections = [
+        build_provider_section(registry, output_root, provider) for provider in PROVIDER_ORDER
+    ]
+    official_artifacts = [
+        row["official"]
+        for section in provider_sections
+        for row in section["rows"]
+        if row["official"] is not None
+    ]
+    robowbc_artifacts = [
+        row["robowbc"]
+        for section in provider_sections
+        for row in section["rows"]
+        if row["robowbc"] is not None
+    ]
+    artifacts = official_artifacts + robowbc_artifacts
+    return {
+        "providers": list(PROVIDER_ORDER),
+        "provider_sections": provider_sections,
+        "case_count": len(registry["cases"]),
+        "row_count": sum(section["case_count"] for section in provider_sections),
+        "ok_pair_count": sum(section["ok_pair_count"] for section in provider_sections),
+        "blocked_count": sum(section["blocked_count"] for section in provider_sections),
+        "provenance": {
+            "robowbc_commit": consistent_field(robowbc_artifacts, "robowbc_commit"),
+            "upstream_commit": consistent_field(official_artifacts, "upstream_commit"),
+            "host_fingerprint": consistent_field(artifacts, "host_fingerprint"),
+        },
+    }
+
+
+def rerun_commands() -> str:
+    return "\n".join(
+        [
+            'for provider in cpu cuda tensor_rt; do',
+            '  python3 scripts/bench_robowbc_compare.py --all --provider "$provider"',
+            '  python3 scripts/bench_nvidia_official.py --all --provider "$provider"',
+            "done",
+            "python3 scripts/render_nvidia_benchmark_summary.py --output artifacts/benchmarks/nvidia/SUMMARY.md",
+            "# or build the full static site bundle:",
+            "python3 scripts/build_site.py --output-dir /tmp/robowbc-site",
+        ]
+    )
 
 
 def render_markdown(summary: dict[str, Any]) -> str:
     provenance = summary["provenance"]
+    provider_list = ", ".join(f"`{provider}`" for provider in summary["providers"])
     lines: list[str] = [
         "# NVIDIA Comparison Summary",
         "",
@@ -174,69 +261,82 @@ def render_markdown(summary: dict[str, Any]) -> str:
         "",
         "## Provenance",
         "",
+        f"- Providers rendered: {provider_list}",
         f"- RoboWBC commit: `{provenance['robowbc_commit']}`",
         f"- Official upstream commit: `{provenance['upstream_commit']}`",
-        f"- Provider: `{provenance['provider']}`",
         f"- Host fingerprint: `{provenance['host_fingerprint']}`",
+        f"- Canonical cases per provider: `{summary['case_count']}`",
+        f"- Total rendered rows: `{summary['row_count']}`",
+        f"- Matched ok pairs: `{summary['ok_pair_count']}`",
+        f"- Blocked or missing rows: `{summary['blocked_count']}`",
         "",
-        "## Case Matrix",
-        "",
-        "| Path Group | Case ID | RoboWBC | Official NVIDIA | RoboWBC / Official (p50) | Why it matters |",
-        "|------------|---------|---------|------------------|---------------------------|----------------|",
     ]
 
-    for row in summary["rows"]:
-        lines.append(
-            "| "
-            + " | ".join(
-                [
-                    row["group"],
-                    f"`{row['case_id']}`",
-                    artifact_cell(row["robowbc"]),
-                    artifact_cell(row["official"]),
-                    row["ratio"],
-                    row["interpretation"],
-                ]
-            )
-            + " |"
+    for section in summary["provider_sections"]:
+        section_provenance = section["provenance"]
+        lines.extend(
+            [
+                f"## {section['provider_label']}",
+                "",
+                f"- Provider id: `{section['provider']}`",
+                f"- Matched ok pairs: `{section['ok_pair_count']}`",
+                f"- Blocked or missing rows: `{section['blocked_count']}`",
+                f"- RoboWBC commit: `{section_provenance['robowbc_commit']}`",
+                f"- Official upstream commit: `{section_provenance['upstream_commit']}`",
+                f"- Host fingerprint: `{section_provenance['host_fingerprint']}`",
+                "",
+                "| Path Group | Case ID | RoboWBC | Official NVIDIA | RoboWBC / Official (p50) | Why it matters |",
+                "|------------|---------|---------|------------------|---------------------------|----------------|",
+            ]
         )
+
+        for row in section["rows"]:
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        row["group"],
+                        f"`{row['case_id']}`",
+                        artifact_cell(row["robowbc"]),
+                        artifact_cell(row["official"]),
+                        row["ratio"],
+                        row["interpretation"],
+                    ]
+                )
+                + " |"
+            )
+
+        lines.extend(
+            [
+                "",
+                "### Raw Artifacts",
+                "",
+                "| Case ID | RoboWBC Artifact | Official Artifact |",
+                "|---------|------------------|-------------------|",
+            ]
+        )
+
+        for row in section["rows"]:
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        f"`{row['case_id']}`",
+                        f"`{row['robowbc_relpath']}`",
+                        f"`{row['official_relpath']}`",
+                    ]
+                )
+                + " |"
+            )
+
+        lines.append("")
 
     lines.extend(
         [
-            "",
-            "## Raw Artifacts",
-            "",
-            "Each row above is backed by the paired normalized JSON artifacts below.",
-            "",
-            "| Case ID | RoboWBC Artifact | Official Artifact |",
-            "|---------|------------------|-------------------|",
-        ]
-    )
-
-    for row in summary["rows"]:
-        lines.append(
-            "| "
-            + " | ".join(
-                [
-                    f"`{row['case_id']}`",
-                    f"`{row['robowbc_relpath']}`",
-                    f"`{row['official_relpath']}`",
-                ]
-            )
-            + " |"
-        )
-
-    lines.extend(
-        [
-            "",
             "## Rerun",
             "",
             "```bash",
-            "python3 scripts/bench_robowbc_compare.py --all",
-            "python3 scripts/bench_nvidia_official.py --all",
-            "python3 scripts/render_nvidia_benchmark_summary.py --output artifacts/benchmarks/nvidia/SUMMARY.md",
-            "# or build the full static site bundle:",
-            "python3 scripts/build_site.py --output-dir /tmp/robowbc-site",
+            rerun_commands(),
             "```",
             "",
             "If a future environment is missing models or build prerequisites, the wrappers will emit",
@@ -250,6 +350,9 @@ def render_markdown(summary: dict[str, Any]) -> str:
 
 def render_html(summary: dict[str, Any]) -> str:
     provenance = summary["provenance"]
+    provider_label_text = " / ".join(
+        format_provider(provider) for provider in summary["providers"]
+    )
 
     def metric_card(label: str, value: str) -> str:
         return (
@@ -257,10 +360,11 @@ def render_html(summary: dict[str, Any]) -> str:
             f"<strong>{html.escape(value)}</strong></div>"
         )
 
-    rows_html: list[str] = []
-    for row in summary["rows"]:
-        rows_html.append(
-            f"""<tr>
+    def render_section(section: dict[str, Any]) -> str:
+        rows_html: list[str] = []
+        for row in section["rows"]:
+            rows_html.append(
+                f"""<tr>
   <td><span class="group-pill">{html.escape(row['group'])}</span></td>
   <td>
     <code>{html.escape(row['case_id'])}</code>
@@ -275,16 +379,46 @@ def render_html(summary: dict[str, Any]) -> str:
     <a href="{html.escape(row['official_relpath'])}">Official JSON</a>
   </td>
 </tr>"""
-        )
+            )
 
-    rerun_cmds = "\n".join(
-        [
-            "python3 scripts/bench_robowbc_compare.py --all",
-            "python3 scripts/bench_nvidia_official.py --all",
-            "python3 scripts/render_nvidia_benchmark_summary.py --output artifacts/benchmarks/nvidia/SUMMARY.md --html-output /tmp/robowbc-site/benchmarks/nvidia/index.html",
-            "# or build the full static site bundle:",
-            "python3 scripts/build_site.py --output-dir /tmp/robowbc-site",
-        ]
+        section_provenance = section["provenance"]
+        return f"""<section class="panel provider-panel" id="provider-{html.escape(section['provider'])}">
+      <div class="section-heading">
+        <div>
+          <span class="provider-pill">{html.escape(section['provider_label'])}</span>
+          <h2>{html.escape(section['provider_label'])} Case Matrix</h2>
+          <p class="muted">GEAR-Sonic rows are measured on the requested provider. Decoupled WBC stays CPU-only in this phase, so non-CPU rows remain blocked instead of being relabeled.</p>
+        </div>
+      </div>
+      <div class="section-metrics">
+        {metric_card("Rows", str(section["case_count"]))}
+        {metric_card("Matched ok pairs", str(section["ok_pair_count"]))}
+        {metric_card("Blocked or missing rows", str(section["blocked_count"]))}
+        {metric_card("RoboWBC commit", section_provenance["robowbc_commit"])}
+        {metric_card("Official upstream commit", section_provenance["upstream_commit"])}
+      </div>
+      <p class="muted section-host">Host fingerprint: <code>{html.escape(section_provenance['host_fingerprint'])}</code></p>
+      <table>
+        <thead>
+          <tr>
+            <th>Path group</th>
+            <th>Case</th>
+            <th>RoboWBC</th>
+            <th>Official NVIDIA</th>
+            <th>p50 ratio</th>
+            <th>Why it matters</th>
+            <th>Artifacts</th>
+          </tr>
+        </thead>
+        <tbody>
+          {''.join(rows_html)}
+        </tbody>
+      </table>
+    </section>"""
+
+    provider_nav = "".join(
+        f'<a class="hero-link" href="#provider-{html.escape(provider)}">{html.escape(format_provider(provider))}</a>'
+        for provider in summary["providers"]
     )
 
     return f"""<!DOCTYPE html>
@@ -321,11 +455,14 @@ def render_html(summary: dict[str, Any]) -> str:
     .hero p {{ max-width: 82ch; line-height: 1.6; }}
     .hero-links {{ display: flex; flex-wrap: wrap; gap: 12px; margin-top: 18px; }}
     .hero-link {{ display: inline-flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 999px; border: 1px solid var(--border); background: rgba(255, 255, 255, 0.85); text-decoration: none; font-weight: 600; }}
-    .metrics {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 20px; }}
+    .metrics, .section-metrics {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 20px; }}
     .metric-card {{ background: #f7f9fc; border: 1px solid var(--border); border-radius: 18px; padding: 14px 16px; }}
     .metric-card span {{ display: block; color: var(--muted); font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }}
     .metric-card strong {{ font-size: 1rem; }}
-    .group-pill {{ display: inline-flex; align-items: center; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border); background: #eef4ff; color: var(--accent); font-size: 0.82rem; font-weight: 600; }}
+    .group-pill, .provider-pill {{ display: inline-flex; align-items: center; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border); background: #eef4ff; color: var(--accent); font-size: 0.82rem; font-weight: 600; }}
+    .provider-panel h2 {{ margin-bottom: 10px; }}
+    .section-heading {{ display: flex; flex-wrap: wrap; justify-content: space-between; gap: 16px; align-items: flex-start; }}
+    .section-host {{ margin-top: 16px; margin-bottom: 20px; }}
     table {{ width: 100%; border-collapse: collapse; }}
     th, td {{ text-align: left; padding: 14px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }}
     th {{ font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }}
@@ -347,48 +484,32 @@ def render_html(summary: dict[str, Any]) -> str:
   <main>
     <section class="hero">
       <h1>RoboWBC NVIDIA Comparison</h1>
-      <p>This page is generated automatically in CI from the normalized RoboWBC-vs-official benchmark artifacts. It keeps the matched-path comparison package visible on GitHub Pages without requiring readers to reconstruct the Markdown summary locally.</p>
-      <p class="muted">Rows stay honest: if a future rerun loses models, prerequisites, or an executable upstream seam, the page surfaces the blocked artifact instead of approximating a nearby path.</p>
+      <p>This page is generated automatically from normalized RoboWBC-vs-official benchmark artifacts. It keeps the matched-path comparison visible as one provider-aware report instead of collapsing GEAR-Sonic into a single CPU-only view.</p>
+      <p class="muted">Rows stay honest: GEAR-Sonic is shown across {html.escape(provider_label_text)}, while Decoupled WBC remains CPU-only in this phase and surfaces as blocked on non-CPU providers rather than being approximated.</p>
       <div class="hero-links">
         <a class="hero-link" href="../../index.html">Site home</a>
         <a class="hero-link" href="SUMMARY.md">Markdown summary</a>
         <a class="hero-link" href="cases.json">Case registry</a>
+        {provider_nav}
       </div>
       <div class="metrics">
-        {metric_card("Cases", str(summary["case_count"]))}
+        {metric_card("Canonical cases per provider", str(summary["case_count"]))}
+        {metric_card("Rendered providers", provider_label_text)}
+        {metric_card("Total rendered rows", str(summary["row_count"]))}
         {metric_card("Matched ok pairs", str(summary["ok_pair_count"]))}
         {metric_card("Blocked or missing rows", str(summary["blocked_count"]))}
-        {metric_card("Provider", provenance["provider"])}
         {metric_card("RoboWBC commit", provenance["robowbc_commit"])}
         {metric_card("Official upstream commit", provenance["upstream_commit"])}
       </div>
-      <p class="muted" style="margin-top: 18px;">Host fingerprint: <code>{html.escape(provenance['host_fingerprint'])}</code></p>
+      <p class="muted" style="margin-top: 18px;">Host fingerprint(s): <code>{html.escape(provenance['host_fingerprint'])}</code></p>
     </section>
 
-    <section class="panel">
-      <h2>Case Matrix</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Path group</th>
-            <th>Case</th>
-            <th>RoboWBC</th>
-            <th>Official NVIDIA</th>
-            <th>p50 ratio</th>
-            <th>Why it matters</th>
-            <th>Artifacts</th>
-          </tr>
-        </thead>
-        <tbody>
-          {''.join(rows_html)}
-        </tbody>
-      </table>
-    </section>
+    {''.join(render_section(section) for section in summary["provider_sections"])}
 
     <section class="panel">
       <h2>Rerun Commands</h2>
       <div class="callout">
-        <pre><code>{html.escape(rerun_cmds)}</code></pre>
+        <pre><code>{html.escape(rerun_commands())}</code></pre>
       </div>
     </section>
   </main>
