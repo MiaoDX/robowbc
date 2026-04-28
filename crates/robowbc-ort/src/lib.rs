@@ -34,6 +34,7 @@ pub use wbc_agile::{WbcAgileConfig, WbcAgilePolicy};
 pub mod hover;
 pub use hover::{HoverConfig, HoverPolicy};
 
+use ort::ep::ArbitrarilyConfigurableExecutionProvider;
 use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
 use ort::value::Tensor;
@@ -197,6 +198,7 @@ fn default_num_threads() -> usize {
 }
 
 const ROBOWBC_ORT_DYLIB_ENV: &str = "ROBOWBC_ORT_DYLIB_PATH";
+const TENSORRT_EXCLUDED_OP_TYPES: &str = "Cast";
 
 static ORT_RUNTIME_INIT: OnceLock<Result<(), String>> = OnceLock::new();
 
@@ -520,14 +522,23 @@ impl OrtBackend {
                 .map_err(|e| OrtError::SessionCreation {
                     reason: e.to_string(),
                 })?,
-            ExecutionProvider::TensorRt { device_id } => builder
-                .with_execution_providers([ort::ep::TensorRT::default()
+            ExecutionProvider::TensorRt { device_id } => {
+                // GEAR-Sonic's planner graph contains Float->Int64 Cast paths that
+                // TensorRT 10.x cannot compile when they are pulled into a TRT
+                // partition. Excluding Cast leaves those nodes to CUDA/CPU while
+                // still benchmarking the rest of the graph through TensorRT.
+                let tensorrt = ort::ep::TensorRT::default()
                     .with_device_id(*device_id)
+                    .with_arbitrary_config("trt_op_types_to_exclude", TENSORRT_EXCLUDED_OP_TYPES)
                     .build()
-                    .error_on_failure()])
-                .map_err(|e| OrtError::SessionCreation {
-                    reason: e.to_string(),
-                })?,
+                    .error_on_failure();
+                let cuda = ort::ep::CUDA::default().with_device_id(*device_id).build();
+                builder
+                    .with_execution_providers([tensorrt, cuda])
+                    .map_err(|e| OrtError::SessionCreation {
+                        reason: e.to_string(),
+                    })?
+            }
         };
 
         builder
