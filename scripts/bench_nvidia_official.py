@@ -22,7 +22,8 @@ DEFAULT_GEAR_SONIC_HARNESS_BIN = (
     ROOT_DIR / "target/nvidia-bench/bench_nvidia_gear_sonic_official"
 )
 DEFAULT_OFFICIAL_REPO_DIR = ROOT_DIR / "third_party/GR00T-WholeBodyControl"
-DEFAULT_OFFICIAL_OUTPUT_ROOT = ROOT_DIR / "artifacts/benchmarks/nvidia/official"
+IMPLEMENTATION_ID = "ort-cpp-sonic"
+DEFAULT_OFFICIAL_OUTPUT_ROOT = ROOT_DIR / "artifacts/benchmarks/nvidia" / IMPLEMENTATION_ID
 DEFAULT_DECOUPLED_MODEL_DIR = Path(
     os.environ.get("DECOUPLED_WBC_MODEL_DIR", str(ROOT_DIR / "models/decoupled-wbc"))
 )
@@ -212,7 +213,7 @@ def blocked_reason_for_provider(case_id: str, provider: str) -> str | None:
     if provider != "cpu" and case_id.startswith("decoupled_wbc/"):
         return (
             f"{case_id} stays CPU-only in this phase. Provider `{provider}` is not wired on "
-            "both comparison stacks for Decoupled WBC, so the row is blocked instead of "
+            "both benchmark implementations for Decoupled WBC, so the row is blocked instead of "
             "quietly relabeling a CPU measurement."
         )
     return None
@@ -231,7 +232,7 @@ def emit_blocked(
     case = NORMALIZER.registry_case(REGISTRY, case_id)
     artifact = NORMALIZER.build_artifact(
         case=case,
-        stack="official_nvidia",
+        implementation=IMPLEMENTATION_ID,
         upstream_commit=upstream_commit,
         robowbc_commit=robowbc_commit,
         provider=provider,
@@ -263,7 +264,7 @@ def normalize_manual_case(
     samples_ns, hz, raw_source = NORMALIZER.manual_samples_payload(input_path)
     artifact = NORMALIZER.build_artifact(
         case=case,
-        stack="official_nvidia",
+        implementation=IMPLEMENTATION_ID,
         upstream_commit=upstream_commit,
         robowbc_commit=robowbc_commit,
         provider=provider,
@@ -440,7 +441,7 @@ def run_gear_sonic_case(
         upstream_commit=upstream_commit,
         robowbc_commit=robowbc_commit,
         input_path=raw_output,
-        notes="Measured via official GEAR-Sonic C++ ONNX Runtime harness on the pinned source checkout.",
+        notes="Measured via the ORT-cpp-sonic GEAR-Sonic C++ ONNX Runtime harness on the pinned source checkout.",
         output_root=output_root,
         source_command=source_command,
     )
@@ -544,7 +545,7 @@ def run_case(args: argparse.Namespace, case_id: str, robowbc_commit: str) -> Non
                 upstream_commit=upstream_commit,
                 robowbc_commit=robowbc_commit,
                 reason=(
-                    f"Requested provider `{args.provider}` could not run on the official "
+                    f"Requested provider `{args.provider}` could not run on the ORT-cpp-sonic "
                     f"GEAR-Sonic harness. Exact runtime output:\n{describe_process_failure(error)}"
                 ),
                 output_root=output_root,

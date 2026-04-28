@@ -5,16 +5,29 @@ from __future__ import annotations
 
 import argparse
 import html
+import importlib.util
 import json
 from pathlib import Path
 from typing import Any
 
-PROVIDER_ORDER = ("cpu", "cuda", "tensor_rt")
-PROVIDER_LABELS = {
-    "cpu": "CPU",
-    "cuda": "CUDA",
-    "tensor_rt": "TensorRT",
-}
+ROOT_DIR = Path(__file__).resolve().parents[1]
+NORMALIZER_PATH = ROOT_DIR / "scripts/normalize_nvidia_benchmarks.py"
+
+
+def load_normalizer() -> Any:
+    spec = importlib.util.spec_from_file_location("normalize_nvidia_benchmarks", NORMALIZER_PATH)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"failed to load normalizer module from {NORMALIZER_PATH}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+NORMALIZER = load_normalizer()
+PROVIDER_ORDER = NORMALIZER.PROVIDER_ORDER
+IMPLEMENTATION_ORDER = NORMALIZER.IMPLEMENTATION_ORDER
+BASELINE_IMPLEMENTATION = "ort-cpp-sonic"
+RUST_IMPLEMENTATION = "ort-rs"
 
 
 def load_json(path: Path) -> Any:
@@ -51,20 +64,40 @@ def format_hz(value: float | None) -> str:
     return f"{value:.3f} Hz"
 
 
-def format_provider(provider: str) -> str:
-    return PROVIDER_LABELS.get(provider, provider)
+def format_provider_family(provider: str) -> str:
+    return NORMALIZER.provider_family(provider)
 
 
-def ratio_string(robowbc: dict[str, Any] | None, official: dict[str, Any] | None) -> str:
-    if not robowbc or not official:
+def format_implementation(implementation: str) -> str:
+    return NORMALIZER.implementation_label(implementation)
+
+
+def rendered_variant_labels() -> list[str]:
+    variants = [NORMALIZER.provider_family("cpu")]
+    for provider in PROVIDER_ORDER:
+        if provider == "cpu":
+            continue
+        for implementation in IMPLEMENTATION_ORDER:
+            variants.append(NORMALIZER.variant_label(provider, implementation))
+    return variants
+
+
+def ratio_string(
+    ort_rs: dict[str, Any] | None, ort_cpp_sonic: dict[str, Any] | None
+) -> str:
+    if not ort_rs or not ort_cpp_sonic:
         return "n/a"
-    if robowbc.get("status") != "ok" or official.get("status") != "ok":
+    if ort_rs.get("status") != "ok" or ort_cpp_sonic.get("status") != "ok":
         return "n/a"
-    robowbc_p50 = robowbc.get("p50_ns")
-    official_p50 = official.get("p50_ns")
-    if not isinstance(robowbc_p50, int) or not isinstance(official_p50, int) or official_p50 == 0:
+    ort_rs_p50 = ort_rs.get("p50_ns")
+    ort_cpp_sonic_p50 = ort_cpp_sonic.get("p50_ns")
+    if (
+        not isinstance(ort_rs_p50, int)
+        or not isinstance(ort_cpp_sonic_p50, int)
+        or ort_cpp_sonic_p50 == 0
+    ):
         return "n/a"
-    return f"{robowbc_p50 / official_p50:.2f}x"
+    return f"{ort_rs_p50 / ort_cpp_sonic_p50:.2f}x"
 
 
 def artifact_cell(artifact: dict[str, Any] | None) -> str:
@@ -81,12 +114,34 @@ def artifact_cell(artifact: dict[str, Any] | None) -> str:
     )
 
 
-def canonical_artifact_path(output_root: Path, stack: str, provider: str, case_id: str) -> Path:
-    return output_root / stack / provider / f"{case_id.replace('/', '__')}.json"
+def canonical_artifact_path(
+    output_root: Path, implementation: str, provider: str, case_id: str
+) -> Path:
+    return (
+        output_root
+        / NORMALIZER.implementation_artifact_dir(implementation)
+        / provider
+        / f"{case_id.replace('/', '__')}.json"
+    )
 
 
-def legacy_artifact_path(output_root: Path, stack: str, case_id: str) -> Path:
-    return output_root / stack / f"{case_id.replace('/', '__')}.json"
+def legacy_artifact_path(
+    output_root: Path, implementation: str, provider: str, case_id: str
+) -> Path:
+    return (
+        output_root
+        / NORMALIZER.legacy_artifact_dir(implementation)
+        / provider
+        / f"{case_id.replace('/', '__')}.json"
+    )
+
+
+def legacy_cpu_artifact_path(output_root: Path, implementation: str, case_id: str) -> Path:
+    return (
+        output_root
+        / NORMALIZER.legacy_artifact_dir(implementation)
+        / f"{case_id.replace('/', '__')}.json"
+    )
 
 
 def relpath(root: Path, path: Path) -> str:
@@ -94,19 +149,21 @@ def relpath(root: Path, path: Path) -> str:
 
 
 def locate_artifact(
-    output_root: Path, stack: str, provider: str, case_id: str
+    output_root: Path, implementation: str, provider: str, case_id: str
 ) -> tuple[dict[str, Any] | None, str]:
-    canonical_path = canonical_artifact_path(output_root, stack, provider, case_id)
-    artifact = load_artifact(canonical_path)
-    if artifact is not None:
-        return artifact, relpath(output_root, canonical_path)
-
-    if provider == "cpu":
-        legacy_path = legacy_artifact_path(output_root, stack, case_id)
-        legacy_artifact = load_artifact(legacy_path)
-        if legacy_artifact is not None:
-            return legacy_artifact, relpath(output_root, legacy_path)
-
+    canonical_path = canonical_artifact_path(output_root, implementation, provider, case_id)
+    for candidate in (
+        canonical_path,
+        legacy_artifact_path(output_root, implementation, provider, case_id),
+        legacy_cpu_artifact_path(output_root, implementation, case_id)
+        if provider == "cpu"
+        else None,
+    ):
+        if candidate is None:
+            continue
+        artifact = load_artifact(candidate)
+        if artifact is not None:
+            return artifact, relpath(output_root, candidate)
     return None, relpath(output_root, canonical_path)
 
 
@@ -148,57 +205,68 @@ def case_group(case_id: str) -> str:
 def build_provider_section(
     registry: dict[str, Any], output_root: Path, provider: str
 ) -> dict[str, Any]:
-    official_artifacts: list[dict[str, Any]] = []
-    robowbc_artifacts: list[dict[str, Any]] = []
+    artifacts_by_implementation: dict[str, list[dict[str, Any]]] = {
+        implementation: [] for implementation in IMPLEMENTATION_ORDER
+    }
     rows: list[dict[str, Any]] = []
 
     for case in registry["cases"]:
         case_id = case["case_id"]
-        official, official_relpath = locate_artifact(output_root, "official", provider, case_id)
-        robowbc, robowbc_relpath = locate_artifact(output_root, "robowbc", provider, case_id)
-        if official:
-            official_artifacts.append(official)
-        if robowbc:
-            robowbc_artifacts.append(robowbc)
+        row_artifacts: dict[str, dict[str, Any] | None] = {}
+        row_relpaths: dict[str, str] = {}
+        for implementation in IMPLEMENTATION_ORDER:
+            artifact, artifact_relpath = locate_artifact(output_root, implementation, provider, case_id)
+            row_artifacts[implementation] = artifact
+            row_relpaths[implementation] = artifact_relpath
+            if artifact is not None:
+                artifacts_by_implementation[implementation].append(artifact)
 
         rows.append(
             {
-                "provider": provider,
-                "provider_label": format_provider(provider),
+                "provider": format_provider_family(provider),
+                "provider_id": provider,
+                "provider_label": format_provider_family(provider),
                 "case_id": case_id,
                 "group": case_group(case_id),
                 "description": str(case.get("description", "")),
                 "interpretation": str(case["interpretation"]),
-                "official": official,
-                "robowbc": robowbc,
-                "ratio": ratio_string(robowbc, official),
-                "official_relpath": official_relpath,
-                "robowbc_relpath": robowbc_relpath,
+                "artifacts": row_artifacts,
+                "artifact_relpaths": row_relpaths,
+                "ratio": ratio_string(
+                    row_artifacts[RUST_IMPLEMENTATION],
+                    row_artifacts[BASELINE_IMPLEMENTATION],
+                ),
             }
         )
 
-    artifacts = official_artifacts + robowbc_artifacts
+    artifacts = [
+        artifact
+        for implementation in IMPLEMENTATION_ORDER
+        for artifact in artifacts_by_implementation[implementation]
+    ]
     return {
-        "provider": provider,
-        "provider_label": format_provider(provider),
+        "provider": format_provider_family(provider),
+        "provider_id": provider,
+        "provider_label": format_provider_family(provider),
         "rows": rows,
         "case_count": len(rows),
         "ok_pair_count": sum(
             1
             for row in rows
-            if row["official"] is not None
-            and row["robowbc"] is not None
-            and row["official"].get("status") == "ok"
-            and row["robowbc"].get("status") == "ok"
+            if row["artifacts"][BASELINE_IMPLEMENTATION] is not None
+            and row["artifacts"][RUST_IMPLEMENTATION] is not None
+            and row["artifacts"][BASELINE_IMPLEMENTATION].get("status") == "ok"
+            and row["artifacts"][RUST_IMPLEMENTATION].get("status") == "ok"
         ),
         "blocked_count": sum(
             1
             for row in rows
-            if status_class(row["official"]) != "ok" or status_class(row["robowbc"]) != "ok"
+            if status_class(row["artifacts"][BASELINE_IMPLEMENTATION]) != "ok"
+            or status_class(row["artifacts"][RUST_IMPLEMENTATION]) != "ok"
         ),
         "provenance": {
-            "robowbc_commit": consistent_field(robowbc_artifacts, "robowbc_commit"),
-            "upstream_commit": consistent_field(official_artifacts, "upstream_commit"),
+            "robowbc_commit": consistent_field(artifacts, "robowbc_commit"),
+            "upstream_commit": consistent_field(artifacts, "upstream_commit"),
             "host_fingerprint": consistent_field(artifacts, "host_fingerprint"),
         },
     }
@@ -208,29 +276,26 @@ def build_summary(registry: dict[str, Any], output_root: Path) -> dict[str, Any]
     provider_sections = [
         build_provider_section(registry, output_root, provider) for provider in PROVIDER_ORDER
     ]
-    official_artifacts = [
-        row["official"]
+    artifacts = [
+        artifact
         for section in provider_sections
         for row in section["rows"]
-        if row["official"] is not None
+        for artifact in row["artifacts"].values()
+        if artifact is not None
     ]
-    robowbc_artifacts = [
-        row["robowbc"]
-        for section in provider_sections
-        for row in section["rows"]
-        if row["robowbc"] is not None
-    ]
-    artifacts = official_artifacts + robowbc_artifacts
     return {
-        "providers": list(PROVIDER_ORDER),
+        "providers": [format_provider_family(provider) for provider in PROVIDER_ORDER],
+        "provider_ids": list(PROVIDER_ORDER),
+        "implementations": [format_implementation(implementation) for implementation in IMPLEMENTATION_ORDER],
+        "variants": rendered_variant_labels(),
         "provider_sections": provider_sections,
         "case_count": len(registry["cases"]),
         "row_count": sum(section["case_count"] for section in provider_sections),
         "ok_pair_count": sum(section["ok_pair_count"] for section in provider_sections),
         "blocked_count": sum(section["blocked_count"] for section in provider_sections),
         "provenance": {
-            "robowbc_commit": consistent_field(robowbc_artifacts, "robowbc_commit"),
-            "upstream_commit": consistent_field(official_artifacts, "upstream_commit"),
+            "robowbc_commit": consistent_field(artifacts, "robowbc_commit"),
+            "upstream_commit": consistent_field(artifacts, "upstream_commit"),
             "host_fingerprint": consistent_field(artifacts, "host_fingerprint"),
         },
     }
@@ -253,6 +318,8 @@ def rerun_commands() -> str:
 def render_markdown(summary: dict[str, Any]) -> str:
     provenance = summary["provenance"]
     provider_list = ", ".join(f"`{provider}`" for provider in summary["providers"])
+    variant_list = ", ".join(f"`{variant}`" for variant in summary["variants"])
+    implementation_list = ", ".join(f"`{implementation}`" for implementation in summary["implementations"])
     lines: list[str] = [
         "# NVIDIA Comparison Summary",
         "",
@@ -261,11 +328,13 @@ def render_markdown(summary: dict[str, Any]) -> str:
         "",
         "## Provenance",
         "",
-        f"- Providers rendered: {provider_list}",
+        f"- Variant families rendered: {provider_list}",
+        f"- Canonical variants: {variant_list}",
+        f"- Implementations compared: {implementation_list}",
         f"- RoboWBC commit: `{provenance['robowbc_commit']}`",
         f"- Official upstream commit: `{provenance['upstream_commit']}`",
         f"- Host fingerprint: `{provenance['host_fingerprint']}`",
-        f"- Canonical cases per provider: `{summary['case_count']}`",
+        f"- Canonical cases per provider family: `{summary['case_count']}`",
         f"- Total rendered rows: `{summary['row_count']}`",
         f"- Matched ok pairs: `{summary['ok_pair_count']}`",
         f"- Blocked or missing rows: `{summary['blocked_count']}`",
@@ -278,15 +347,16 @@ def render_markdown(summary: dict[str, Any]) -> str:
             [
                 f"## {section['provider_label']}",
                 "",
-                f"- Provider id: `{section['provider']}`",
+                f"- Provider family id: `{section['provider']}`",
+                f"- Benchmark provider request: `{section['provider_id']}`",
                 f"- Matched ok pairs: `{section['ok_pair_count']}`",
                 f"- Blocked or missing rows: `{section['blocked_count']}`",
                 f"- RoboWBC commit: `{section_provenance['robowbc_commit']}`",
                 f"- Official upstream commit: `{section_provenance['upstream_commit']}`",
                 f"- Host fingerprint: `{section_provenance['host_fingerprint']}`",
                 "",
-                "| Path Group | Case ID | RoboWBC | Official NVIDIA | RoboWBC / Official (p50) | Why it matters |",
-                "|------------|---------|---------|------------------|---------------------------|----------------|",
+                "| Path Group | Case ID | ORT-cpp-sonic | ORT-rs | ORT-rs / ORT-cpp-sonic (p50) | Why it matters |",
+                "|------------|---------|----------------|--------|-------------------------------|----------------|",
             ]
         )
 
@@ -297,8 +367,8 @@ def render_markdown(summary: dict[str, Any]) -> str:
                     [
                         row["group"],
                         f"`{row['case_id']}`",
-                        artifact_cell(row["robowbc"]),
-                        artifact_cell(row["official"]),
+                        artifact_cell(row["artifacts"][BASELINE_IMPLEMENTATION]),
+                        artifact_cell(row["artifacts"][RUST_IMPLEMENTATION]),
                         row["ratio"],
                         row["interpretation"],
                     ]
@@ -311,8 +381,8 @@ def render_markdown(summary: dict[str, Any]) -> str:
                 "",
                 "### Raw Artifacts",
                 "",
-                "| Case ID | RoboWBC Artifact | Official Artifact |",
-                "|---------|------------------|-------------------|",
+                "| Case ID | ORT-cpp-sonic Artifact | ORT-rs Artifact |",
+                "|---------|-------------------------|-----------------|",
             ]
         )
 
@@ -322,8 +392,8 @@ def render_markdown(summary: dict[str, Any]) -> str:
                 + " | ".join(
                     [
                         f"`{row['case_id']}`",
-                        f"`{row['robowbc_relpath']}`",
-                        f"`{row['official_relpath']}`",
+                        f"`{row['artifact_relpaths'][BASELINE_IMPLEMENTATION]}`",
+                        f"`{row['artifact_relpaths'][RUST_IMPLEMENTATION]}`",
                     ]
                 )
                 + " |"
@@ -350,9 +420,8 @@ def render_markdown(summary: dict[str, Any]) -> str:
 
 def render_html(summary: dict[str, Any]) -> str:
     provenance = summary["provenance"]
-    provider_label_text = " / ".join(
-        format_provider(provider) for provider in summary["providers"]
-    )
+    provider_label_text = " / ".join(summary["providers"])
+    variant_label_text = " / ".join(summary["variants"])
 
     def metric_card(label: str, value: str) -> str:
         return (
@@ -363,6 +432,8 @@ def render_html(summary: dict[str, Any]) -> str:
     def render_section(section: dict[str, Any]) -> str:
         rows_html: list[str] = []
         for row in section["rows"]:
+            ort_cpp_sonic = row["artifacts"][BASELINE_IMPLEMENTATION]
+            ort_rs = row["artifacts"][RUST_IMPLEMENTATION]
             rows_html.append(
                 f"""<tr>
   <td><span class="group-pill">{html.escape(row['group'])}</span></td>
@@ -370,13 +441,13 @@ def render_html(summary: dict[str, Any]) -> str:
     <code>{html.escape(row['case_id'])}</code>
     <div class="case-detail">{html.escape(row['description'])}</div>
   </td>
-  <td class="status-{status_class(row['robowbc'])}">{html.escape(artifact_cell(row['robowbc']))}</td>
-  <td class="status-{status_class(row['official'])}">{html.escape(artifact_cell(row['official']))}</td>
+  <td class="status-{status_class(ort_cpp_sonic)}">{html.escape(artifact_cell(ort_cpp_sonic))}</td>
+  <td class="status-{status_class(ort_rs)}">{html.escape(artifact_cell(ort_rs))}</td>
   <td>{html.escape(row['ratio'])}</td>
   <td>{html.escape(row['interpretation'])}</td>
   <td>
-    <a href="{html.escape(row['robowbc_relpath'])}">RoboWBC JSON</a><br />
-    <a href="{html.escape(row['official_relpath'])}">Official JSON</a>
+    <a href="{html.escape(row['artifact_relpaths'][BASELINE_IMPLEMENTATION])}">ORT-cpp-sonic JSON</a><br />
+    <a href="{html.escape(row['artifact_relpaths'][RUST_IMPLEMENTATION])}">ORT-rs JSON</a>
   </td>
 </tr>"""
             )
@@ -386,14 +457,15 @@ def render_html(summary: dict[str, Any]) -> str:
       <div class="section-heading">
         <div>
           <span class="provider-pill">{html.escape(section['provider_label'])}</span>
-          <h2>{html.escape(section['provider_label'])} Case Matrix</h2>
-          <p class="muted">GEAR-Sonic rows are measured on the requested provider. Decoupled WBC stays CPU-only in this phase, so non-CPU rows remain blocked instead of being relabeled.</p>
+          <h2>{html.escape(section['provider_label'])} Matrix</h2>
+          <p class="muted">This family keeps the ORT-cpp-sonic baseline beside ORT-rs on the same requested provider. Decoupled WBC remains CPU-only in this phase, so non-CPU rows stay blocked instead of being relabeled.</p>
         </div>
       </div>
       <div class="section-metrics">
         {metric_card("Rows", str(section["case_count"]))}
         {metric_card("Matched ok pairs", str(section["ok_pair_count"]))}
         {metric_card("Blocked or missing rows", str(section["blocked_count"]))}
+        {metric_card("Provider request", section["provider_id"])}
         {metric_card("RoboWBC commit", section_provenance["robowbc_commit"])}
         {metric_card("Official upstream commit", section_provenance["upstream_commit"])}
       </div>
@@ -403,9 +475,9 @@ def render_html(summary: dict[str, Any]) -> str:
           <tr>
             <th>Path group</th>
             <th>Case</th>
-            <th>RoboWBC</th>
-            <th>Official NVIDIA</th>
-            <th>p50 ratio</th>
+            <th>ORT-cpp-sonic</th>
+            <th>ORT-rs</th>
+            <th>ORT-rs / ORT-cpp-sonic (p50)</th>
             <th>Why it matters</th>
             <th>Artifacts</th>
           </tr>
@@ -417,7 +489,7 @@ def render_html(summary: dict[str, Any]) -> str:
     </section>"""
 
     provider_nav = "".join(
-        f'<a class="hero-link" href="#provider-{html.escape(provider)}">{html.escape(format_provider(provider))}</a>'
+        f'<a class="hero-link" href="#provider-{html.escape(provider)}">{html.escape(provider)}</a>'
         for provider in summary["providers"]
     )
 
@@ -484,8 +556,8 @@ def render_html(summary: dict[str, Any]) -> str:
   <main>
     <section class="hero">
       <h1>RoboWBC NVIDIA Comparison</h1>
-      <p>This page is generated automatically from normalized RoboWBC-vs-official benchmark artifacts. It keeps the matched-path comparison visible as one provider-aware report instead of collapsing GEAR-Sonic into a single CPU-only view.</p>
-      <p class="muted">Rows stay honest: GEAR-Sonic is shown across {html.escape(provider_label_text)}, while Decoupled WBC remains CPU-only in this phase and surfaces as blocked on non-CPU providers rather than being approximated.</p>
+      <p>This page is generated automatically from normalized ORT-cpp-sonic and ORT-rs benchmark artifacts. It keeps the benchmark vocabulary aligned with the codebase instead of mixing provider labels with legacy stack names.</p>
+      <p class="muted">Canonical variant families: {html.escape(provider_label_text)}. Canonical rendered variants: {html.escape(variant_label_text)}. Decoupled WBC remains CPU-only in this phase and stays blocked on non-CPU rows rather than being approximated.</p>
       <div class="hero-links">
         <a class="hero-link" href="../../index.html">Site home</a>
         <a class="hero-link" href="SUMMARY.md">Markdown summary</a>
@@ -493,9 +565,10 @@ def render_html(summary: dict[str, Any]) -> str:
         {provider_nav}
       </div>
       <div class="metrics">
-        {metric_card("Canonical cases per provider", str(summary["case_count"]))}
-        {metric_card("Rendered providers", provider_label_text)}
-        {metric_card("Total rendered rows", str(summary["row_count"]))}
+        {metric_card("Canonical cases per family", str(summary["case_count"]))}
+        {metric_card("Variant families", provider_label_text)}
+        {metric_card("Canonical variants", variant_label_text)}
+        {metric_card("Implementation columns", " / ".join(summary["implementations"]))}
         {metric_card("Matched ok pairs", str(summary["ok_pair_count"]))}
         {metric_card("Blocked or missing rows", str(summary["blocked_count"]))}
         {metric_card("RoboWBC commit", provenance["robowbc_commit"])}

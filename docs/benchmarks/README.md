@@ -20,6 +20,14 @@ hiding them behind the old ambiguous `replan_tick` split:
 2. What is the standalone encoder+decoder tracking cost?
 3. What is the full live velocity-path control-tick cost?
 
+The codebase now uses one canonical naming layer for the rendered variants:
+
+- `cpu-baseline`
+- `cuda-ORT-cpp-sonic`
+- `cuda-ORT-rs`
+- `trt-ORT-cpp-sonic`
+- `trt-ORT-rs`
+
 ## Audience and decision
 
 This comparison is for robotics infrastructure engineers deciding whether
@@ -93,7 +101,7 @@ The comparison uses a tracked git submodule checkout of
 The model-download helpers pin the default revisions and write a `REVISION` file
 beside the downloaded assets so later artifact runs can record provenance.
 
-### 2. Emit RoboWBC artifacts
+### 2. Emit ORT-rs artifacts
 
 ```bash
 for provider in cpu cuda tensor_rt; do
@@ -111,7 +119,7 @@ If the requested provider cannot initialize cleanly, the wrapper emits a
 blocked artifact with the exact failure reason rather than pretending a CPU row
 matches a CUDA or TensorRT request.
 
-### 3. Emit official-wrapper artifacts
+### 3. Emit ORT-cpp-sonic artifacts
 
 ```bash
 for provider in cpu cuda tensor_rt; do
@@ -121,7 +129,8 @@ done
 
 The official wrapper forwards the requested provider into the compiled
 GEAR-Sonic C++ ONNX Runtime harness so encoder, decoder, and planner all use
-the same execution provider for that row.
+the same execution provider for that row. In the normalized schema, this path
+is labeled `ORT-cpp-sonic`.
 
 If the local ORT build or host does not support the provider, the wrapper emits
 a blocked artifact with the exact missing-EP or initialization error.
@@ -143,18 +152,20 @@ python3 scripts/render_nvidia_benchmark_summary.py \
 
 ## Artifact layout
 
-- `artifacts/benchmarks/nvidia/robowbc/<provider>/*.json`
-- `artifacts/benchmarks/nvidia/official/<provider>/*.json`
+- `artifacts/benchmarks/nvidia/ort-rs/<provider>/*.json`
+- `artifacts/benchmarks/nvidia/ort-cpp-sonic/<provider>/*.json`
 - `artifacts/benchmarks/nvidia/SUMMARY.md`
 - CI / Pages: `benchmarks/nvidia/index.html`
 
 Every normalized artifact includes:
 
 - `case_id`
-- `stack`
+- `implementation`
 - `upstream_commit`
 - `robowbc_commit`
 - `provider`
+- `provider_family`
+- `variant_label`
 - `host_fingerprint`
 - `command_fixture`
 - `warmup_policy`
@@ -164,6 +175,9 @@ Every normalized artifact includes:
 - `p99_ns`
 - `hz`
 - `notes`
+
+The legacy `stack` field remains as a compatibility alias, but new code should
+read `implementation`.
 
 ## Publication rule
 

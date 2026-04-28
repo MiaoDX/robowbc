@@ -509,7 +509,7 @@ class NvidiaBenchmarkTests(unittest.TestCase):
 
             artifact = NORMALIZER.build_artifact(
                 case=case,
-                stack="robowbc",
+                implementation="ort-rs",
                 upstream_commit="upstream",
                 robowbc_commit="robowbc",
                 provider="cpu",
@@ -521,6 +521,8 @@ class NvidiaBenchmarkTests(unittest.TestCase):
                 raw_source=raw_source,
                 status="ok",
             )
+            self.assertEqual(artifact["implementation"], "ort-rs")
+            self.assertEqual(artifact["variant_label"], "cpu-baseline")
             self.assertEqual(artifact["p50_ns"], 120)
             self.assertEqual(artifact["p95_ns"], 129)
             self.assertEqual(artifact["p99_ns"], 130)
@@ -547,7 +549,7 @@ class NvidiaBenchmarkTests(unittest.TestCase):
             samples_ns, hz, raw_source = NORMALIZER.run_report_samples_ns(report_path)
             artifact = NORMALIZER.build_artifact(
                 case=case,
-                stack="robowbc",
+                implementation="ort-rs",
                 upstream_commit="upstream",
                 robowbc_commit="robowbc",
                 provider="cpu",
@@ -559,6 +561,8 @@ class NvidiaBenchmarkTests(unittest.TestCase):
                 raw_source=raw_source,
                 status="ok",
             )
+            self.assertEqual(artifact["implementation"], "ort-rs")
+            self.assertEqual(artifact["variant_label"], "cpu-baseline")
             self.assertEqual(artifact["p50_ns"], 1_500_000)
             self.assertEqual(artifact["hz"], 32.3)
 
@@ -572,20 +576,20 @@ class NvidiaBenchmarkTests(unittest.TestCase):
                 ("cuda", "blocked", None),
                 ("tensor_rt", "blocked", None),
             ):
-                for stack_name, output_dir, stack_p50_ns in (
-                    ("official_nvidia", root / "official", p50_ns),
-                    ("robowbc", root / "robowbc", 41_000 if p50_ns is not None else None),
+                for implementation, output_dir, impl_p50_ns in (
+                    ("ort-cpp-sonic", root / "ort-cpp-sonic", p50_ns),
+                    ("ort-rs", root / "ort-rs", 41_000 if p50_ns is not None else None),
                 ):
                     artifact = NORMALIZER.build_artifact(
                         case=case,
-                        stack=stack_name,
+                        implementation=implementation,
                         upstream_commit="bc38f6d0ce6cab4589e025037ad0bfbab7ba73d8",
                         robowbc_commit="cab3f22490f43c4a366a9f4cf769a250bcbe4063",
                         provider=provider,
                         host_fingerprint="ci-host",
                         samples_ns=(
-                            [stack_p50_ns, stack_p50_ns + 1_000, stack_p50_ns + 2_000]
-                            if stack_p50_ns is not None
+                            [impl_p50_ns, impl_p50_ns + 1_000, impl_p50_ns + 2_000]
+                            if impl_p50_ns is not None
                             else []
                         ),
                         hz=None,
@@ -606,19 +610,31 @@ class NvidiaBenchmarkTests(unittest.TestCase):
             self.assertIn("<!DOCTYPE html>", html_summary)
             self.assertIn("RoboWBC NVIDIA Comparison", html_summary)
             self.assertIn("decoupled_wbc/walk_predict", html_summary)
-            self.assertEqual(summary["providers"], ["cpu", "cuda", "tensor_rt"])
-            self.assertIn('id="provider-cpu"', html_summary)
+            self.assertEqual(summary["providers"], ["cpu-baseline", "cuda", "trt"])
+            self.assertEqual(
+                summary["variants"],
+                [
+                    "cpu-baseline",
+                    "cuda-ORT-cpp-sonic",
+                    "cuda-ORT-rs",
+                    "trt-ORT-cpp-sonic",
+                    "trt-ORT-rs",
+                ],
+            )
+            self.assertIn('id="provider-cpu-baseline"', html_summary)
             self.assertIn('id="provider-cuda"', html_summary)
-            self.assertIn('id="provider-tensor_rt"', html_summary)
-            self.assertIn("robowbc/cpu/decoupled_wbc__walk_predict.json", html_summary)
-            self.assertIn("official/cpu/decoupled_wbc__walk_predict.json", html_summary)
-            self.assertIn("robowbc/cuda/decoupled_wbc__walk_predict.json", html_summary)
-            self.assertIn("official/tensor_rt/decoupled_wbc__walk_predict.json", html_summary)
+            self.assertIn('id="provider-trt"', html_summary)
+            self.assertIn("ort-rs/cpu/decoupled_wbc__walk_predict.json", html_summary)
+            self.assertIn("ort-cpp-sonic/cpu/decoupled_wbc__walk_predict.json", html_summary)
+            self.assertIn("ort-rs/cuda/decoupled_wbc__walk_predict.json", html_summary)
+            self.assertIn("ort-cpp-sonic/tensor_rt/decoupled_wbc__walk_predict.json", html_summary)
             self.assertIn("Path group", html_summary)
             self.assertIn("Decoupled WBC", html_summary)
-            self.assertIn("CPU Case Matrix", html_summary)
-            self.assertIn("CUDA Case Matrix", html_summary)
-            self.assertIn("TensorRT Case Matrix", html_summary)
+            self.assertIn("cpu-baseline Matrix", html_summary)
+            self.assertIn("cuda Matrix", html_summary)
+            self.assertIn("trt Matrix", html_summary)
+            self.assertIn("ORT-cpp-sonic", html_summary)
+            self.assertIn("ORT-rs", html_summary)
             self.assertIn("Site home", html_summary)
             self.assertIn("Markdown summary", html_summary)
             self.assertIn("Case registry", html_summary)
@@ -649,7 +665,8 @@ class NvidiaBenchmarkTests(unittest.TestCase):
             artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
             self.assertEqual(artifact["case_id"], "decoupled_wbc/walk_predict")
             self.assertEqual(artifact["status"], "blocked")
-            self.assertEqual(artifact["stack"], "official_nvidia")
+            self.assertEqual(artifact["implementation"], "ort-cpp-sonic")
+            self.assertEqual(artifact["variant_label"], "cpu-baseline")
             self.assertIn("scripts/download_decoupled_wbc_models.sh", artifact["notes"])
 
     def test_official_wrapper_blocks_decoupled_non_cpu_provider_without_relabeling(self) -> None:
@@ -719,7 +736,7 @@ class NvidiaBenchmarkTests(unittest.TestCase):
                 self.assertTrue(artifact_path.is_file(), msg=f"missing {artifact_path}")
                 artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
                 self.assertEqual(artifact["case_id"], case["case_id"])
-                self.assertEqual(artifact["stack"], "official_nvidia")
+                self.assertEqual(artifact["implementation"], "ort-cpp-sonic")
 
                 if case["case_id"].startswith("decoupled_wbc/"):
                     self.assertEqual(artifact["status"], "ok")
@@ -847,7 +864,7 @@ class NvidiaBenchmarkTests(unittest.TestCase):
             self.assertEqual(artifact["status"], "blocked")
             self.assertEqual(artifact["provider"], "cuda")
             self.assertIn(
-                "Requested provider `cuda` could not run on the RoboWBC benchmark path.",
+                "Requested provider `cuda` could not run on the ORT-rs benchmark path.",
                 artifact["notes"],
             )
             self.assertIn(
@@ -893,7 +910,7 @@ class NvidiaBenchmarkTests(unittest.TestCase):
             self.assertEqual(artifact["status"], "blocked")
             self.assertEqual(artifact["provider"], "tensor_rt")
             self.assertIn(
-                "Requested provider `tensor_rt` could not run on the official GEAR-Sonic harness.",
+                "Requested provider `tensor_rt` could not run on the ORT-cpp-sonic GEAR-Sonic harness.",
                 artifact["notes"],
             )
             self.assertIn(

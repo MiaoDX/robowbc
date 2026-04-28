@@ -14,8 +14,11 @@ import tarfile
 import urllib.request
 from pathlib import Path
 
+import normalize_nvidia_benchmarks as benchmark_schema
+
 MUJOCO_VERSION = "3.6.0"
-BENCHMARK_PROVIDERS = ("cpu", "cuda", "tensor_rt")
+BENCHMARK_PROVIDERS = benchmark_schema.PROVIDER_ORDER
+BENCHMARK_IMPLEMENTATIONS = benchmark_schema.IMPLEMENTATION_ORDER
 
 
 def parse_args() -> argparse.Namespace:
@@ -66,11 +69,15 @@ def sync_benchmark_metadata(repo_root: Path) -> None:
 
 def reset_benchmark_artifacts(repo_root: Path) -> Path:
     artifact_root = repo_root / "artifacts" / "benchmarks" / "nvidia"
-    for stack in ("robowbc", "official"):
-        stack_root = artifact_root / stack
-        if stack_root.exists():
-            shutil.rmtree(stack_root)
-        stack_root.mkdir(parents=True, exist_ok=True)
+    for implementation in BENCHMARK_IMPLEMENTATIONS:
+        impl_root = artifact_root / implementation
+        if impl_root.exists():
+            shutil.rmtree(impl_root)
+        impl_root.mkdir(parents=True, exist_ok=True)
+    for legacy_dir in benchmark_schema.LEGACY_ARTIFACT_DIRS.values():
+        legacy_root = artifact_root / legacy_dir
+        if legacy_root.exists():
+            shutil.rmtree(legacy_root)
     return artifact_root
 
 
@@ -200,7 +207,7 @@ def build_benchmarks(repo_root: Path, output_dir: Path, env: dict[str, str]) -> 
                 "--provider",
                 provider,
                 "--output-root",
-                str(artifact_root / "robowbc"),
+                str(artifact_root / "ort-rs"),
             ],
             cwd=repo_root,
             env=env,
@@ -213,7 +220,7 @@ def build_benchmarks(repo_root: Path, output_dir: Path, env: dict[str, str]) -> 
                 "--provider",
                 provider,
                 "--output-root",
-                str(artifact_root / "official"),
+                str(artifact_root / "ort-cpp-sonic"),
             ],
             cwd=repo_root,
             env=env,
