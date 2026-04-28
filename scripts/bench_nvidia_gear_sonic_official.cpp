@@ -371,25 +371,7 @@ std::string format_provider_list(const std::vector<std::string>& providers) {
     return joined;
 }
 
-void require_provider_available(ProviderKind provider) {
-    if (provider == ProviderKind::Cpu) {
-        return;
-    }
-
-    const auto providers = available_providers();
-    const auto identifier = provider_identifier(provider);
-    if (std::find(providers.begin(), providers.end(), identifier) == providers.end()) {
-        throw std::runtime_error(
-            std::string("requested provider `") + provider_label(provider)
-            + "` is not advertised by this ONNX Runtime build; available providers: "
-            + format_provider_list(providers)
-        );
-    }
-}
-
 void configure_provider(Ort::SessionOptions& options, ProviderKind provider) {
-    require_provider_available(provider);
-
     if (provider == ProviderKind::Cpu) {
         return;
     }
@@ -426,9 +408,11 @@ Ort::Session make_session(Ort::Env& env, const fs::path& model_path, ProviderKin
     try {
         return Ort::Session(env, model_path_str.c_str(), options);
     } catch (const Ort::Exception& error) {
+        const auto providers = available_providers();
         throw std::runtime_error(
             std::string("failed to initialize provider `") + provider_label(provider)
             + "` for model " + model_path.string() + ": " + error.what()
+            + " (advertised providers: " + format_provider_list(providers) + ")"
         );
     }
 }
