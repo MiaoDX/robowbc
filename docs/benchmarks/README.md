@@ -96,7 +96,9 @@ beside the downloaded assets so later artifact runs can record provenance.
 ### 2. Emit RoboWBC artifacts
 
 ```bash
-python3 scripts/bench_robowbc_compare.py --all --provider cpu
+for provider in cpu cuda tensor_rt; do
+  python3 scripts/bench_robowbc_compare.py --all --provider "$provider"
+done
 ```
 
 This wrapper does three things:
@@ -112,7 +114,9 @@ matches a CUDA or TensorRT request.
 ### 3. Emit official-wrapper artifacts
 
 ```bash
-python3 scripts/bench_nvidia_official.py --all --provider cpu
+for provider in cpu cuda tensor_rt; do
+  python3 scripts/bench_nvidia_official.py --all --provider "$provider"
+done
 ```
 
 The official wrapper forwards the requested provider into the compiled
@@ -139,8 +143,8 @@ python3 scripts/render_nvidia_benchmark_summary.py \
 
 ## Artifact layout
 
-- `artifacts/benchmarks/nvidia/robowbc/*.json`
-- `artifacts/benchmarks/nvidia/official/*.json`
+- `artifacts/benchmarks/nvidia/robowbc/<provider>/*.json`
+- `artifacts/benchmarks/nvidia/official/<provider>/*.json`
 - `artifacts/benchmarks/nvidia/SUMMARY.md`
 - CI / Pages: `benchmarks/nvidia/index.html`
 
@@ -168,4 +172,5 @@ Publish only what exists as a normalized artifact under
 `artifacts/benchmarks/nvidia/`.
 
 If a row is blocked, say so explicitly. If a row is measured, link the row back
-to the artifact path and rerun command from `benchmarks/nvidia/cases.json`.
+to the normalized artifact path and the recorded `source_command` in that
+artifact.

@@ -9,8 +9,11 @@ same schema and case registry.
 - `cases.json`: source of truth for case IDs, command fixtures, warmup rules,
   rerun commands, and interpretation hooks
 - `official/`: normalized artifacts emitted by `python3 scripts/bench_nvidia_official.py`
+  under `official/<provider>/`
 - `robowbc/`: normalized artifacts emitted by `python3 scripts/bench_robowbc_compare.py`
-- `SUMMARY.md`: generated Markdown matrix rendered from the committed artifacts
+  under `robowbc/<provider>/`
+- `SUMMARY.md`: generated Markdown matrix rendered from the committed artifacts,
+  grouped into `cpu`, `cuda`, and `tensor_rt` sections
 - CI / Pages HTML: `benchmarks/nvidia/index.html` inside the generated showcase
   bundle, rendered from the same normalized artifacts
 - `patches/`: notes for any helper patches or wrapper glue required to expose a
@@ -73,15 +76,15 @@ Blocked GPU rows are the honest outcome when the local environment lacks:
    `git submodule update --init --recursive third_party/GR00T-WholeBodyControl`
    `bash scripts/download_gear_sonic_models.sh`
    `bash scripts/download_decoupled_wbc_models.sh`
-2. Emit the RoboWBC artifacts:
-   `python3 scripts/bench_robowbc_compare.py --all --provider cpu`
-3. Emit the official-wrapper artifacts:
-   `python3 scripts/bench_nvidia_official.py --all --provider cpu`
+2. Emit the RoboWBC artifacts for all rendered providers:
+   `for provider in cpu cuda tensor_rt; do python3 scripts/bench_robowbc_compare.py --all --provider "$provider"; done`
+3. Emit the official-wrapper artifacts for all rendered providers:
+   `for provider in cpu cuda tensor_rt; do python3 scripts/bench_nvidia_official.py --all --provider "$provider"; done`
 4. Render the Markdown summary:
    `python3 scripts/render_nvidia_benchmark_summary.py --output artifacts/benchmarks/nvidia/SUMMARY.md`
 5. Inspect `artifacts/benchmarks/nvidia/SUMMARY.md` plus the paired results
-   under `artifacts/benchmarks/nvidia/robowbc/` and
-   `artifacts/benchmarks/nvidia/official/`
+   under `artifacts/benchmarks/nvidia/robowbc/<provider>/` and
+   `artifacts/benchmarks/nvidia/official/<provider>/`
 
 The CI showcase job also copies this directory into its Pages bundle and emits a
 static HTML report at `benchmarks/nvidia/index.html` from the same JSON rows.

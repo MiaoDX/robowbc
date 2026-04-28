@@ -102,7 +102,7 @@ def parse_args() -> argparse.Namespace:
         "--output-root",
         type=Path,
         default=DEFAULT_OUTPUT_ROOT,
-        help="Directory for normalized artifacts",
+        help="Base directory for normalized artifacts; provider subdirectories are created automatically",
     )
     parser.add_argument(
         "--provider",
@@ -211,6 +211,10 @@ def have_decoupled_models(model_dir: Path) -> bool:
 
 def output_path_for(case_id: str, output_root: Path) -> Path:
     return output_root / f"{case_id.replace('/', '__')}.json"
+
+
+def provider_output_root(output_root: Path, provider: str) -> Path:
+    return output_root / provider
 
 
 def case_ids() -> set[str]:
@@ -510,6 +514,7 @@ def run_case(case_id: str, args: argparse.Namespace) -> None:
         raise ValueError(f"unknown case_id: {case_id}")
 
     source_command = source_command_for_case(args, case_id)
+    output_root = provider_output_root(args.output_root, args.provider)
     gear_model_dir = DEFAULT_GEAR_SONIC_MODEL_DIR
     decoupled_model_dir = DEFAULT_DECOUPLED_WBC_MODEL_DIR
     robowbc_commit = git_rev_parse(ROOT_DIR)
@@ -526,7 +531,7 @@ def run_case(case_id: str, args: argparse.Namespace) -> None:
             provider=args.provider,
             upstream_commit=upstream_commit,
             robowbc_commit=robowbc_commit,
-            output_root=args.output_root,
+            output_root=output_root,
             reason=blocked_reason,
             source_command=source_command,
         )
@@ -541,7 +546,7 @@ def run_case(case_id: str, args: argparse.Namespace) -> None:
                     provider=args.provider,
                     upstream_commit=gear_sonic_revision(gear_model_dir),
                     robowbc_commit=robowbc_commit,
-                    output_root=args.output_root,
+                    output_root=output_root,
                     reason=(
                         "GEAR-Sonic checkpoints not found under "
                         f"{gear_model_dir}; run scripts/download_gear_sonic_models.sh first."
@@ -556,7 +561,7 @@ def run_case(case_id: str, args: argparse.Namespace) -> None:
                     provider=args.provider,
                     upstream_commit=gear_sonic_revision(gear_model_dir),
                     robowbc_commit=robowbc_commit,
-                    output_root=args.output_root,
+                    output_root=output_root,
                     env_name="GEAR_SONIC_MODEL_DIR",
                     env_value=gear_model_dir,
                     source_command=source_command,
@@ -567,7 +572,7 @@ def run_case(case_id: str, args: argparse.Namespace) -> None:
                     provider=args.provider,
                     upstream_commit=gear_sonic_revision(gear_model_dir),
                     robowbc_commit=robowbc_commit,
-                    output_root=args.output_root,
+                    output_root=output_root,
                     reason=benchmark_failure_reason(args.provider, error),
                     source_command=source_command,
                 )
@@ -579,7 +584,7 @@ def run_case(case_id: str, args: argparse.Namespace) -> None:
                 provider=args.provider,
                 upstream_commit=decoupled_revision(decoupled_model_dir),
                 robowbc_commit=robowbc_commit,
-                output_root=args.output_root,
+                output_root=output_root,
                 reason=(
                     "Decoupled WBC checkpoints not found under "
                     f"{decoupled_model_dir}; run scripts/download_decoupled_wbc_models.sh first."
@@ -594,7 +599,7 @@ def run_case(case_id: str, args: argparse.Namespace) -> None:
                 provider=args.provider,
                 upstream_commit=decoupled_revision(decoupled_model_dir),
                 robowbc_commit=robowbc_commit,
-                output_root=args.output_root,
+                output_root=output_root,
                 env_name="DECOUPLED_WBC_MODEL_DIR",
                 env_value=decoupled_model_dir,
                 source_command=source_command,
@@ -605,7 +610,7 @@ def run_case(case_id: str, args: argparse.Namespace) -> None:
                 provider=args.provider,
                 upstream_commit=decoupled_revision(decoupled_model_dir),
                 robowbc_commit=robowbc_commit,
-                output_root=args.output_root,
+                output_root=output_root,
                 reason=benchmark_failure_reason(args.provider, error),
                 source_command=source_command,
             )
@@ -620,7 +625,7 @@ def run_case(case_id: str, args: argparse.Namespace) -> None:
                     provider=args.provider,
                     upstream_commit=gear_sonic_revision(gear_model_dir),
                     robowbc_commit=robowbc_commit,
-                    output_root=args.output_root,
+                    output_root=output_root,
                     reason=(
                         "GEAR-Sonic checkpoints not found under "
                         f"{gear_model_dir}; run scripts/download_gear_sonic_models.sh first."
@@ -635,7 +640,7 @@ def run_case(case_id: str, args: argparse.Namespace) -> None:
                     provider=args.provider,
                     upstream_commit=gear_sonic_revision(gear_model_dir),
                     robowbc_commit=robowbc_commit,
-                    output_root=args.output_root,
+                    output_root=output_root,
                     source_command=source_command,
                 )
             except (subprocess.CalledProcessError, ValueError) as error:
@@ -649,7 +654,7 @@ def run_case(case_id: str, args: argparse.Namespace) -> None:
                     provider=args.provider,
                     upstream_commit=gear_sonic_revision(gear_model_dir),
                     robowbc_commit=robowbc_commit,
-                    output_root=args.output_root,
+                    output_root=output_root,
                     reason=reason,
                     source_command=source_command,
                 )
@@ -661,7 +666,7 @@ def run_case(case_id: str, args: argparse.Namespace) -> None:
                 provider=args.provider,
                 upstream_commit=decoupled_revision(decoupled_model_dir),
                 robowbc_commit=robowbc_commit,
-                output_root=args.output_root,
+                output_root=output_root,
                 reason=(
                     "Decoupled WBC checkpoints not found under "
                     f"{decoupled_model_dir}; run scripts/download_decoupled_wbc_models.sh first."
@@ -676,7 +681,7 @@ def run_case(case_id: str, args: argparse.Namespace) -> None:
                 provider=args.provider,
                 upstream_commit=decoupled_revision(decoupled_model_dir),
                 robowbc_commit=robowbc_commit,
-                output_root=args.output_root,
+                output_root=output_root,
                 source_command=source_command,
             )
         except subprocess.CalledProcessError as error:
@@ -685,7 +690,7 @@ def run_case(case_id: str, args: argparse.Namespace) -> None:
                 provider=args.provider,
                 upstream_commit=decoupled_revision(decoupled_model_dir),
                 robowbc_commit=robowbc_commit,
-                output_root=args.output_root,
+                output_root=output_root,
                 reason=benchmark_failure_reason(args.provider, error),
                 source_command=source_command,
             )
@@ -696,7 +701,7 @@ def run_case(case_id: str, args: argparse.Namespace) -> None:
         provider=args.provider,
         upstream_commit="unknown-upstream",
         robowbc_commit=robowbc_commit,
-        output_root=args.output_root,
+        output_root=output_root,
         reason=f"No RoboWBC benchmark mapping has been defined for {case_id}.",
         source_command=source_command,
     )

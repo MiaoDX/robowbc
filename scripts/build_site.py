@@ -15,6 +15,7 @@ import urllib.request
 from pathlib import Path
 
 MUJOCO_VERSION = "3.6.0"
+BENCHMARK_PROVIDERS = ("cpu", "cuda", "tensor_rt")
 
 
 def parse_args() -> argparse.Namespace:
@@ -61,6 +62,16 @@ def sync_benchmark_metadata(repo_root: Path) -> None:
     source_patches = source_root / "patches"
     if source_patches.is_dir():
         shutil.copytree(source_patches, artifact_root / "patches", dirs_exist_ok=True)
+
+
+def reset_benchmark_artifacts(repo_root: Path) -> Path:
+    artifact_root = repo_root / "artifacts" / "benchmarks" / "nvidia"
+    for stack in ("robowbc", "official"):
+        stack_root = artifact_root / stack
+        if stack_root.exists():
+            shutil.rmtree(stack_root)
+        stack_root.mkdir(parents=True, exist_ok=True)
+    return artifact_root
 
 
 def resolve_build_env(repo_root: Path) -> tuple[dict[str, str], Path]:
@@ -178,32 +189,58 @@ def build_binary(repo_root: Path, binary: Path, env: dict[str, str]) -> None:
 
 def build_benchmarks(repo_root: Path, output_dir: Path, env: dict[str, str]) -> None:
     sync_benchmark_metadata(repo_root)
+    artifact_root = reset_benchmark_artifacts(repo_root)
     python = sys.executable
-    run([python, "scripts/bench_robowbc_compare.py", "--all"], cwd=repo_root, env=env)
-    run([python, "scripts/bench_nvidia_official.py", "--all"], cwd=repo_root, env=env)
+    for provider in BENCHMARK_PROVIDERS:
+        run(
+            [
+                python,
+                "scripts/bench_robowbc_compare.py",
+                "--all",
+                "--provider",
+                provider,
+                "--output-root",
+                str(artifact_root / "robowbc"),
+            ],
+            cwd=repo_root,
+            env=env,
+        )
+        run(
+            [
+                python,
+                "scripts/bench_nvidia_official.py",
+                "--all",
+                "--provider",
+                provider,
+                "--output-root",
+                str(artifact_root / "official"),
+            ],
+            cwd=repo_root,
+            env=env,
+        )
 
     source_root = repo_root / "artifacts" / "benchmarks" / "nvidia"
     if not source_root.is_dir():
         raise SystemExit(f"benchmark artifact root not found: {source_root}")
-
-    dest_root = output_dir / "benchmarks" / "nvidia"
-    dest_root.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(source_root, dest_root, dirs_exist_ok=True)
 
     run(
         [
             python,
             "scripts/render_nvidia_benchmark_summary.py",
             "--root",
-            str(dest_root),
+            str(source_root),
             "--output",
-            str(dest_root / "SUMMARY.md"),
+            str(source_root / "SUMMARY.md"),
             "--html-output",
-            str(dest_root / "index.html"),
+            str(source_root / "index.html"),
         ],
         cwd=repo_root,
         env=env,
     )
+
+    dest_root = output_dir / "benchmarks" / "nvidia"
+    dest_root.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(source_root, dest_root, dirs_exist_ok=True)
 
 
 def build_policy_site(
