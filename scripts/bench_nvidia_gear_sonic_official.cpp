@@ -371,6 +371,8 @@ std::string format_provider_list(const std::vector<std::string>& providers) {
     return joined;
 }
 
+constexpr const char* kTensorRtExcludedOpTypes = "Cast";
+
 void configure_provider(Ort::SessionOptions& options, ProviderKind provider) {
     if (provider == ProviderKind::Cpu) {
         return;
@@ -385,8 +387,18 @@ void configure_provider(Ort::SessionOptions& options, ProviderKind provider) {
         }
 
         Ort::TensorRTProviderOptions tensorrt_options;
-        tensorrt_options.Update({{"device_id", "0"}});
+        // GEAR-Sonic's planner graph includes Float->Int64 Cast paths that
+        // TensorRT cannot compile inside a fused subgraph. Excluding Cast keeps
+        // those nodes on CUDA/CPU while still exercising TensorRT for the rest
+        // of the graph.
+        tensorrt_options.Update({
+            {"device_id", "0"},
+            {"trt_op_types_to_exclude", kTensorRtExcludedOpTypes},
+        });
         options.AppendExecutionProvider_TensorRT_V2(*tensorrt_options);
+        Ort::CUDAProviderOptions cuda_options;
+        cuda_options.Update({{"device_id", "0"}});
+        options.AppendExecutionProvider_CUDA_V2(*cuda_options);
     } catch (const Ort::Exception& error) {
         throw std::runtime_error(
             std::string("failed to configure provider `") + provider_label(provider)
