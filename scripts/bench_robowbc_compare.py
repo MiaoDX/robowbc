@@ -16,7 +16,8 @@ from typing import Any
 ROOT_DIR = Path(__file__).resolve().parents[1]
 REGISTRY_PATH = ROOT_DIR / "benchmarks/nvidia/cases.json"
 NORMALIZER_PATH = ROOT_DIR / "scripts/normalize_nvidia_benchmarks.py"
-DEFAULT_OUTPUT_ROOT = ROOT_DIR / "artifacts/benchmarks/nvidia/robowbc"
+IMPLEMENTATION_ID = "ort-rs"
+DEFAULT_OUTPUT_ROOT = ROOT_DIR / "artifacts/benchmarks/nvidia" / IMPLEMENTATION_ID
 DEFAULT_MUJOCO_DOWNLOAD_DIR = ROOT_DIR / ".cache" / "mujoco"
 DEFAULT_GEAR_SONIC_REVISION = "cc80d505b7e055fd6ae26426ae8bfa0a74c26011"
 DEFAULT_DECOUPLED_COMMIT = "bc38f6d0ce6cab4589e025037ad0bfbab7ba73d8"
@@ -307,7 +308,7 @@ def describe_process_failure(error: subprocess.CalledProcessError) -> str:
 def benchmark_failure_reason(provider: str, error: subprocess.CalledProcessError) -> str:
     details = describe_process_failure(error)
     return (
-        f"Requested provider `{provider}` could not run on the RoboWBC benchmark path. "
+        f"Requested provider `{provider}` could not run on the ORT-rs benchmark path. "
         f"Exact runtime output:\n{details}"
     )
 
@@ -316,7 +317,7 @@ def blocked_reason_for_provider(case_id: str, provider: str) -> str | None:
     if provider != "cpu" and case_id.startswith("decoupled_wbc/"):
         return (
             f"{case_id} stays CPU-only in this phase. Provider `{provider}` is not wired on "
-            "both comparison stacks for Decoupled WBC, so the row is blocked instead of "
+            "both benchmark implementations for Decoupled WBC, so the row is blocked instead of "
             "quietly relabeling a CPU measurement."
         )
     return None
@@ -335,7 +336,7 @@ def emit_blocked(
     case = NORMALIZER.registry_case(REGISTRY, case_id)
     artifact = NORMALIZER.build_artifact(
         case=case,
-        stack="robowbc",
+        implementation=IMPLEMENTATION_ID,
         upstream_commit=upstream_commit,
         robowbc_commit=robowbc_commit,
         provider=provider,
@@ -368,14 +369,14 @@ def normalize_criterion_case(
     )
     artifact = NORMALIZER.build_artifact(
         case=case,
-        stack="robowbc",
+        implementation=IMPLEMENTATION_ID,
         upstream_commit=upstream_commit,
         robowbc_commit=robowbc_commit,
         provider=provider,
         host_fingerprint=None,
         samples_ns=samples_ns,
         hz=None,
-        notes="Normalized from Criterion sample.json per-iteration timings.",
+        notes="Normalized from ORT-rs Criterion sample.json per-iteration timings.",
         source_command=source_command,
         raw_source=raw_source,
         status="ok",
@@ -399,14 +400,14 @@ def normalize_run_report(
     samples_ns, hz, raw_source = NORMALIZER.run_report_samples_ns(report_path)
     artifact = NORMALIZER.build_artifact(
         case=case,
-        stack="robowbc",
+        implementation=IMPLEMENTATION_ID,
         upstream_commit=upstream_commit,
         robowbc_commit=robowbc_commit,
         provider=provider,
         host_fingerprint=None,
         samples_ns=samples_ns,
         hz=hz,
-        notes="Normalized from robowbc-cli JSON run report.",
+        notes="Normalized from the ORT-rs robowbc-cli JSON run report.",
         source_command=source_command,
         raw_source=raw_source,
         status="ok",

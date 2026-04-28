@@ -12,6 +12,32 @@ import socket
 from pathlib import Path
 from typing import Any
 
+PROVIDER_ORDER = ("cpu", "cuda", "tensor_rt")
+PROVIDER_ALIASES = {
+    "trt": "tensor_rt",
+}
+PROVIDER_FAMILY_IDS = {
+    "cpu": "cpu-baseline",
+    "cuda": "cuda",
+    "tensor_rt": "trt",
+}
+IMPLEMENTATION_ORDER = ("ort-cpp-sonic", "ort-rs")
+IMPLEMENTATION_LABELS = {
+    "ort-cpp-sonic": "ORT-cpp-sonic",
+    "ort-rs": "ORT-rs",
+}
+LEGACY_STACK_TO_IMPLEMENTATION = {
+    "official_nvidia": "ort-cpp-sonic",
+    "robowbc": "ort-rs",
+}
+IMPLEMENTATION_TO_LEGACY_STACK = {
+    implementation: stack for stack, implementation in LEGACY_STACK_TO_IMPLEMENTATION.items()
+}
+LEGACY_ARTIFACT_DIRS = {
+    "ort-cpp-sonic": "official",
+    "ort-rs": "robowbc",
+}
+
 
 def load_json(path: Path) -> Any:
     with path.open("r", encoding="utf-8") as handle:
@@ -83,6 +109,57 @@ def registry_case(registry: dict[str, Any], case_id: str) -> dict[str, Any]:
     raise ValueError(f"unknown case_id: {case_id}")
 
 
+def canonical_provider(provider: str) -> str:
+    try:
+        normalized = PROVIDER_ALIASES.get(provider, provider)
+        if normalized not in PROVIDER_ORDER:
+            raise KeyError(provider)
+        return normalized
+    except KeyError as exc:
+        expected = ", ".join(PROVIDER_ORDER)
+        raise ValueError(f"unknown provider {provider!r}; expected one of: {expected}") from exc
+
+
+def provider_family(provider: str) -> str:
+    return PROVIDER_FAMILY_IDS[canonical_provider(provider)]
+
+
+def canonical_implementation(implementation: str) -> str:
+    normalized = LEGACY_STACK_TO_IMPLEMENTATION.get(implementation, implementation)
+    if normalized not in IMPLEMENTATION_ORDER:
+        expected = ", ".join(IMPLEMENTATION_ORDER)
+        raise ValueError(
+            f"unknown implementation {implementation!r}; expected one of: {expected}"
+        )
+    return normalized
+
+
+def implementation_label(implementation: str) -> str:
+    return IMPLEMENTATION_LABELS[canonical_implementation(implementation)]
+
+
+def variant_label(provider: str, implementation: str) -> str:
+    provider_id = canonical_provider(provider)
+    if provider_id == "cpu":
+        return provider_family(provider_id)
+    return f"{provider_family(provider_id)}-{implementation_label(implementation)}"
+
+
+def variant_slug(provider: str, implementation: str) -> str:
+    provider_id = canonical_provider(provider)
+    if provider_id == "cpu":
+        return provider_family(provider_id)
+    return f"{provider_family(provider_id)}-{canonical_implementation(implementation)}"
+
+
+def implementation_artifact_dir(implementation: str) -> str:
+    return canonical_implementation(implementation)
+
+
+def legacy_artifact_dir(implementation: str) -> str:
+    return LEGACY_ARTIFACT_DIRS[canonical_implementation(implementation)]
+
+
 def criterion_samples_ns(criterion_root: Path, criterion_id: str) -> tuple[list[float], str]:
     for benchmark_json in criterion_root.rglob("benchmark.json"):
         benchmark = load_json(benchmark_json)
@@ -123,7 +200,7 @@ def manual_samples_payload(input_path: Path) -> tuple[list[float], float | None,
 def build_artifact(
     *,
     case: dict[str, Any],
-    stack: str,
+    implementation: str,
     upstream_commit: str | None,
     robowbc_commit: str | None,
     provider: str,
@@ -135,16 +212,23 @@ def build_artifact(
     raw_source: str,
     status: str,
 ) -> dict[str, Any]:
+    implementation_id = canonical_implementation(implementation)
+    provider_id = canonical_provider(provider)
     return {
         "schema_version": 1,
         "status": status,
         "case_id": case["case_id"],
         "description": case["description"],
         "interpretation": case["interpretation"],
-        "stack": stack,
+        "implementation": implementation_id,
+        "implementation_label": implementation_label(implementation_id),
+        "stack": IMPLEMENTATION_TO_LEGACY_STACK[implementation_id],
         "upstream_commit": upstream_commit,
         "robowbc_commit": robowbc_commit,
-        "provider": provider,
+        "provider": provider_id,
+        "provider_family": provider_family(provider_id),
+        "variant_label": variant_label(provider_id, implementation_id),
+        "variant_slug": variant_slug(provider_id, implementation_id),
         "host_fingerprint": host_fingerprint or default_host_fingerprint(),
         "command_fixture": case["command_fixture"],
         "warmup_policy": case["warmup_policy"],
@@ -167,7 +251,16 @@ def cmd_validate_registry(args: argparse.Namespace) -> int:
 def common_artifact_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--registry", type=Path, required=True)
     parser.add_argument("--case-id", required=True)
-    parser.add_argument("--stack", required=True, choices=("robowbc", "official_nvidia"))
+    parser.add_argument(
+        "--implementation",
+        required=True,
+        choices=(*IMPLEMENTATION_ORDER, *LEGACY_STACK_TO_IMPLEMENTATION),
+    )
+    parser.add_argument(
+        "--stack",
+        dest="implementation",
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument("--provider", required=True)
     parser.add_argument("--upstream-commit")
     parser.add_argument("--robowbc-commit")
@@ -186,7 +279,7 @@ def cmd_normalize_criterion(args: argparse.Namespace) -> int:
     samples_ns, raw_source = criterion_samples_ns(args.criterion_root, criterion_id)
     artifact = build_artifact(
         case=case,
-        stack=args.stack,
+        implementation=args.implementation,
         upstream_commit=args.upstream_commit,
         robowbc_commit=args.robowbc_commit,
         provider=args.provider,
@@ -208,7 +301,7 @@ def cmd_normalize_run_report(args: argparse.Namespace) -> int:
     samples_ns, hz, raw_source = run_report_samples_ns(args.input)
     artifact = build_artifact(
         case=case,
-        stack=args.stack,
+        implementation=args.implementation,
         upstream_commit=args.upstream_commit,
         robowbc_commit=args.robowbc_commit,
         provider=args.provider,
@@ -230,7 +323,7 @@ def cmd_normalize_samples(args: argparse.Namespace) -> int:
     samples_ns, hz, raw_source = manual_samples_payload(args.input)
     artifact = build_artifact(
         case=case,
-        stack=args.stack,
+        implementation=args.implementation,
         upstream_commit=args.upstream_commit,
         robowbc_commit=args.robowbc_commit,
         provider=args.provider,
@@ -251,7 +344,7 @@ def cmd_emit_blocked(args: argparse.Namespace) -> int:
     case = registry_case(registry, args.case_id)
     artifact = build_artifact(
         case=case,
-        stack=args.stack,
+        implementation=args.implementation,
         upstream_commit=args.upstream_commit,
         robowbc_commit=args.robowbc_commit,
         provider=args.provider,

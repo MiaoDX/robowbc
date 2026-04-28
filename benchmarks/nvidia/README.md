@@ -8,35 +8,49 @@ same schema and case registry.
 
 - `cases.json`: source of truth for case IDs, command fixtures, warmup rules,
   rerun commands, and interpretation hooks
-- `official/`: normalized artifacts emitted by `python3 scripts/bench_nvidia_official.py`
-  under `official/<provider>/`
-- `robowbc/`: normalized artifacts emitted by `python3 scripts/bench_robowbc_compare.py`
-  under `robowbc/<provider>/`
+- `ort-cpp-sonic/`: normalized artifacts emitted by
+  `python3 scripts/bench_nvidia_official.py` under
+  `ort-cpp-sonic/<provider>/`
+- `ort-rs/`: normalized artifacts emitted by
+  `python3 scripts/bench_robowbc_compare.py` under `ort-rs/<provider>/`
 - `SUMMARY.md`: generated Markdown matrix rendered from the committed artifacts,
-  grouped into `cpu`, `cuda`, and `tensor_rt` sections
+  grouped into `cpu-baseline`, `cuda`, and `trt` families
 - CI / Pages HTML: `benchmarks/nvidia/index.html` inside the generated showcase
   bundle, rendered from the same normalized artifacts
 - `patches/`: notes for any helper patches or wrapper glue required to expose a
-  fair benchmark seam in the upstream stack
+  fair benchmark seam in the upstream implementation
+
+The canonical rendered variant names are:
+
+- `cpu-baseline`
+- `cuda-ORT-cpp-sonic`
+- `cuda-ORT-rs`
+- `trt-ORT-cpp-sonic`
+- `trt-ORT-rs`
 
 ## Reproducibility contract
 
 Every normalized artifact must include:
 
 1. `case_id`
-2. `stack`
+2. `implementation`
 3. `upstream_commit`
 4. `robowbc_commit`
 5. `provider`
-6. `host_fingerprint`
-7. `command_fixture`
-8. `warmup_policy`
-9. `samples`
-10. `p50_ns`
-11. `p95_ns`
-12. `p99_ns`
-13. `hz`
-14. `notes`
+6. `provider_family`
+7. `variant_label`
+8. `host_fingerprint`
+9. `command_fixture`
+10. `warmup_policy`
+11. `samples`
+12. `p50_ns`
+13. `p95_ns`
+14. `p99_ns`
+15. `hz`
+16. `notes`
+
+The legacy `stack` field is still emitted as a compatibility alias while the
+rest of the codebase moves to `implementation`.
 
 If a case cannot be measured fairly, the wrapper must emit a `status = "blocked"`
 artifact with the exact blocker rather than silently substituting a nearby path.
@@ -76,15 +90,15 @@ Blocked GPU rows are the honest outcome when the local environment lacks:
    `git submodule update --init --recursive third_party/GR00T-WholeBodyControl`
    `bash scripts/download_gear_sonic_models.sh`
    `bash scripts/download_decoupled_wbc_models.sh`
-2. Emit the RoboWBC artifacts for all rendered providers:
+2. Emit the ORT-rs artifacts for all rendered providers:
    `for provider in cpu cuda tensor_rt; do python3 scripts/bench_robowbc_compare.py --all --provider "$provider"; done`
-3. Emit the official-wrapper artifacts for all rendered providers:
+3. Emit the ORT-cpp-sonic artifacts for all rendered providers:
    `for provider in cpu cuda tensor_rt; do python3 scripts/bench_nvidia_official.py --all --provider "$provider"; done`
 4. Render the Markdown summary:
    `python3 scripts/render_nvidia_benchmark_summary.py --output artifacts/benchmarks/nvidia/SUMMARY.md`
 5. Inspect `artifacts/benchmarks/nvidia/SUMMARY.md` plus the paired results
-   under `artifacts/benchmarks/nvidia/robowbc/<provider>/` and
-   `artifacts/benchmarks/nvidia/official/<provider>/`
+   under `artifacts/benchmarks/nvidia/ort-rs/<provider>/` and
+   `artifacts/benchmarks/nvidia/ort-cpp-sonic/<provider>/`
 
 The CI showcase job also copies this directory into its Pages bundle and emits a
 static HTML report at `benchmarks/nvidia/index.html` from the same JSON rows.
