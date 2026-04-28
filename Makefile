@@ -62,10 +62,19 @@ test: ## Run cargo test across the workspace and all targets.
 	$(CARGO) test --workspace --all-targets
 
 sim-feature-test: ## Run the feature-enabled MuJoCo sim transport tests with the runtime/plugin env wired.
-	MUJOCO_DOWNLOAD_DIR="$(abspath $(MUJOCO_DOWNLOAD_DIR))" \
-	MUJOCO_DYNAMIC_LINK_DIR="$(MUJOCO_DYNAMIC_LINK_DIR)" \
-	LD_LIBRARY_PATH="$(MUJOCO_DYNAMIC_LINK_DIR):$${LD_LIBRARY_PATH:-}" \
-	$(CARGO) test -p robowbc-sim --features mujoco-auto-download
+	download_dir="$(abspath $(MUJOCO_DOWNLOAD_DIR))"; \
+	link_dir="$(MUJOCO_DYNAMIC_LINK_DIR)"; \
+	runtime_ld_library_path="$$link_dir:$${LD_LIBRARY_PATH:-}"; \
+	if [[ -f "$$link_dir/libmujoco.so" || -f "$$link_dir/libmujoco.dylib" || -f "$$link_dir/mujoco.lib" ]]; then \
+		MUJOCO_DOWNLOAD_DIR="$$download_dir" \
+		MUJOCO_DYNAMIC_LINK_DIR="$$link_dir" \
+		LD_LIBRARY_PATH="$$runtime_ld_library_path" \
+		$(CARGO) test -p robowbc-sim --features mujoco-auto-download; \
+	else \
+		MUJOCO_DOWNLOAD_DIR="$$download_dir" \
+		LD_LIBRARY_PATH="$$runtime_ld_library_path" \
+		$(CARGO) test -p robowbc-sim --features mujoco-auto-download; \
+	fi
 
 clippy: ## Run clippy with warnings promoted to errors.
 	$(CARGO) clippy --workspace --all-targets -- -D warnings
