@@ -1,19 +1,19 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.1
-milestone_name: Roboharness Visual Harness Integration
-current_phase: Archived
-current_phase_name: Between milestones
+milestone: v0.2
+milestone_name: External Integration Surface
+current_phase: 1
+current_phase_name: Build a customer-facing external integration surface for locomotion and manipulation
 current_plan: Complete
-status: archived
-stopped_at: Between milestones
-last_updated: "2026-04-27T13:58:25.134Z"
-last_activity: 2026-04-27
+status: completed
+stopped_at: Phase 1 complete
+last_updated: "2026-04-29T15:30:00+08:00"
+last_activity: 2026-04-29
 progress:
-  total_phases: 6
-  completed_phases: 6
-  total_plans: 6
-  completed_plans: 6
+  total_phases: 1
+  completed_phases: 1
+  total_plans: 3
+  completed_plans: 3
   percent: 100
 ---
 
@@ -21,20 +21,21 @@ progress:
 
 ## Current Position
 
-**Current Phase:** Archived
-**Current Phase Name:** Between milestones
-**Total Phases:** 6
+**Current Phase:** 1
+**Current Phase Name:** Build a customer-facing external integration surface for locomotion and manipulation
+**Total Phases:** 1
 **Current Plan:** Complete
-**Total Plans in Phase:** 1
-**Status:** v0.1 milestone archived; ready for the next milestone
-**Last Activity:** 2026-04-27
-**Last Activity Description:** v0.1 milestone completed and archived
-**Progress:** [██████████] 100%
+**Total Plans in Phase:** 3
+**Status:** Phase complete
+**Last Activity:** 2026-04-29
+**Last Activity Description:** Phase 1 completed and validated — 3 plans shipped
+**Progress:** [##########] 100%
 
 ## Decisions Made
 
 | Phase | Decision | Rationale |
 |---|---|---|
+| v0.2-1 | Keep the public embedded contract at `Observation -> Policy.predict() -> JointPositionTargets`, expose truthful `Policy.capabilities()`, and make `KinematicPose` the single public manipulation command shape | Outside callers need honest capability discovery and one canonical manipulation seam without expanding into server/daemon or transport-facing APIs |
 | 1 | Keep `run_report.json` authoritative for runtime metrics and write replay truth into `run_report_replay_trace.json` | Long-run visual replay needs uncapped state without weakening the online metrics contract |
 | 2 | Treat proof packs as optional report artifacts and keep showcase/benchmark pages as overview surfaces | Drill-down evidence should remain additive instead of replacing the existing summary layer |
 | 3 | Expose the live MuJoCo backend from `robowbc-py` while keeping policy inference and stepping in Rust | roboharness needs a Python adapter seam without duplicating or drifting core control semantics |
@@ -46,6 +47,12 @@ progress:
 
 ### Roadmap Evolution
 
+- Milestone v0.2 started: External Integration Surface
+- Phase 1 added: Build a customer-facing external integration surface for locomotion and manipulation
+- Phase 1 context created: `01-CONTEXT.md` seeded from the current external integration discussion and plan
+- Phase 1 Plan 01 completed: the core runtime now exposes truthful supported-command metadata, shipped wrappers implement `capabilities()`, and the flat PyO3 backend rejects unsupported structured commands explicitly
+- Phase 1 Plan 02 completed: the Python SDK now exposes structured command classes, `Policy.capabilities()`, canonical `kinematic_pose` session ingress, and normalized nested relative paths in file-based config loading
+- Phase 1 Plan 03 completed: official locomotion/manipulation adapters, a live `MujocoSession` manipulation example, and embedded-runtime docs/examples now ship together
 - Phase 4 added: Make the visual harness phase-aware with lag-selectable phase-end comparisons
 - Phase 4 planned: `04-01-PLAN.md` carries the phase metadata, lag selector, proof-pack, and site-validation work
 - Phase 4 completed: `04-01-SUMMARY.md` records the phase-aware proof-pack contract, bundle validation coverage, and end-to-end showcase verification
@@ -62,6 +69,6 @@ progress:
 
 ## Session
 
-Last Date: 2026-04-27T21:58:00+08:00
-Stopped At: Between milestones
-Resume File: .planning/milestones/v0.1-ROADMAP.md
+Last Date: 2026-04-29T15:30:00+08:00
+Stopped At: Phase 1 complete
+Resume File: .planning/ROADMAP.md
