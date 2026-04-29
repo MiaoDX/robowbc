@@ -182,7 +182,7 @@ site-serve: ## Serve the generated site bundle locally. Set SITE_OPEN=1 to open 
 		$$extra_args
 
 python-sdk-deps: ## Install Python build dependencies for local SDK verification.
-	$(PYTHON) -m pip install "maturin>=1.4,<2.0"
+	$(PYTHON) -m pip install "maturin>=1.9.4,<2.0"
 
 python-sdk-build: python-sdk-deps ## Build the local RoboWBC Python wheel with an absolute MuJoCo cache path.
 	mkdir -p "$(PYTHON_SDK_DIST_DIR)" "$(abspath $(PYTHON_SDK_MUJOCO_DOWNLOAD_DIR))"

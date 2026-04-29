@@ -44,8 +44,8 @@
 
 use crate::{OrtBackend, OrtConfig};
 use robowbc_core::{
-    BodyPose, JointPositionTargets, Observation, Result as CoreResult, RobotConfig, WbcCommand,
-    WbcError,
+    BodyPose, JointPositionTargets, Observation, PolicyCapabilities, Result as CoreResult,
+    RobotConfig, WbcCommand, WbcCommandKind, WbcError,
 };
 use robowbc_registry::{RegistryPolicy, WbcRegistration};
 use serde::{Deserialize, Serialize};
@@ -189,6 +189,10 @@ impl robowbc_core::WbcPolicy for WholeBodyVlaPolicy {
 
     fn control_frequency_hz(&self) -> u32 {
         self.control_frequency_hz
+    }
+
+    fn capabilities(&self) -> PolicyCapabilities {
+        PolicyCapabilities::new(vec![WbcCommandKind::KinematicPose])
     }
 
     fn supported_robots(&self) -> &[RobotConfig] {

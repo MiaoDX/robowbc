@@ -62,7 +62,10 @@ use pyo3::prelude::{
     Py, PyAny, PyAnyMethods, PyDictMethods, PyErr, PyListMethods, PyResult, Python,
 };
 use pyo3::types::{PyDict, PyList};
-use robowbc_core::{JointPositionTargets, Observation, RobotConfig, WbcCommand, WbcError};
+use robowbc_core::{
+    JointPositionTargets, Observation, PolicyCapabilities, RobotConfig, WbcCommand, WbcCommandKind,
+    WbcError,
+};
 use robowbc_registry::{RegistryPolicy, WbcRegistration};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
@@ -233,18 +236,21 @@ fn load_torch_checkpoint(py: Python<'_>, path: &Path) -> PyResult<Py<PyAny>> {
 }
 
 /// Flattens the command payload into a `Vec<f32>` suitable for model input.
-fn command_to_floats(command: &WbcCommand) -> Vec<f32> {
+fn command_to_floats(command: &WbcCommand) -> robowbc_core::Result<Vec<f32>> {
     match command {
-        WbcCommand::MotionTokens(tokens) => tokens.clone(),
+        WbcCommand::MotionTokens(tokens) => Ok(tokens.clone()),
         WbcCommand::Velocity(twist) => {
             let mut v = twist.linear.to_vec();
             v.extend_from_slice(&twist.angular);
-            v
+            Ok(v)
         }
-        WbcCommand::JointTargets(targets) => targets.clone(),
-        // `EndEffectorPoses` and `KinematicPose` are not representable as a flat
-        // float vector without a protocol — pass empty for now.
-        WbcCommand::EndEffectorPoses(_) | WbcCommand::KinematicPose(_) => vec![],
+        WbcCommand::JointTargets(targets) => Ok(targets.clone()),
+        WbcCommand::EndEffectorPoses(_) => Err(WbcError::UnsupportedCommand(
+            "PyModelPolicy supports only velocity, motion_tokens, and joint_targets; query capabilities() before predict",
+        )),
+        WbcCommand::KinematicPose(_) => Err(WbcError::UnsupportedCommand(
+            "PyModelPolicy does not support kinematic_pose; query capabilities() before predict",
+        )),
     }
 }
 
@@ -267,7 +273,7 @@ impl robowbc_core::WbcPolicy for PyModelPolicy {
         obs_flat.extend_from_slice(&obs.joint_velocities);
         obs_flat.extend_from_slice(&obs.gravity_vector);
         obs_flat.extend_from_slice(&obs.angular_velocity);
-        obs_flat.extend(command_to_floats(&obs.command));
+        obs_flat.extend(command_to_floats(&obs.command)?);
 
         Python::attach(|py| {
             // Zero-copy transfer of obs_flat into a numpy array.
@@ -307,6 +313,14 @@ impl robowbc_core::WbcPolicy for PyModelPolicy {
         50
     }
 
+    fn capabilities(&self) -> PolicyCapabilities {
+        PolicyCapabilities::new(vec![
+            WbcCommandKind::Velocity,
+            WbcCommandKind::MotionTokens,
+            WbcCommandKind::JointTargets,
+        ])
+    }
+
     fn supported_robots(&self) -> &[RobotConfig] {
         std::slice::from_ref(&self.robot)
     }
@@ -329,7 +343,10 @@ inventory::submit! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use robowbc_core::{JointLimit, PdGains, Twist, WbcCommand, WbcPolicy};
+    use robowbc_core::{
+        BodyPose, JointLimit, LinkPose, PdGains, PolicyCapabilities, Twist, WbcCommand, WbcPolicy,
+        SE3,
+    };
     use std::path::PathBuf;
     use std::time::Instant;
 
@@ -556,6 +573,37 @@ mod tests {
         assert_eq!(policy.control_frequency_hz(), 50);
         assert_eq!(policy.supported_robots().len(), 1);
         assert_eq!(policy.supported_robots()[0].name, "test_robot");
+        assert_eq!(
+            policy.capabilities(),
+            PolicyCapabilities::new(vec![
+                WbcCommandKind::Velocity,
+                WbcCommandKind::MotionTokens,
+                WbcCommandKind::JointTargets,
+            ])
+        );
+    }
+
+    #[test]
+    fn structured_commands_are_rejected_by_flat_command_encoder() {
+        let end_effector_result = command_to_floats(&WbcCommand::EndEffectorPoses(vec![]));
+        assert!(matches!(
+            end_effector_result,
+            Err(WbcError::UnsupportedCommand(_))
+        ));
+
+        let kinematic_pose_result = command_to_floats(&WbcCommand::KinematicPose(BodyPose {
+            links: vec![LinkPose {
+                link_name: "left_wrist".to_owned(),
+                pose: SE3 {
+                    translation: [0.0, 0.0, 0.0],
+                    rotation_xyzw: [0.0, 0.0, 0.0, 1.0],
+                },
+            }],
+        }));
+        assert!(matches!(
+            kinematic_pose_result,
+            Err(WbcError::UnsupportedCommand(_))
+        ));
     }
 
     /// `PyTorch`-specific test — requires `torch` to be installed.

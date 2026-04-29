@@ -39,7 +39,8 @@ use ort::session::builder::GraphOptimizationLevel;
 use ort::session::Session;
 use ort::value::Tensor;
 use robowbc_core::{
-    BasePose, JointPositionTargets, Observation, Result as CoreResult, RobotConfig, WbcCommand,
+    BasePose, JointPositionTargets, Observation, PolicyCapabilities, Result as CoreResult,
+    RobotConfig, WbcCommand, WbcCommandKind,
 };
 use robowbc_registry::{RegistryPolicy, WbcRegistration};
 use serde::{Deserialize, Serialize};
@@ -2730,6 +2731,10 @@ impl robowbc_core::WbcPolicy for GearSonicPolicy {
 
     fn reset(&self) {
         let _ = Self::reset(self);
+    }
+
+    fn capabilities(&self) -> PolicyCapabilities {
+        PolicyCapabilities::new(vec![WbcCommandKind::Velocity, WbcCommandKind::MotionTokens])
     }
 
     fn control_frequency_hz(&self) -> u32 {

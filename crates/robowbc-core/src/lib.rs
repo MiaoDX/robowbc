@@ -33,6 +33,84 @@ impl std::fmt::Display for WbcError {
 
 impl std::error::Error for WbcError {}
 
+/// Public command taxonomy exposed to embedded `RoboWBC` callers.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WbcCommandKind {
+    /// Base linear/angular velocity command.
+    Velocity,
+    /// Tokenized motion reference command.
+    MotionTokens,
+    /// Direct joint-space target command.
+    JointTargets,
+    /// Whole-body kinematic pose command.
+    KinematicPose,
+}
+
+impl WbcCommandKind {
+    /// Returns the stable `snake_case` label used by external callers.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Velocity => "velocity",
+            Self::MotionTokens => "motion_tokens",
+            Self::JointTargets => "joint_targets",
+            Self::KinematicPose => "kinematic_pose",
+        }
+    }
+}
+
+impl std::fmt::Display for WbcCommandKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl TryFrom<&WbcCommand> for WbcCommandKind {
+    type Error = ();
+
+    fn try_from(command: &WbcCommand) -> std::result::Result<Self, Self::Error> {
+        match command {
+            WbcCommand::Velocity(_) => Ok(Self::Velocity),
+            WbcCommand::MotionTokens(_) => Ok(Self::MotionTokens),
+            WbcCommand::JointTargets(_) => Ok(Self::JointTargets),
+            WbcCommand::KinematicPose(_) => Ok(Self::KinematicPose),
+            WbcCommand::EndEffectorPoses(_) => Err(()),
+        }
+    }
+}
+
+/// Capability metadata exposed by a built policy before inference.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct PolicyCapabilities {
+    /// Public command kinds the policy can consume.
+    pub supported_commands: Vec<WbcCommandKind>,
+}
+
+impl PolicyCapabilities {
+    /// Build a normalized capability set.
+    #[must_use]
+    pub fn new(supported_commands: impl Into<Vec<WbcCommandKind>>) -> Self {
+        let mut supported_commands = supported_commands.into();
+        supported_commands.sort_unstable();
+        supported_commands.dedup();
+        Self { supported_commands }
+    }
+
+    /// Returns whether the capability set includes `kind`.
+    #[must_use]
+    pub fn supports(&self, kind: WbcCommandKind) -> bool {
+        self.supported_commands.contains(&kind)
+    }
+
+    /// Returns whether the capability set includes the public kind implied by
+    /// `command`.
+    #[must_use]
+    pub fn supports_command(&self, command: &WbcCommand) -> bool {
+        WbcCommandKind::try_from(command).is_ok_and(|kind| self.supports(kind))
+    }
+}
+
 /// Policy abstraction for whole-body control inference.
 ///
 /// Implementors convert a normalized [`Observation`] into
@@ -51,6 +129,9 @@ pub trait WbcPolicy: Send + Sync {
     /// Called at episode boundaries or when switching robots. The default
     /// implementation is a no-op for stateless policies.
     fn reset(&self) {}
+
+    /// Returns the public command kinds the policy accepts.
+    fn capabilities(&self) -> PolicyCapabilities;
 
     /// Returns the control frequency required by the policy runtime.
     fn control_frequency_hz(&self) -> u32;
@@ -323,6 +404,10 @@ mod tests {
             })
         }
 
+        fn capabilities(&self) -> PolicyCapabilities {
+            PolicyCapabilities::new(vec![WbcCommandKind::MotionTokens])
+        }
+
         fn control_frequency_hz(&self) -> u32 {
             50
         }
@@ -374,6 +459,32 @@ mod tests {
 
         assert_eq!(observation.joint_positions.len(), 2);
         assert!(matches!(observation.command, WbcCommand::Velocity(_)));
+    }
+
+    #[test]
+    fn policy_capabilities_track_public_commands() {
+        let capabilities = PolicyCapabilities::new(vec![
+            WbcCommandKind::Velocity,
+            WbcCommandKind::KinematicPose,
+            WbcCommandKind::Velocity,
+        ]);
+
+        assert_eq!(
+            capabilities.supported_commands,
+            vec![WbcCommandKind::Velocity, WbcCommandKind::KinematicPose]
+        );
+        assert!(capabilities.supports(WbcCommandKind::Velocity));
+        assert!(!capabilities.supports(WbcCommandKind::MotionTokens));
+    }
+
+    #[test]
+    fn public_command_kind_rejects_internal_end_effector_pose_variant() {
+        let command = WbcCommand::EndEffectorPoses(vec![SE3 {
+            translation: [0.0, 0.0, 0.0],
+            rotation_xyzw: [0.0, 0.0, 0.0, 1.0],
+        }]);
+
+        assert!(WbcCommandKind::try_from(&command).is_err());
     }
 
     #[test]

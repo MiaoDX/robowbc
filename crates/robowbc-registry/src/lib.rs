@@ -166,7 +166,10 @@ impl WbcRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use robowbc_core::{JointPositionTargets, Observation, Result as CoreResult, RobotConfig};
+    use robowbc_core::{
+        JointPositionTargets, Observation, PolicyCapabilities, Result as CoreResult, RobotConfig,
+        WbcCommandKind,
+    };
     use std::time::Instant;
 
     #[derive(Debug)]
@@ -215,6 +218,10 @@ mod tests {
             })
         }
 
+        fn capabilities(&self) -> PolicyCapabilities {
+            PolicyCapabilities::new(vec![WbcCommandKind::MotionTokens])
+        }
+
         fn control_frequency_hz(&self) -> u32 {
             50
         }
@@ -247,6 +254,10 @@ mod tests {
         };
         let targets = policy.predict(&obs).expect("prediction succeeds");
         assert_eq!(targets.positions, vec![1.0, -2.0]);
+        assert_eq!(
+            policy.capabilities().supported_commands,
+            vec![WbcCommandKind::MotionTokens]
+        );
     }
 
     #[test]
