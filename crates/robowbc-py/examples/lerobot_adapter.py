@@ -22,7 +22,7 @@ Interface mapping
 | ``observation.imu[:3]``             | ``gravity_vector``                       |
 | ``observation.imu[3:6]``            | ``angular_velocity``                     |
 +-------------------------------------+------------------------------------------+
-| ``observation.task_cmd``            | ``command_data`` (``command_type="velocity"``) |
+| ``observation.task_cmd``            | ``VelocityCommand``                     |
 +-------------------------------------+------------------------------------------+
 | ``action_dict["action"]``           | ``JointPositionTargets.positions``       |
 +-------------------------------------+------------------------------------------+
@@ -100,10 +100,35 @@ class RoboWBCController:
 
     def __init__(self, config_path: str) -> None:
         self._policy = robowbc.load_from_config(config_path)
+        self._capabilities = set(self._policy.capabilities().supported_commands)
+        if "velocity" not in self._capabilities:
+            supported = ", ".join(sorted(self._capabilities)) or "<none>"
+            raise RuntimeError(
+                "RoboWBCController requires a policy that supports the "
+                f"'velocity' command, got supported_commands=[{supported}]"
+            )
 
     # ------------------------------------------------------------------
     # LeRobot locomotion controller interface
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _velocity_command(command: Any) -> Any:
+        """Normalize LeRobot task commands into RoboWBC's 6D velocity surface."""
+        cmd_list = [float(value) for value in command]
+        if len(cmd_list) == 3:
+            return robowbc.VelocityCommand(
+                linear=[cmd_list[0], cmd_list[1], 0.0],
+                angular=[0.0, 0.0, cmd_list[2]],
+            )
+        if len(cmd_list) == 6:
+            return robowbc.VelocityCommand(
+                linear=cmd_list[:3],
+                angular=cmd_list[3:],
+            )
+        raise ValueError(
+            f"observation.task_cmd must have 3 or 6 elements, got {len(cmd_list)}"
+        )
 
     def step(self, obs_dict: dict[str, Any]) -> dict[str, list[float]]:
         """Run one inference step and return joint position targets.
@@ -131,7 +156,7 @@ class RoboWBCController:
             radians, matching the order in the loaded robot config.
         """
         imu = obs_dict["observation.imu"]
-        cmd = obs_dict["observation.task_cmd"]
+        command = self._velocity_command(obs_dict["observation.task_cmd"])
 
         # Gravity vector: projected_gravity is imu[:3].
         gravity = [float(imu[0]), float(imu[1]), float(imu[2])]
@@ -142,25 +167,12 @@ class RoboWBCController:
             float(imu[5]) if len(imu) > 5 else 0.0,
         ]
 
-        # Velocity command: expand [vx, vy, omega] → [vx, vy, vz, wx, wy, wz].
-        cmd_list = [float(v) for v in cmd]
-        if len(cmd_list) == 3:
-            # LeRobot convention: [forward, lateral, yaw_rate]
-            cmd_6 = [cmd_list[0], cmd_list[1], 0.0, 0.0, 0.0, cmd_list[2]]
-        elif len(cmd_list) == 6:
-            cmd_6 = cmd_list
-        else:
-            raise ValueError(
-                f"observation.task_cmd must have 3 or 6 elements, got {len(cmd_list)}"
-            )
-
         obs = robowbc.Observation(
             joint_positions=[float(v) for v in obs_dict["observation.state"]],
             joint_velocities=[float(v) for v in obs_dict["observation.velocity"]],
             gravity_vector=(gravity[0], gravity[1], gravity[2]),
             angular_velocity=(angular_velocity[0], angular_velocity[1], angular_velocity[2]),
-            command_type="velocity",
-            command_data=cmd_6,
+            command=command,
         )
         targets = self._policy.predict(obs)
         return {"action": targets.positions}

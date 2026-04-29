@@ -14,16 +14,57 @@ Unified inference runtime for humanoid whole-body control policies.
   <a href="docs/founding-document.md"><strong>Founding Document</strong></a>
 </p>
 
-RoboWBC gives you one config-driven runtime for loading multiple WBC policies,
-running them through the same Rust CLI, and exporting the same JSON + Rerun
-report pipeline across smoke tests, MuJoCo runs, and hardware-oriented
-transports.
+RoboWBC is an embedded runtime for loading multiple WBC policies through one
+customer-facing contract. The primary adoption path is the Python SDK
+(`Registry`, `Observation`, `Policy`, and `MujocoSession`). Embedded Rust is
+the secondary path for teams that want to own the host loop directly. The CLI
+stays in the repo as the verification, benchmarking, and reporting surface for
+the same runtime.
 
 RoboWBC is a Linux-only project. The runtime backends fail fast on non-Linux
 targets instead of carrying partial or unverified platform fallbacks.
 
 Run `make help` to see the repo-level commands for build, validation,
 benchmarks, site generation, and local serving.
+
+## Embedded Runtime Surface
+
+Python is the primary embedded runtime seam:
+
+```python
+from robowbc import Observation, Registry, VelocityCommand
+
+policy = Registry.build("decoupled_wbc", "configs/decoupled_smoke.toml")
+print(policy.capabilities().supported_commands)
+
+obs = Observation(
+    joint_positions=[0.0] * 4,
+    joint_velocities=[0.0] * 4,
+    gravity_vector=[0.0, 0.0, -1.0],
+    command=VelocityCommand(linear=[0.2, 0.0, 0.0], angular=[0.0, 0.0, 0.1]),
+)
+targets = policy.predict(obs)
+print(targets.positions)
+```
+
+Embedded Rust is the secondary path:
+
+```rust
+use robowbc_core::WbcCommandKind;
+use robowbc_registry::WbcRegistry;
+
+let policy = WbcRegistry::build("my_policy", &policy_cfg)?;
+let capabilities = policy.capabilities();
+assert!(capabilities.supports(WbcCommandKind::Velocity));
+```
+
+Phase 1 deliberately keeps the surface narrow:
+
+- Python SDK first, embedded runtime second
+- no `server/daemon` surface
+- no `ROS2` or `zenoh` customer API
+- no public `EndEffectorPoses` surface
+- no new wrapper families beyond the shipped policy wrappers
 
 ## Published HTML reports
 
@@ -175,14 +216,18 @@ release exists upstream today.
 <summary><strong>Python SDK</strong></summary>
 
 ```bash
-pip install "maturin>=1.4,<2.0"
+pip install "maturin>=1.9.4,<2.0"
 maturin develop
 python -c "from robowbc import Registry; print(Registry.list_policies())"
 ```
 
 The standalone Python package lives in `crates/robowbc-py`, while
 `robowbc-pyo3` provides the runtime backend for user-supplied Python or
-PyTorch policies.
+PyTorch policies. First-party embedded examples live at:
+
+- `crates/robowbc-py/examples/lerobot_adapter.py` for velocity-driven locomotion
+- `crates/robowbc-py/examples/manipulation_adapter.py` for named-link `kinematic_pose`
+- `examples/python/mujoco_kinematic_pose_session.py` for live `MujocoSession.step({"kinematic_pose": ...})`
 </details>
 
 <details>
