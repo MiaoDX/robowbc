@@ -1,7 +1,7 @@
 //! Python SDK for `RoboWBC`.
 //!
-//! Exposes [`Registry`], [`Observation`], [`JointPositionTargets`], and
-//! [`Policy`] as Python classes, giving Python users a first-class API for
+//! Exposes `Registry`, `Observation`, `JointPositionTargets`, and `Policy`
+//! as Python classes, giving Python users a first-class API for
 //! loading and running whole-body control policies without writing Rust.
 //!
 //! # Usage
@@ -53,15 +53,84 @@
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 #[allow(clippy::wildcard_imports)]
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict};
+use pyo3::types::{PyBytes, PyDict, PyList};
 use robowbc_comm::{run_control_tick, CommConfig};
-use robowbc_core::{Observation, RobotConfig, Twist, WbcCommand, WbcPolicy};
+use robowbc_core::{
+    BodyPose as CoreBodyPose, LinkPose as CoreLinkPose, Observation, PolicyCapabilities,
+    RobotConfig, Twist, WbcCommand, WbcCommandKind, WbcPolicy, SE3,
+};
 use robowbc_registry::WbcRegistry;
 use robowbc_sim::{MujocoConfig, MujocoTransport};
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
+
+const RELATIVE_CONFIG_PATH_KEYS: &[&str] = &["config_path", "model_path", "context_path"];
+
+fn resolve_config_path(path: &Path, base_dir: &Path) -> PathBuf {
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+
+    for candidate_base in base_dir.ancestors() {
+        let candidate = candidate_base.join(path);
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+
+    base_dir.join(path)
+}
+
+fn resolve_relative_config_paths(value: &mut toml::Value, base_dir: &Path) {
+    match value {
+        toml::Value::Table(table) => {
+            for (key, entry) in table.iter_mut() {
+                if RELATIVE_CONFIG_PATH_KEYS.contains(&key.as_str()) {
+                    if let Some(path_str) = entry.as_str() {
+                        let path = Path::new(path_str);
+                        if path.is_relative() {
+                            *entry = toml::Value::String(
+                                resolve_config_path(path, base_dir)
+                                    .to_string_lossy()
+                                    .into_owned(),
+                            );
+                        }
+                    }
+                } else {
+                    resolve_relative_config_paths(entry, base_dir);
+                }
+            }
+        }
+        toml::Value::Array(values) => {
+            for entry in values {
+                resolve_relative_config_paths(entry, base_dir);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn load_config_document(config_path: &Path) -> PyResult<toml::Value> {
+    let content = std::fs::read_to_string(config_path).map_err(|error| {
+        PyRuntimeError::new_err(format!(
+            "cannot read config file {}: {error}",
+            config_path.display()
+        ))
+    })?;
+    let mut parsed: toml::Value = content.parse().map_err(|error| {
+        PyRuntimeError::new_err(format!(
+            "invalid TOML in {}: {error}",
+            config_path.display()
+        ))
+    })?;
+    let absolute_config_path =
+        std::fs::canonicalize(config_path).unwrap_or_else(|_| config_path.to_path_buf());
+    let base_dir = absolute_config_path.parent().unwrap_or(Path::new("."));
+    resolve_relative_config_paths(&mut parsed, base_dir);
+    Ok(parsed)
+}
 
 /// Load a [`Policy`] from a robowbc TOML config file.
 ///
@@ -93,31 +162,417 @@ use std::time::Instant;
 /// ```
 #[pyfunction]
 fn load_from_config(config_path: &str) -> PyResult<PyPolicy> {
-    let content = std::fs::read_to_string(config_path).map_err(|e| {
-        PyRuntimeError::new_err(format!("cannot read config file {config_path:?}: {e}"))
-    })?;
-    let policy = WbcRegistry::build_from_toml_str(&content)
-        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    let parsed = load_config_document(Path::new(config_path))?;
+    build_policy_from_document(&parsed, None)
+}
+
+#[derive(Debug, Clone)]
+enum PythonCommand {
+    Velocity(Twist),
+    MotionTokens(Vec<f32>),
+    JointTargets(Vec<f32>),
+    KinematicPose(CoreBodyPose),
+}
+
+impl PythonCommand {
+    fn from_legacy(command_type: &str, command_data: &[f32]) -> PyResult<Self> {
+        match command_type {
+            "velocity" => {
+                if command_data.len() < 6 {
+                    return Err(PyValueError::new_err(
+                        "velocity command_data must have at least 6 elements [vx, vy, vz, wx, wy, wz]",
+                    ));
+                }
+                Ok(Self::Velocity(Twist {
+                    linear: [command_data[0], command_data[1], command_data[2]],
+                    angular: [command_data[3], command_data[4], command_data[5]],
+                }))
+            }
+            "motion_tokens" => Ok(Self::MotionTokens(command_data.to_vec())),
+            "joint_targets" => Ok(Self::JointTargets(command_data.to_vec())),
+            "kinematic_pose" => Err(PyValueError::new_err(
+                "kinematic_pose must be provided through the structured command=KinematicPoseCommand(...) surface",
+            )),
+            other => Err(PyValueError::new_err(format!(
+                "unknown command_type {other:?}; expected \"velocity\", \"motion_tokens\", or \"joint_targets\""
+            ))),
+        }
+    }
+
+    fn from_python_command(command: &Bound<'_, PyAny>) -> PyResult<Self> {
+        if let Ok(command) = command.extract::<PyRef<'_, PyVelocityCommand>>() {
+            return Ok(Self::Velocity(command.to_twist()));
+        }
+        if let Ok(command) = command.extract::<PyRef<'_, PyMotionTokensCommand>>() {
+            return Ok(Self::MotionTokens(command.tokens.clone()));
+        }
+        if let Ok(command) = command.extract::<PyRef<'_, PyJointTargetsCommand>>() {
+            return Ok(Self::JointTargets(command.targets.clone()));
+        }
+        if let Ok(command) = command.extract::<PyRef<'_, PyKinematicPoseCommand>>() {
+            return Ok(Self::KinematicPose(command.to_body_pose()));
+        }
+
+        Err(PyValueError::new_err(
+            "command must be a VelocityCommand, MotionTokensCommand, JointTargetsCommand, or KinematicPoseCommand",
+        ))
+    }
+
+    fn command_type(&self) -> &'static str {
+        match self {
+            Self::Velocity(_) => "velocity",
+            Self::MotionTokens(_) => "motion_tokens",
+            Self::JointTargets(_) => "joint_targets",
+            Self::KinematicPose(_) => "kinematic_pose",
+        }
+    }
+
+    fn command_data(&self) -> Option<Vec<f32>> {
+        match self {
+            Self::Velocity(twist) => {
+                let mut data = twist.linear.to_vec();
+                data.extend_from_slice(&twist.angular);
+                Some(data)
+            }
+            Self::MotionTokens(tokens) | Self::JointTargets(tokens) => Some(tokens.clone()),
+            Self::KinematicPose(_) => None,
+        }
+    }
+
+    fn to_python_object(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        match self {
+            Self::Velocity(twist) => {
+                Py::new(py, PyVelocityCommand::from_twist(*twist)).map(|obj| obj.into_any())
+            }
+            Self::MotionTokens(tokens) => Py::new(
+                py,
+                PyMotionTokensCommand {
+                    tokens: tokens.clone(),
+                },
+            )
+            .map(|obj| obj.into_any()),
+            Self::JointTargets(targets) => Py::new(
+                py,
+                PyJointTargetsCommand {
+                    targets: targets.clone(),
+                },
+            )
+            .map(|obj| obj.into_any()),
+            Self::KinematicPose(body_pose) => {
+                Py::new(py, PyKinematicPoseCommand::from_body_pose(body_pose))
+                    .map(|obj| obj.into_any())
+            }
+        }
+    }
+
+    fn to_wbc_command(&self) -> WbcCommand {
+        match self {
+            Self::Velocity(twist) => WbcCommand::Velocity(*twist),
+            Self::MotionTokens(tokens) => WbcCommand::MotionTokens(tokens.clone()),
+            Self::JointTargets(targets) => WbcCommand::JointTargets(targets.clone()),
+            Self::KinematicPose(body_pose) => WbcCommand::KinematicPose(body_pose.clone()),
+        }
+    }
+}
+
+fn build_policy_from_document(
+    parsed: &toml::Value,
+    requested_name: Option<&str>,
+) -> PyResult<PyPolicy> {
+    let policy_section = parsed
+        .get("policy")
+        .ok_or_else(|| PyRuntimeError::new_err("missing [policy] table"))?;
+    let policy_name = match requested_name {
+        Some(name) => name.to_owned(),
+        None => policy_section
+            .get("name")
+            .and_then(toml::Value::as_str)
+            .ok_or_else(|| PyRuntimeError::new_err("missing [policy].name string field"))?
+            .to_owned(),
+    };
+    let mut policy_config = policy_section
+        .get("config")
+        .cloned()
+        .unwrap_or_else(|| toml::Value::Table(toml::map::Map::new()));
+
+    if let Some(robot) = load_robot_from_document(parsed)? {
+        policy_config =
+            insert_robot_into_policy(policy_config, &robot).map_err(PyRuntimeError::new_err)?;
+    }
+
+    let policy = WbcRegistry::build(&policy_name, &policy_config)
+        .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
     Ok(PyPolicy {
         inner: Arc::from(policy),
     })
+}
+
+fn load_robot_from_document(parsed: &toml::Value) -> PyResult<Option<RobotConfig>> {
+    let Some(config_path) = parsed
+        .get("robot")
+        .and_then(|robot| robot.get("config_path"))
+        .and_then(toml::Value::as_str)
+    else {
+        return Ok(None);
+    };
+
+    let robot = RobotConfig::from_toml_file(Path::new(config_path)).map_err(|error| {
+        PyRuntimeError::new_err(format!("failed to load robot config: {error}"))
+    })?;
+    Ok(Some(robot))
+}
+
+#[pyclass(name = "PolicyCapabilities", skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyPolicyCapabilities {
+    #[pyo3(get)]
+    supported_commands: Vec<String>,
+}
+
+impl PyPolicyCapabilities {
+    fn from_core(capabilities: &PolicyCapabilities) -> Self {
+        Self {
+            supported_commands: capabilities
+                .supported_commands
+                .iter()
+                .map(|kind| kind.as_str().to_owned())
+                .collect(),
+        }
+    }
+}
+
+#[pymethods]
+impl PyPolicyCapabilities {
+    fn __repr__(&self) -> String {
+        format!(
+            "PolicyCapabilities(supported_commands={:?})",
+            self.supported_commands
+        )
+    }
+}
+
+#[pyclass(name = "VelocityCommand", skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyVelocityCommand {
+    #[pyo3(get, set)]
+    linear: [f32; 3],
+    #[pyo3(get, set)]
+    angular: [f32; 3],
+}
+
+impl PyVelocityCommand {
+    fn from_twist(twist: Twist) -> Self {
+        Self {
+            linear: twist.linear,
+            angular: twist.angular,
+        }
+    }
+
+    fn to_twist(&self) -> Twist {
+        Twist {
+            linear: self.linear,
+            angular: self.angular,
+        }
+    }
+}
+
+#[pymethods]
+impl PyVelocityCommand {
+    #[new]
+    #[pyo3(signature = (linear, angular=None))]
+    fn new(linear: [f32; 3], angular: Option<[f32; 3]>) -> Self {
+        Self {
+            linear,
+            angular: angular.unwrap_or([0.0, 0.0, 0.0]),
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "VelocityCommand(linear={:?}, angular={:?})",
+            self.linear, self.angular
+        )
+    }
+}
+
+#[pyclass(name = "MotionTokensCommand", skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyMotionTokensCommand {
+    #[pyo3(get, set)]
+    tokens: Vec<f32>,
+}
+
+#[pymethods]
+impl PyMotionTokensCommand {
+    #[new]
+    fn new(tokens: Vec<f32>) -> Self {
+        Self { tokens }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("MotionTokensCommand(tokens={})", self.tokens.len())
+    }
+}
+
+#[pyclass(name = "JointTargetsCommand", skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyJointTargetsCommand {
+    #[pyo3(get, set)]
+    targets: Vec<f32>,
+}
+
+#[pymethods]
+impl PyJointTargetsCommand {
+    #[new]
+    fn new(targets: Vec<f32>) -> Self {
+        Self { targets }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("JointTargetsCommand(targets={})", self.targets.len())
+    }
+}
+
+#[pyclass(name = "LinkPose", skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyLinkPose {
+    #[pyo3(get, set)]
+    name: String,
+    #[pyo3(get, set)]
+    translation: [f32; 3],
+    #[pyo3(get, set)]
+    rotation_xyzw: [f32; 4],
+}
+
+impl PyLinkPose {
+    fn to_core(&self) -> CoreLinkPose {
+        CoreLinkPose {
+            link_name: self.name.clone(),
+            pose: SE3 {
+                translation: self.translation,
+                rotation_xyzw: self.rotation_xyzw,
+            },
+        }
+    }
+
+    fn from_core(link: &CoreLinkPose) -> Self {
+        Self {
+            name: link.link_name.clone(),
+            translation: link.pose.translation,
+            rotation_xyzw: link.pose.rotation_xyzw,
+        }
+    }
+}
+
+#[pymethods]
+impl PyLinkPose {
+    #[new]
+    fn new(name: String, translation: [f32; 3], rotation_xyzw: [f32; 4]) -> PyResult<Self> {
+        if name.trim().is_empty() {
+            return Err(PyValueError::new_err("LinkPose.name must not be empty"));
+        }
+        Ok(Self {
+            name,
+            translation,
+            rotation_xyzw,
+        })
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "LinkPose(name={:?}, translation={:?}, rotation_xyzw={:?})",
+            self.name, self.translation, self.rotation_xyzw
+        )
+    }
+}
+
+fn extract_python_link_pose_objects(links: &Bound<'_, PyAny>) -> PyResult<Vec<PyLinkPose>> {
+    let list = links.cast::<PyList>().map_err(|_| {
+        PyValueError::new_err("KinematicPoseCommand.links must be a list of LinkPose objects")
+    })?;
+    if list.is_empty() {
+        return Err(PyValueError::new_err(
+            "KinematicPoseCommand.links must contain at least one LinkPose",
+        ));
+    }
+
+    list.iter()
+        .map(|item| {
+            item.extract::<PyRef<'_, PyLinkPose>>()
+                .map(|link| link.clone())
+                .map_err(|_| {
+                    PyValueError::new_err(
+                        "KinematicPoseCommand.links must contain only LinkPose objects",
+                    )
+                })
+        })
+        .collect()
+}
+
+#[pyclass(name = "KinematicPoseCommand", skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyKinematicPoseCommand {
+    links: Vec<PyLinkPose>,
+}
+
+impl PyKinematicPoseCommand {
+    fn from_body_pose(body_pose: &CoreBodyPose) -> Self {
+        Self {
+            links: body_pose.links.iter().map(PyLinkPose::from_core).collect(),
+        }
+    }
+
+    fn to_body_pose(&self) -> CoreBodyPose {
+        CoreBodyPose {
+            links: self.links.iter().map(PyLinkPose::to_core).collect(),
+        }
+    }
+}
+
+#[pymethods]
+impl PyKinematicPoseCommand {
+    #[new]
+    fn new(links: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(Self {
+            links: extract_python_link_pose_objects(links)?,
+        })
+    }
+
+    #[getter]
+    fn links(&self, py: Python<'_>) -> PyResult<Vec<Py<PyLinkPose>>> {
+        self.links
+            .iter()
+            .cloned()
+            .map(|link| Py::new(py, link))
+            .collect()
+    }
+
+    #[setter]
+    fn set_links(&mut self, links: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.links = extract_python_link_pose_objects(links)?;
+        Ok(())
+    }
+
+    fn __repr__(&self) -> String {
+        format!("KinematicPoseCommand(links={})", self.links.len())
+    }
 }
 
 /// Standardized sensor input for a WBC policy.
 ///
 /// Parameters
 /// ----------
-/// `joint_positions` : list[float]
+/// `joint_positions` : `list[float]`
 ///     Current joint positions in radians, one per actuated joint.
-/// `joint_velocities` : list[float]
+/// `joint_velocities` : `list[float]`
 ///     Current joint velocities in rad/s, same length as `joint_positions`.
-/// `gravity_vector` : tuple[float, float, float]
+/// `gravity_vector` : `tuple[float, float, float]`
 ///     Gravity direction in the robot body frame (typically `[0, 0, -1]`).
-/// `angular_velocity` : tuple[float, float, float], optional
+/// `angular_velocity` : `tuple[float, float, float]`, optional
 ///     Body-frame angular velocity from the IMU gyro in rad/s. Defaults to zeros.
 /// `command_type` : str
 ///     One of `"velocity"`, `"motion_tokens"`, or `"joint_targets"`.
-/// `command_data` : list[float]
+/// `command_data` : `list[float]`
 ///     Payload for the command type.  See module-level table for layouts.
 #[pyclass(name = "Observation", skip_from_py_object)]
 #[derive(Clone)]
@@ -134,83 +589,121 @@ pub struct PyObservation {
     /// Body-frame angular velocity from the IMU gyro in rad/s.
     #[pyo3(get, set)]
     pub angular_velocity: [f32; 3],
-    /// Command variant name.
-    #[pyo3(get, set)]
-    pub command_type: String,
-    /// Command payload floats.
-    #[pyo3(get, set)]
-    pub command_data: Vec<f32>,
+    /// Public command payload.
+    command: PythonCommand,
 }
 
 #[pymethods]
 impl PyObservation {
     #[new]
-    #[pyo3(signature = (joint_positions, joint_velocities, gravity_vector, command_type, command_data, angular_velocity=None))]
+    #[pyo3(signature = (joint_positions, joint_velocities, gravity_vector, command_type=None, command_data=None, angular_velocity=None, command=None))]
     fn new(
         joint_positions: Vec<f32>,
         joint_velocities: Vec<f32>,
         gravity_vector: [f32; 3],
-        command_type: String,
-        command_data: Vec<f32>,
+        command_type: Option<String>,
+        command_data: Option<Vec<f32>>,
         angular_velocity: Option<[f32; 3]>,
-    ) -> Self {
-        Self {
+        command: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        let command = match (command, command_type, command_data) {
+            (Some(command), None, None) => PythonCommand::from_python_command(command)?,
+            (None, Some(command_type), Some(command_data)) => {
+                PythonCommand::from_legacy(&command_type, &command_data)?
+            }
+            (Some(_), Some(_), _) | (Some(_), _, Some(_)) => {
+                return Err(PyValueError::new_err(
+                    "Observation accepts either command=... or command_type plus command_data, not both",
+                ))
+            }
+            (None, Some(_), None) | (None, None, Some(_)) => {
+                return Err(PyValueError::new_err(
+                    "Observation requires both command_type and command_data when the structured command=... path is not used",
+                ))
+            }
+            (None, None, None) => {
+                return Err(PyValueError::new_err(
+                    "Observation requires either command=... or command_type plus command_data",
+                ))
+            }
+        };
+
+        Ok(Self {
             joint_positions,
             joint_velocities,
             gravity_vector,
             angular_velocity: angular_velocity.unwrap_or([0.0, 0.0, 0.0]),
-            command_type,
-            command_data,
-        }
+            command,
+        })
+    }
+
+    #[getter]
+    fn command_type(&self) -> String {
+        self.command.command_type().to_owned()
+    }
+
+    #[setter]
+    fn set_command_type(&mut self, command_type: String) -> PyResult<()> {
+        let command_data = self.command.command_data().ok_or_else(|| {
+            PyValueError::new_err(
+                "command_type cannot be reassigned for structured kinematic_pose commands; assign Observation.command instead",
+            )
+        })?;
+        self.command = PythonCommand::from_legacy(&command_type, &command_data)?;
+        Ok(())
+    }
+
+    #[getter]
+    fn command_data(&self) -> PyResult<Vec<f32>> {
+        self.command.command_data().ok_or_else(|| {
+            PyValueError::new_err(
+                "kinematic_pose does not expose flat command_data; use Observation.command",
+            )
+        })
+    }
+
+    #[setter]
+    fn set_command_data(&mut self, command_data: Vec<f32>) -> PyResult<()> {
+        let command_type = self.command.command_data().map(|_| self.command.command_type()).ok_or_else(
+            || {
+                PyValueError::new_err(
+                    "command_data cannot be reassigned for structured kinematic_pose commands; assign Observation.command instead",
+                )
+            },
+        )?;
+        self.command = PythonCommand::from_legacy(command_type, &command_data)?;
+        Ok(())
+    }
+
+    #[getter]
+    fn command(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        self.command.to_python_object(py)
+    }
+
+    #[setter]
+    fn set_command(&mut self, command: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.command = PythonCommand::from_python_command(command)?;
+        Ok(())
     }
 
     fn __repr__(&self) -> String {
         format!(
             "Observation(joints={}, command_type={:?})",
             self.joint_positions.len(),
-            self.command_type
+            self.command.command_type()
         )
     }
 }
 
 /// Converts a [`PyObservation`] into the Rust [`Observation`] type.
 fn into_observation(obs: &PyObservation) -> PyResult<Observation> {
-    let command = match obs.command_type.as_str() {
-        "velocity" => {
-            if obs.command_data.len() < 6 {
-                return Err(PyValueError::new_err(
-                    "velocity command_data must have at least 6 elements [vx, vy, vz, wx, wy, wz]",
-                ));
-            }
-            WbcCommand::Velocity(Twist {
-                linear: [
-                    obs.command_data[0],
-                    obs.command_data[1],
-                    obs.command_data[2],
-                ],
-                angular: [
-                    obs.command_data[3],
-                    obs.command_data[4],
-                    obs.command_data[5],
-                ],
-            })
-        }
-        "motion_tokens" => WbcCommand::MotionTokens(obs.command_data.clone()),
-        "joint_targets" => WbcCommand::JointTargets(obs.command_data.clone()),
-        other => {
-            return Err(PyValueError::new_err(format!(
-                "unknown command_type {other:?}; expected \"velocity\", \"motion_tokens\", or \"joint_targets\""
-            )))
-        }
-    };
-
     Ok(Observation {
         joint_positions: obs.joint_positions.clone(),
         joint_velocities: obs.joint_velocities.clone(),
         gravity_vector: obs.gravity_vector,
         angular_velocity: obs.angular_velocity,
         base_pose: None,
-        command,
+        command: obs.command.to_wbc_command(),
         timestamp: Instant::now(),
     })
 }
@@ -316,6 +809,75 @@ impl SessionVelocityScheduleConfig {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct SessionKinematicPoseLinkConfig {
+    name: String,
+    translation: [f32; 3],
+    rotation_xyzw: [f32; 4],
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SessionKinematicPoseConfig {
+    links: Vec<SessionKinematicPoseLinkConfig>,
+}
+
+impl SessionKinematicPoseConfig {
+    fn validate(&self) -> Result<(), String> {
+        if self.links.is_empty() {
+            return Err("runtime.kinematic_pose.links must contain at least one link".to_owned());
+        }
+
+        for (index, link) in self.links.iter().enumerate() {
+            if link.name.trim().is_empty() {
+                return Err(format!(
+                    "runtime.kinematic_pose.links[{index}].name must not be empty"
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn to_body_pose(&self) -> CoreBodyPose {
+        CoreBodyPose {
+            links: self
+                .links
+                .iter()
+                .map(|link| CoreLinkPose {
+                    link_name: link.name.clone(),
+                    pose: SE3 {
+                        translation: link.translation,
+                        rotation_xyzw: link.rotation_xyzw,
+                    },
+                })
+                .collect(),
+        }
+    }
+
+    fn from_body_pose(body_pose: &CoreBodyPose) -> Self {
+        Self {
+            links: body_pose
+                .links
+                .iter()
+                .map(|link| SessionKinematicPoseLinkConfig {
+                    name: link.link_name.clone(),
+                    translation: link.pose.translation,
+                    rotation_xyzw: link.pose.rotation_xyzw,
+                })
+                .collect(),
+        }
+    }
+}
+
+fn parse_runtime_kinematic_pose(value: &toml::Value) -> Result<CoreBodyPose, String> {
+    let config: SessionKinematicPoseConfig = value
+        .clone()
+        .try_into()
+        .map_err(|error| format!("invalid runtime.kinematic_pose payload: {error}"))?;
+    config.validate()?;
+    Ok(config.to_body_pose())
+}
+
 #[derive(Debug, Clone, Deserialize, Default)]
 struct SessionRuntimeConfig {
     #[serde(default)]
@@ -349,6 +911,7 @@ enum SessionCommandSpec {
     VelocitySchedule(SessionVelocityScheduleConfig),
     MotionTokens(Vec<f32>),
     JointTargets(Vec<f32>),
+    KinematicPose(CoreBodyPose),
 }
 
 impl SessionCommandSpec {
@@ -383,12 +946,6 @@ impl SessionCommandSpec {
             ));
         }
 
-        if runtime.kinematic_pose.is_some() {
-            return Err(
-                "runtime.kinematic_pose is not yet supported by robowbc.MujocoSession".to_owned(),
-            );
-        }
-
         if let Some(velocity) = runtime.velocity {
             return Ok(Self::Velocity(velocity));
         }
@@ -406,6 +963,12 @@ impl SessionCommandSpec {
                 );
             }
             return Ok(Self::MotionTokens(tokens.clone()));
+        }
+
+        if let Some(kinematic_pose) = &runtime.kinematic_pose {
+            return Ok(Self::KinematicPose(parse_runtime_kinematic_pose(
+                kinematic_pose,
+            )?));
         }
 
         if runtime.standing_placeholder_tracking || runtime.reference_motion_tracking {
@@ -447,6 +1010,9 @@ impl SessionCommandSpec {
             )),
             "motion_tokens" => Ok(Self::MotionTokens(command_data.to_vec())),
             "joint_targets" => Ok(Self::JointTargets(command_data.to_vec())),
+            "kinematic_pose" => Err(PyValueError::new_err(
+                "kinematic_pose cannot be expressed through command_type/command_data; use a structured kinematic_pose payload instead",
+            )),
             other => Err(PyValueError::new_err(format!(
                 "unknown command_type {other:?}; expected \"velocity\", \"velocity_schedule\", \"motion_tokens\", or \"joint_targets\""
             ))),
@@ -459,22 +1025,24 @@ impl SessionCommandSpec {
             Self::VelocitySchedule(_) => "velocity_schedule",
             Self::MotionTokens(_) => "motion_tokens",
             Self::JointTargets(_) => "joint_targets",
+            Self::KinematicPose(_) => "kinematic_pose",
         }
     }
 
-    fn command_data(&self) -> Vec<f32> {
+    fn command_data(&self) -> Option<Vec<f32>> {
         match self {
-            Self::Velocity([vx, vy, yaw_rate]) => vec![*vx, *vy, *yaw_rate],
-            Self::VelocitySchedule(schedule) => schedule.flatten(),
-            Self::MotionTokens(tokens) | Self::JointTargets(tokens) => tokens.clone(),
+            Self::Velocity([vx, vy, yaw_rate]) => Some(vec![*vx, *vy, *yaw_rate]),
+            Self::VelocitySchedule(schedule) => Some(schedule.flatten()),
+            Self::MotionTokens(tokens) | Self::JointTargets(tokens) => Some(tokens.clone()),
+            Self::KinematicPose(_) => None,
         }
     }
 
-    fn command_data_for_tick(&self, tick: usize, frequency_hz: u32) -> Vec<f32> {
+    fn command_data_for_tick(&self, tick: usize, frequency_hz: u32) -> Option<Vec<f32>> {
         match self {
             Self::VelocitySchedule(schedule) => {
                 let elapsed_secs = elapsed_secs_for_tick(tick, frequency_hz);
-                schedule.sample_velocity(elapsed_secs).to_vec()
+                Some(schedule.sample_velocity(elapsed_secs).to_vec())
             }
             _ => self.command_data(),
         }
@@ -496,6 +1064,7 @@ impl SessionCommandSpec {
             }
             Self::MotionTokens(tokens) => WbcCommand::MotionTokens(tokens.clone()),
             Self::JointTargets(targets) => WbcCommand::JointTargets(targets.clone()),
+            Self::KinematicPose(body_pose) => WbcCommand::KinematicPose(body_pose.clone()),
         }
     }
 }
@@ -523,10 +1092,86 @@ fn insert_robot_into_policy(
     Ok(policy_cfg)
 }
 
+fn parse_action_kinematic_pose(links: &Bound<'_, PyAny>) -> PyResult<CoreBodyPose> {
+    let list = links.cast::<PyList>().map_err(|_| {
+        PyValueError::new_err(
+            "action.kinematic_pose must be a list of link pose dicts with name, translation, and rotation_xyzw",
+        )
+    })?;
+    if list.is_empty() {
+        return Err(PyValueError::new_err(
+            "action.kinematic_pose must contain at least one link pose",
+        ));
+    }
+
+    let mut parsed_links = Vec::with_capacity(list.len());
+    for (index, item) in list.iter().enumerate() {
+        let dict = item.cast::<PyDict>().map_err(|_| {
+            PyValueError::new_err(format!(
+                "action.kinematic_pose[{index}] must be a dict with name, translation, and rotation_xyzw"
+            ))
+        })?;
+        let name = dict
+            .get_item("name")?
+            .ok_or_else(|| {
+                PyValueError::new_err(format!("action.kinematic_pose[{index}].name is required"))
+            })?
+            .extract::<String>()?;
+        if name.trim().is_empty() {
+            return Err(PyValueError::new_err(format!(
+                "action.kinematic_pose[{index}].name must not be empty"
+            )));
+        }
+        let translation = dict
+            .get_item("translation")?
+            .ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "action.kinematic_pose[{index}].translation is required"
+                ))
+            })?
+            .extract::<Vec<f32>>()?;
+        if translation.len() != 3 {
+            return Err(PyValueError::new_err(format!(
+                "action.kinematic_pose[{index}].translation must contain exactly 3 floats"
+            )));
+        }
+        let rotation_xyzw = dict
+            .get_item("rotation_xyzw")?
+            .ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "action.kinematic_pose[{index}].rotation_xyzw is required"
+                ))
+            })?
+            .extract::<Vec<f32>>()?;
+        if rotation_xyzw.len() != 4 {
+            return Err(PyValueError::new_err(format!(
+                "action.kinematic_pose[{index}].rotation_xyzw must contain exactly 4 floats"
+            )));
+        }
+
+        parsed_links.push(CoreLinkPose {
+            link_name: name,
+            pose: SE3 {
+                translation: [translation[0], translation[1], translation[2]],
+                rotation_xyzw: [
+                    rotation_xyzw[0],
+                    rotation_xyzw[1],
+                    rotation_xyzw[2],
+                    rotation_xyzw[3],
+                ],
+            },
+        });
+    }
+
+    Ok(CoreBodyPose {
+        links: parsed_links,
+    })
+}
+
 fn parse_action_command(action: &Bound<'_, PyAny>) -> PyResult<SessionCommandSpec> {
     let dict = action.cast::<PyDict>().map_err(|_| {
         PyValueError::new_err(
-            "action must be a dict containing command_type/command_data, velocity, motion_tokens, or joint_targets",
+            "action must be a dict containing command_type/command_data, velocity, motion_tokens, joint_targets, or kinematic_pose",
         )
     })?;
 
@@ -554,8 +1199,14 @@ fn parse_action_command(action: &Bound<'_, PyAny>) -> PyResult<SessionCommandSpe
         return SessionCommandSpec::from_command_type_and_data("joint_targets", &targets);
     }
 
+    if let Some(kinematic_pose) = dict.get_item("kinematic_pose")? {
+        return Ok(SessionCommandSpec::KinematicPose(
+            parse_action_kinematic_pose(&kinematic_pose)?,
+        ));
+    }
+
     Err(PyValueError::new_err(
-        "action must provide command_type/command_data, velocity, motion_tokens, or joint_targets",
+        "action must provide command_type/command_data, velocity, motion_tokens, joint_targets, or kinematic_pose",
     ))
 }
 
@@ -566,12 +1217,55 @@ fn command_dict(
     frequency_hz: u32,
 ) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new(py);
-    dict.set_item("command_type", command.command_type())?;
-    dict.set_item(
-        "command_data",
-        command.command_data_for_tick(tick, frequency_hz),
-    )?;
+    match command {
+        SessionCommandSpec::KinematicPose(body_pose) => {
+            let links: Vec<Py<PyAny>> = SessionKinematicPoseConfig::from_body_pose(body_pose)
+                .links
+                .into_iter()
+                .map(|link| {
+                    let link_dict = PyDict::new(py);
+                    link_dict.set_item("name", link.name)?;
+                    link_dict.set_item("translation", link.translation.to_vec())?;
+                    link_dict.set_item("rotation_xyzw", link.rotation_xyzw.to_vec())?;
+                    Ok(link_dict.unbind().into_any())
+                })
+                .collect::<PyResult<_>>()?;
+            dict.set_item("kinematic_pose", links)?;
+        }
+        _ => {
+            dict.set_item("command_type", command.command_type())?;
+            dict.set_item(
+                "command_data",
+                command.command_data_for_tick(tick, frequency_hz),
+            )?;
+        }
+    }
     Ok(dict.unbind().into_any())
+}
+
+fn ensure_policy_supports_command(
+    policy_name: &str,
+    policy: &dyn WbcPolicy,
+    command: &WbcCommand,
+) -> PyResult<()> {
+    let command_kind = WbcCommandKind::try_from(command).map_err(|_| {
+        PyValueError::new_err(
+            "command is not part of the public embedded runtime surface for this phase",
+        )
+    })?;
+    let capabilities = policy.capabilities();
+    if !capabilities.supports(command_kind) {
+        let supported_commands = capabilities
+            .supported_commands
+            .iter()
+            .map(|kind| kind.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(PyValueError::new_err(format!(
+            "policy {policy_name:?} does not support {command_kind}; supported commands: [{supported_commands}]"
+        )));
+    }
+    Ok(())
 }
 
 fn base_pose_dict(
@@ -651,10 +1345,8 @@ impl PyMujocoSession {
             ));
         }
 
-        let content = std::fs::read_to_string(config_path).map_err(|error| {
-            PyRuntimeError::new_err(format!("cannot read config file {config_path:?}: {error}"))
-        })?;
-        let app: SessionConfig = toml::from_str(&content).map_err(|error| {
+        let parsed = load_config_document(Path::new(config_path))?;
+        let app: SessionConfig = parsed.try_into().map_err(|error| {
             PyRuntimeError::new_err(format!("invalid TOML in {config_path:?}: {error}"))
         })?;
         if app.comm.frequency_hz == 0 {
@@ -673,6 +1365,8 @@ impl PyMujocoSession {
             .map_err(PyRuntimeError::new_err)?;
         let policy = WbcRegistry::build(&app.policy.name, &policy_cfg)
             .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
+        let initial_command = default_command.command_for_tick(0, app.comm.frequency_hz);
+        ensure_policy_supports_command(&app.policy.name, policy.as_ref(), &initial_command)?;
         let transport = MujocoTransport::new(app.sim.clone(), robot.clone())
             .map_err(|error| PyRuntimeError::new_err(error.to_string()))?;
         let initial_state = transport.full_physics_state();
@@ -713,6 +1407,7 @@ impl PyMujocoSession {
             None => self.current_command.clone(),
         };
         let command = command_spec.command_for_tick(self.tick_index, self.command_frequency_hz);
+        ensure_policy_supports_command(&self.policy_name, self.policy.as_ref(), &command)?;
         let mut last_targets = None;
 
         run_control_tick(&mut self.transport, command, |obs| {
@@ -818,7 +1513,7 @@ impl PyMujocoSession {
 ///
 /// Attributes
 /// ----------
-/// positions : list[float]
+/// positions : `list[float]`
 ///     Per-joint target positions in radians.
 #[pyclass(name = "JointPositionTargets")]
 pub struct PyJointPositionTargets {
@@ -836,7 +1531,7 @@ impl PyJointPositionTargets {
 
 /// A loaded WBC policy ready for inference.
 ///
-/// Obtain an instance via [`Registry`].
+/// Obtain an instance via `Registry`.
 #[pyclass(name = "Policy")]
 pub struct PyPolicy {
     inner: Arc<dyn robowbc_core::WbcPolicy>,
@@ -871,6 +1566,11 @@ impl PyPolicy {
         self.inner.control_frequency_hz()
     }
 
+    /// Supported public command kinds for this policy.
+    fn capabilities(&self) -> PyPolicyCapabilities {
+        PyPolicyCapabilities::from_core(&self.inner.capabilities())
+    }
+
     fn __repr__(&self) -> String {
         format!(
             "Policy(control_frequency_hz={})",
@@ -882,7 +1582,7 @@ impl PyPolicy {
 /// Factory for building registered WBC policies.
 ///
 /// All policies compiled into the library are available via this class.
-/// Use [`Registry::list_policies`] to discover what is available at runtime.
+/// Use `Registry.list_policies()` to discover what is available at runtime.
 #[pyclass(name = "Registry")]
 pub struct PyRegistry;
 
@@ -911,22 +1611,8 @@ impl PyRegistry {
     ///     If the file cannot be read, parsed, or the policy cannot be built.
     #[staticmethod]
     fn build(name: &str, config_path: &str) -> PyResult<PyPolicy> {
-        let content = std::fs::read_to_string(config_path).map_err(|e| {
-            PyRuntimeError::new_err(format!("cannot read config file {config_path:?}: {e}"))
-        })?;
-        let parsed: toml::Value = content.parse().map_err(|e| {
-            PyRuntimeError::new_err(format!("invalid TOML in {config_path:?}: {e}"))
-        })?;
-        let policy_config = parsed
-            .get("policy")
-            .and_then(|p| p.get("config"))
-            .cloned()
-            .unwrap_or_else(|| toml::Value::Table(toml::map::Map::new()));
-        let policy = WbcRegistry::build(name, &policy_config)
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-        Ok(PyPolicy {
-            inner: Arc::from(policy),
-        })
+        let parsed = load_config_document(Path::new(config_path))?;
+        build_policy_from_document(&parsed, Some(name))
     }
 
     /// Build a policy from a full robowbc TOML config string.
@@ -950,17 +1636,208 @@ impl PyRegistry {
     ///     If parsing fails or the policy cannot be built.
     #[staticmethod]
     fn build_from_str(toml_str: &str) -> PyResult<PyPolicy> {
-        let policy = WbcRegistry::build_from_toml_str(toml_str)
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-        Ok(PyPolicy {
-            inner: Arc::from(policy),
-        })
+        let parsed: toml::Value = toml_str
+            .parse()
+            .map_err(|error| PyRuntimeError::new_err(format!("invalid TOML document: {error}")))?;
+        build_policy_from_document(&parsed, None)
     }
 
     /// Return all registered policy names sorted lexicographically.
     #[staticmethod]
     fn list_policies() -> Vec<&'static str> {
         WbcRegistry::policy_names()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyo3::types::PyDict;
+    use std::time::Instant;
+
+    struct VelocityOnlyPolicy;
+
+    impl WbcPolicy for VelocityOnlyPolicy {
+        fn predict(
+            &self,
+            obs: &Observation,
+        ) -> robowbc_core::Result<robowbc_core::JointPositionTargets> {
+            Ok(robowbc_core::JointPositionTargets {
+                positions: obs.joint_positions.clone(),
+                timestamp: Instant::now(),
+            })
+        }
+
+        fn capabilities(&self) -> PolicyCapabilities {
+            PolicyCapabilities::new(vec![WbcCommandKind::Velocity])
+        }
+
+        fn control_frequency_hz(&self) -> u32 {
+            50
+        }
+
+        fn supported_robots(&self) -> &[RobotConfig] {
+            &[]
+        }
+    }
+
+    fn sample_link_pose() -> PyLinkPose {
+        PyLinkPose {
+            name: "left_wrist".to_owned(),
+            translation: [0.35, 0.2, 0.95],
+            rotation_xyzw: [0.0, 0.0, 0.0, 1.0],
+        }
+    }
+
+    #[test]
+    fn legacy_observation_path_preserves_flat_command_fields() {
+        let observation = PyObservation::new(
+            vec![0.0; 4],
+            vec![0.0; 4],
+            [0.0, 0.0, -1.0],
+            Some("motion_tokens".to_owned()),
+            Some(vec![0.1, 0.2]),
+            None,
+            None,
+        )
+        .expect("legacy observation should build");
+
+        assert_eq!(observation.command_type(), "motion_tokens");
+        assert_eq!(
+            observation
+                .command_data()
+                .expect("legacy commands expose flat data"),
+            vec![0.1, 0.2]
+        );
+        let rust_observation = into_observation(&observation).expect("legacy observation converts");
+        assert!(matches!(
+            rust_observation.command,
+            WbcCommand::MotionTokens(tokens) if tokens == vec![0.1, 0.2]
+        ));
+    }
+
+    #[test]
+    fn structured_kinematic_pose_command_round_trips_through_observation() {
+        Python::attach(|py| {
+            let command = Py::new(
+                py,
+                PyKinematicPoseCommand {
+                    links: vec![sample_link_pose()],
+                },
+            )
+            .expect("command should allocate");
+            let observation = PyObservation::new(
+                vec![0.0; 4],
+                vec![0.0; 4],
+                [0.0, 0.0, -1.0],
+                None,
+                None,
+                None,
+                Some(command.bind(py).as_any()),
+            )
+            .expect("structured observation should build");
+
+            assert_eq!(observation.command_type(), "kinematic_pose");
+            assert!(observation.command_data().is_err());
+
+            let rust_observation =
+                into_observation(&observation).expect("structured observation converts");
+            let WbcCommand::KinematicPose(body_pose) = rust_observation.command else {
+                panic!("expected kinematic pose command")
+            };
+            assert_eq!(body_pose.links.len(), 1);
+            assert_eq!(body_pose.links[0].link_name, "left_wrist");
+        });
+    }
+
+    #[test]
+    fn runtime_kinematic_pose_toml_parses_into_body_pose() {
+        let value: toml::Value = toml::from_str(
+            r#"
+                [[links]]
+                name = "left_wrist"
+                translation = [0.35, 0.20, 0.95]
+                rotation_xyzw = [0.0, 0.0, 0.0, 1.0]
+            "#,
+        )
+        .expect("toml parses");
+
+        let body_pose = parse_runtime_kinematic_pose(&value).expect("kinematic pose parses");
+        assert_eq!(body_pose.links.len(), 1);
+        assert_eq!(body_pose.links[0].link_name, "left_wrist");
+        assert_eq!(body_pose.links[0].pose.translation, [0.35, 0.2, 0.95]);
+    }
+
+    #[test]
+    fn action_command_and_command_dict_round_trip_kinematic_pose() {
+        Python::attach(|py| {
+            let action = PyDict::new(py);
+            let link = PyDict::new(py);
+            link.set_item("name", "left_wrist").expect("name set");
+            link.set_item("translation", vec![0.35_f32, 0.2, 0.95])
+                .expect("translation set");
+            link.set_item("rotation_xyzw", vec![0.0_f32, 0.0, 0.0, 1.0])
+                .expect("rotation set");
+            action
+                .set_item("kinematic_pose", vec![link.unbind().into_any()])
+                .expect("kinematic_pose set");
+
+            let spec = parse_action_command(action.as_any()).expect("action parses");
+            let SessionCommandSpec::KinematicPose(body_pose) = &spec else {
+                panic!("expected kinematic pose session command")
+            };
+            assert_eq!(body_pose.links.len(), 1);
+            assert_eq!(body_pose.links[0].link_name, "left_wrist");
+
+            let state = command_dict(py, &spec, 0, 50).expect("command dict builds");
+            let reparsed = parse_action_command(state.bind(py).as_any()).expect("state reparses");
+            let SessionCommandSpec::KinematicPose(reparsed_pose) = reparsed else {
+                panic!("expected reparsed kinematic pose")
+            };
+            assert_eq!(reparsed_pose.links[0].link_name, "left_wrist");
+            assert_eq!(reparsed_pose.links[0].pose.translation, [0.35, 0.2, 0.95]);
+        });
+    }
+
+    #[test]
+    fn capability_gate_rejects_unsupported_command() {
+        let body_pose = CoreBodyPose {
+            links: vec![CoreLinkPose {
+                link_name: "left_wrist".to_owned(),
+                pose: SE3 {
+                    translation: [0.0, 0.0, 0.0],
+                    rotation_xyzw: [0.0, 0.0, 0.0, 1.0],
+                },
+            }],
+        };
+        let error = ensure_policy_supports_command(
+            "velocity_only",
+            &VelocityOnlyPolicy,
+            &WbcCommand::KinematicPose(body_pose),
+        )
+        .expect_err("capability gate should reject unsupported kinematic pose");
+        assert!(error
+            .to_string()
+            .contains("does not support kinematic_pose"));
+    }
+
+    #[test]
+    fn registry_build_uses_robot_config_from_document() {
+        let config_path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../configs/decoupled_smoke.toml");
+        let content = std::fs::read_to_string(&config_path).expect("config should exist");
+        let mut parsed: toml::Value = content.parse().expect("config parses");
+        resolve_relative_config_paths(
+            &mut parsed,
+            config_path
+                .parent()
+                .expect("config should have a parent directory"),
+        );
+
+        let policy =
+            build_policy_from_document(&parsed, None).expect("policy should build from document");
+        let capabilities = policy.inner.capabilities();
+        assert!(capabilities.supports(WbcCommandKind::Velocity));
     }
 }
 
@@ -974,6 +1851,12 @@ fn robowbc(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // (because none of its symbols are directly referenced here), causing all
     // inventory::submit! policy registrations to be absent at runtime.
     robowbc_ort::link_all_ort_policies();
+    m.add_class::<PyPolicyCapabilities>()?;
+    m.add_class::<PyVelocityCommand>()?;
+    m.add_class::<PyMotionTokensCommand>()?;
+    m.add_class::<PyJointTargetsCommand>()?;
+    m.add_class::<PyLinkPose>()?;
+    m.add_class::<PyKinematicPoseCommand>()?;
     m.add_class::<PyObservation>()?;
     m.add_class::<PyJointPositionTargets>()?;
     m.add_class::<PyPolicy>()?;

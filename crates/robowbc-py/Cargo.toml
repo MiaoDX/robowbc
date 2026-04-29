@@ -1,6 +1,7 @@
 # robowbc-py is intentionally excluded from the root workspace Cargo.toml to
-# avoid pyo3 feature-flag conflicts (extension-module vs auto-initialize).
-# Build this crate via: maturin develop
+# avoid pyo3 feature-flag conflicts. Build extension-module artifacts via
+# maturin, which sets PYO3_BUILD_EXTENSION_MODULE for wheel builds while still
+# allowing `cargo test` to link libpython locally.
 [workspace]
 
 [package]
@@ -13,10 +14,10 @@ description = "Python SDK for RoboWBC — PyO3 bindings exposing Registry, Obser
 
 [lib]
 name = "robowbc"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-pyo3 = { version = "0.28", features = ["extension-module"] }
+pyo3 = { version = "0.28", features = ["auto-initialize"] }
 robowbc-comm = { path = "../robowbc-comm" }
 robowbc-core = { path = "../robowbc-core" }
 robowbc-ort = { path = "../robowbc-ort" }
