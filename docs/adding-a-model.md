@@ -4,6 +4,12 @@ This tutorial walks through integrating a new WBC model into RoboWBC. We use
 the existing `DecoupledWbcPolicy` as a concrete reference — you can read its
 source in `crates/robowbc-ort/src/decoupled.rs` alongside this guide.
 
+New policies are added to the existing embedded runtime surface. Phase 1 does
+not add a `server/daemon`, `ROS2`, or `zenoh` customer API, and it does not
+re-expose public `EndEffectorPoses`. New wrappers should fit one of the
+shipped public command kinds and report that support honestly through
+`capabilities()`.
+
 ## The five steps
 
 1. Define the config struct
@@ -43,8 +49,8 @@ Every field in `MyPolicyConfig` maps 1:1 to TOML keys under `[policy.config]`.
 ```rust
 use std::sync::Mutex;
 use robowbc_core::{
-    JointPositionTargets, Observation, Result as CoreResult,
-    RobotConfig, WbcCommand, WbcError, WbcPolicy,
+    JointPositionTargets, Observation, PolicyCapabilities, Result as CoreResult,
+    RobotConfig, WbcCommand, WbcCommandKind, WbcError, WbcPolicy,
 };
 
 pub struct MyPolicy {
@@ -114,6 +120,10 @@ impl WbcPolicy for MyPolicy {
         })
     }
 
+    fn capabilities(&self) -> PolicyCapabilities {
+        PolicyCapabilities::new([WbcCommandKind::Velocity])
+    }
+
     fn control_frequency_hz(&self) -> u32 {
         self.control_frequency_hz
     }
@@ -123,6 +133,10 @@ impl WbcPolicy for MyPolicy {
     }
 }
 ```
+
+Every new wrapper must implement `capabilities()` honestly. If `predict()`
+rejects a command at runtime, that command kind must not appear in
+`PolicyCapabilities`.
 
 ### Thread safety
 
@@ -282,6 +296,7 @@ step that ensures all joints are covered exactly once.
 Key points from its implementation:
 - `build_rl_input` constructs `[lower_pos, lower_vel, gravity(3), vx, vy, yaw]`
 - Upper-body joints are filled from `RobotConfig::default_pose`
+- `capabilities()` returns the exact public commands the wrapper accepts
 - `RegistryPolicy::from_config` uses `toml::Value::try_into::<DecoupledWbcConfig>()`
 - The `inventory::submit!` line is at module level, outside any function
 
@@ -292,4 +307,5 @@ Key points from its implementation:
 | Forgetting `inventory::submit!` | `WbcRegistry::build` returns `UnknownPolicy` | Add the submit block at module scope |
 | Not adding `TypeId` in CLI | Works in tests, silently missing in binary | Add `TypeId::of::<MyPolicy>()` to CLI |
 | `Mutex` not around backend | Compile error: `OrtBackend` is not `Sync` | Wrap in `Mutex<OrtBackend>` |
+| `capabilities()` does not match `predict()` | Python/Rust callers pass a command your wrapper later rejects | Return only the command kinds your wrapper actually accepts |
 | Wrong input tensor shape | `ShapeMismatch` error at runtime | Print model's expected shape with `backend.input_names()` |

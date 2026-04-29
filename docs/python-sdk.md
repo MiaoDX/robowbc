@@ -1,12 +1,16 @@
 # Python SDK
 
-RoboWBC ships a first-class Python SDK backed by the same Rust runtime. Build
-it locally with `maturin develop`, or install a published `robowbc` wheel when
-one is available, then either:
+RoboWBC's primary customer-facing embedded runtime surface is the Python SDK.
+The CLI remains the repo's smoke, benchmark, and report path, but outside
+integrators are expected to embed RoboWBC through:
 
-- load a registered policy by name and call `policy.predict(obs)`, or
-- open a live `robowbc.MujocoSession` that keeps MuJoCo stepping and policy
-  inference in Rust while exposing a Python-facing simulator session
+- `Registry` or `load_from_config()` for policy construction
+- `Observation` plus `Policy.predict()` for direct inference
+- `MujocoSession` for a Rust-owned live simulation/control loop
+
+Embedded Rust is the secondary adoption path. Phase 1 intentionally does **not**
+add a `server/daemon` surface, a public `ROS2` or `zenoh` customer API, new
+wrapper families, or a public `EndEffectorPoses` surface.
 
 The Python SDK is Linux-only, matching the rest of the RoboWBC runtime.
 
@@ -17,14 +21,13 @@ Python 3.10 or later is required.
 ### Build from source
 
 ```bash
-# Requires Rust stable >= 1.75 and maturin
-pip install "maturin>=1.4,<2.0"
-export MUJOCO_DOWNLOAD_DIR="$(pwd)/.cache/mujoco"   # optional auto-download path for MujocoSession
-maturin develop          # installs an editable build into the current venv
+pip install "maturin>=1.9.4,<2.0"
+export MUJOCO_DOWNLOAD_DIR="$(pwd)/.cache/mujoco"   # optional for MujocoSession
+maturin develop
 ```
 
 The live `MujocoSession` API additionally requires MuJoCo at build and run
-time. You can either use a system MuJoCo install, or reuse RoboWBC's existing
+time. You can either use a system MuJoCo install, or reuse RoboWBC's
 auto-download path by setting `MUJOCO_DOWNLOAD_DIR` to an absolute directory
 before running `maturin develop`.
 
@@ -34,176 +37,173 @@ before running `maturin develop`.
 pip install robowbc
 ```
 
-Published wheels target `manylinux2014` (glibc >= 2.17), which covers modern
+Published wheels target `manylinux2014` (glibc >= 2.17), which covers the
 Linux distributions commonly used in robotics research.
 
-## Quick start
+## Config Loading Behavior
+
+The file-based Python entry points:
+
+- `robowbc.load_from_config(path)`
+- `Registry.build(name, path)`
+- `MujocoSession(path, ...)`
+
+normalize relative `config_path`, `model_path`, and `context_path` values from
+the TOML document before building the runtime objects. This keeps the checked-in
+repo configs working while also supporting app-local config files without
+rewriting every nested path manually.
+
+## Quick Start
 
 ```python
-from robowbc import Registry, Observation
+from robowbc import Observation, Registry, VelocityCommand
 
-# List all policies compiled into the wheel
-print(Registry.list_policies())
-# → ['bfm_zero', 'decoupled_wbc', 'gear_sonic', 'hover', 'wbc_agile', ...]
+policy = Registry.build("decoupled_wbc", "configs/decoupled_smoke.toml")
+print(policy.control_frequency_hz())              # 50
+print(policy.capabilities().supported_commands)   # ['velocity']
 
-# Load GEAR-SONIC from a TOML config file
-policy = Registry.build("gear_sonic", "configs/sonic_g1.toml")
-print(policy)                          # Policy(control_frequency_hz=50)
-print(policy.control_frequency_hz())  # 50
-
-# Build an observation for a Unitree G1 (29 DOF in `configs/sonic_g1.toml`)
 obs = Observation(
-    joint_positions=[0.0] * 29,
-    joint_velocities=[0.0] * 29,
+    joint_positions=[0.0] * 4,
+    joint_velocities=[0.0] * 4,
     gravity_vector=[0.0, 0.0, -1.0],
-    command_type="velocity",
-    command_data=[0.3, 0.0, 0.0, 0.0, 0.0, 0.0],
+    command=VelocityCommand(
+        linear=[0.2, 0.0, 0.0],
+        angular=[0.0, 0.0, 0.1],
+    ),
 )
 
-# Run one inference step
 targets = policy.predict(obs)
-print(targets.positions[:5])   # first 5 joint position targets (radians)
+print(targets.positions)
 ```
 
-## API Reference
+The module-level convenience wrapper is equivalent:
 
-### `Observation`
+```python
+import robowbc
 
-Standardized sensor input passed to every policy.
+policy = robowbc.load_from_config("configs/decoupled_smoke.toml")
+```
+
+## Command Surface
+
+`Observation` supports two command styles:
+
+1. The preserved flat path for existing callers:
 
 ```python
 Observation(
-    joint_positions: list[float],   # current joint angles (radians)
-    joint_velocities: list[float],  # current joint velocities (rad/s)
-    gravity_vector: tuple[float, float, float],  # gravity in body frame
-    command_type: str,              # "velocity" | "motion_tokens" | "joint_targets"
-    command_data: list[float],      # payload — see table below
-)
-```
-
-**Command types:**
-
-| `command_type`    | `command_data` layout                              |
-|-------------------|----------------------------------------------------|
-| `"velocity"`      | `[vx, vy, vz, wx, wy, wz]` — 6 floats             |
-| `"motion_tokens"` | arbitrary-length token vector                      |
-| `"joint_targets"` | per-joint target positions                         |
-
-All fields are readable and writable attributes.
-
-For the public `gear_sonic` config, the default path is `command_type="velocity"`.
-Empty `motion_tokens` select the standing-placeholder tracking contract, while
-non-empty motion tokens are only for the older fixture-style mock pipeline.
-
-### `JointPositionTargets`
-
-Return value of `Policy.predict`.
-
-| Attribute    | Type         | Description                                 |
-|--------------|--------------|---------------------------------------------|
-| `positions`  | `list[float]`| Per-joint target positions in radians.      |
-
-### `Policy`
-
-A loaded policy ready for inference. Obtain via `Registry`.
-
-| Method / Property            | Description                                    |
-|------------------------------|------------------------------------------------|
-| `predict(obs) → targets`     | Run one inference step.                        |
-| `control_frequency_hz() → int` | Required loop rate (typically 50 Hz).        |
-
-### `MujocoSession`
-
-Live Python-facing MuJoCo session around the Rust RoboWBC control path.
-
-```python
-MujocoSession(
-    config_path: str,
-    render_width: int = 640,
-    render_height: int = 480,
-)
-```
-
-The config must include a `[sim]` section. The session loads the robot config,
-builds the policy, creates `MujocoTransport`, and keeps the live control loop in
-Rust.
-
-Supported high-level `step()` action forms:
-
-- `{"velocity": [vx, vy, yaw_rate]}`
-- `{"motion_tokens": [...]}`
-- `{"joint_targets": [...]}`
-- `{"command_type": "...", "command_data": [...]}` for explicit command payloads
-
-Methods:
-
-| Method | Description |
-|--------|-------------|
-| `reset() -> dict` | Reset the simulator and policy state. |
-| `step(action=None) -> dict` | Advance one Rust-owned control tick. |
-| `get_state() -> dict` | Return current joint/base/MuJoCo state. |
-| `save_state() -> dict` | Save full MuJoCo physics state plus session command metadata. |
-| `restore_state(state) -> None` | Restore a state returned by `save_state()`. |
-| `capture_camera(name) -> dict` | Return RGB bytes plus width/height for a named camera or preset. |
-| `get_sim_time() -> float` | Return current simulator time in seconds. |
-
-The session does not reimplement the controller in Python. Each `step()` call:
-
-1. reads live simulator observations in Rust
-2. runs the policy in Rust
-3. sends targets through the Rust MuJoCo transport
-4. advances MuJoCo using the configured substep semantics
-
-### `Registry`
-
-Factory for building registered policies.
-
-| Static method                                   | Description                               |
-|-------------------------------------------------|-------------------------------------------|
-| `Registry.list_policies() → list[str]`          | All compiled-in policy names.             |
-| `Registry.build(name, config_path) → Policy`    | Build from a robowbc TOML config file.    |
-| `Registry.build_from_str(toml_str) → Policy`    | Build from a TOML string.                 |
-
-## Examples
-
-### Config-driven policy switching
-
-```python
-from robowbc import Registry, Observation
-
-# Same observation, different policy — just change the config file
-for config in ["configs/sonic_g1.toml", "configs/decoupled_smoke.toml"]:
-    policy = Registry.build("gear_sonic" if "sonic" in config else "decoupled_wbc", config)
-    print(f"{config}: {policy.control_frequency_hz()} Hz")
-```
-
-### 50 Hz control loop
-
-```python
-import time
-from robowbc import Registry, Observation
-
-policy = Registry.build("gear_sonic", "configs/sonic_g1.toml")
-dt = 1.0 / policy.control_frequency_hz()   # 0.02 s
-
-obs = Observation(
-    joint_positions=[0.0] * 23,
-    joint_velocities=[0.0] * 23,
+    joint_positions=[...],
+    joint_velocities=[...],
     gravity_vector=[0.0, 0.0, -1.0],
     command_type="velocity",
-    command_data=[0.5, 0.0, 0.0, 0.0, 0.0, 0.3],
+    command_data=[vx, vy, vz, wx, wy, wz],
 )
-
-for _ in range(100):                        # 2 seconds at 50 Hz
-    t0 = time.perf_counter()
-    targets = policy.predict(obs)
-    elapsed = time.perf_counter() - t0
-    time.sleep(max(0.0, dt - elapsed))
 ```
 
-A full runnable example is at `examples/python/gear_sonic_inference.py`.
+2. The structured path for new integrations:
 
-### Live MuJoCo session
+```python
+from robowbc import KinematicPoseCommand, LinkPose, Observation, VelocityCommand
+
+Observation(
+    joint_positions=[...],
+    joint_velocities=[...],
+    gravity_vector=[0.0, 0.0, -1.0],
+    command=VelocityCommand(
+        linear=[vx, vy, vz],
+        angular=[wx, wy, wz],
+    ),
+)
+
+Observation(
+    joint_positions=[...],
+    joint_velocities=[...],
+    gravity_vector=[0.0, 0.0, -1.0],
+    command=KinematicPoseCommand(
+        [
+            LinkPose(
+                name="left_wrist",
+                translation=[0.35, 0.20, 0.95],
+                rotation_xyzw=[0.0, 0.0, 0.0, 1.0],
+            )
+        ]
+    ),
+)
+```
+
+### Structured command classes
+
+| Class | Use |
+|------|-----|
+| `VelocityCommand` | 6D base twist: `linear=[vx, vy, vz]`, `angular=[wx, wy, wz]` |
+| `MotionTokensCommand` | Tokenized reference motion payload |
+| `JointTargetsCommand` | Direct joint-space target vector |
+| `KinematicPoseCommand` | Named link-pose command for manipulation |
+| `LinkPose` | One link pose inside `KinematicPoseCommand` |
+
+### Flat command compatibility
+
+The legacy `command_type` plus `command_data` path remains supported for:
+
+- `velocity`
+- `motion_tokens`
+- `joint_targets`
+
+`kinematic_pose` is intentionally **not** exposed as flat `command_data`.
+Use `Observation(..., command=KinematicPoseCommand([...]))` for the public
+manipulation path.
+
+### Public manipulation shape
+
+The public `kinematic_pose` contract is:
+
+```python
+KinematicPoseCommand(
+    [
+        LinkPose(
+            name="left_wrist",
+            translation=[x, y, z],
+            rotation_xyzw=[qx, qy, qz, qw],
+        ),
+        LinkPose(
+            name="right_wrist",
+            translation=[x, y, z],
+            rotation_xyzw=[qx, qy, qz, qw],
+        ),
+    ]
+)
+```
+
+There is no public `EndEffectorPoses` Python surface in v1. Use named
+`LinkPose` entries through `KinematicPoseCommand` instead.
+
+## `Policy` and `PolicyCapabilities`
+
+Use `Policy.capabilities()` before you attempt inference or wire an adapter:
+
+```python
+policy = Registry.build("decoupled_wbc", "configs/decoupled_smoke.toml")
+capabilities = policy.capabilities()
+if "velocity" not in capabilities.supported_commands:
+    raise RuntimeError(capabilities.supported_commands)
+```
+
+`PolicyCapabilities.supported_commands` returns stable snake_case command names
+mirroring `WbcCommandKind` in Rust:
+
+- `velocity`
+- `motion_tokens`
+- `joint_targets`
+- `kinematic_pose`
+
+This is the contract that the official adapters use to fail fast before
+inference.
+
+## `MujocoSession`
+
+`MujocoSession` keeps observation gathering, policy inference, target
+generation, and MuJoCo stepping inside Rust while exposing a Python-facing
+session object:
 
 ```python
 import robowbc
@@ -213,79 +213,94 @@ session = robowbc.MujocoSession(
     render_width=640,
     render_height=480,
 )
-
-state = session.reset()
-print(state["joint_names"][:3])
-
-for _ in range(10):
-    state = session.step({"velocity": [0.3, 0.0, 0.0]})
-
-capture = session.capture_camera("track")
-print(capture["width"], capture["height"], len(capture["rgb"]))
 ```
 
-The returned camera payload is intentionally simple: RGB bytes plus dimensions.
-The reference roboharness adapter at `examples/python/roboharness_backend.py`
-wraps that payload into `roboharness.core.capture.CameraView`.
+Supported `step()` action shapes:
+
+- `{"velocity": [vx, vy, yaw_rate]}`
+- `{"motion_tokens": [...]}`
+- `{"joint_targets": [...]}`
+- `{"command_type": "...", "command_data": [...]}` for explicit flat payloads
+- `{"kinematic_pose": [{"name": ..., "translation": [...], "rotation_xyzw": [...]}]}`
+
+The manipulation action shape is the same one returned by session state export:
+
+```python
+action = {
+    "kinematic_pose": [
+        {
+            "name": "left_wrist",
+            "translation": [0.35, 0.20, 0.95],
+            "rotation_xyzw": [0.0, 0.0, 0.0, 1.0],
+        }
+    ]
+}
+
+state = session.step(action)
+print(state["command"])
+```
+
+For flat commands, `get_state()`, `save_state()`, and `restore_state()` use
+`{"command_type": ..., "command_data": ...}`. For manipulation, they use the
+canonical `{"kinematic_pose": [...]}` dict shape shown above.
+
+`MujocoSession` also checks the built policy's capabilities before each control
+tick, so unsupported commands fail before they reach the control loop.
+
+### Live session example
+
+The checked-in reference example is:
+
+- `examples/python/mujoco_kinematic_pose_session.py`
+
+That file demonstrates `session.step({"kinematic_pose": [...]})` directly
+against `configs/wholebody_vla_x2.toml`.
+
+## Official adapters
+
+RoboWBC ships first-party copyable adapter seams:
+
+- `crates/robowbc-py/examples/lerobot_adapter.py`
+  Uses `Policy.capabilities()` plus `VelocityCommand` and preserves the
+  LeRobot-style `step(obs_dict) -> {"action": targets}` seam.
+- `crates/robowbc-py/examples/manipulation_adapter.py`
+  Uses `Policy.capabilities()` plus `KinematicPoseCommand` and preserves the
+  same `{"action": targets}` seam for manipulation callers.
+- `examples/python/roboharness_backend.py`
+  Adapts `MujocoSession` to roboharness while keeping the live control path in
+  Rust.
 
 ## LeRobot integration
 
-robowbc can act as a drop-in WBC inference backend for LeRobot's
-`GrootLocomotionController` and `HolosomaLocomotionController`.  Both
-controllers share a `step(obs_dict) → action_dict` interface that maps
-directly to robowbc's `Policy.predict`.
-
-A standalone `RoboWBCController` adapter is provided in
-`crates/robowbc-py/examples/lerobot_adapter.py`:
+`crates/robowbc-py/examples/lerobot_adapter.py` is the reference locomotion
+adapter for LeRobot / GR00T-style seams:
 
 ```python
 from lerobot_adapter import RoboWBCController
 
-# Load any robowbc policy via TOML config — no code changes for model switching.
-ctrl = RoboWBCController("configs/sonic_g1.toml")
-
-# LeRobot-style inference step.
+controller = RoboWBCController("configs/sonic_g1.toml")
 obs_dict = {
-    "observation.state":    joint_positions,   # list[float] or np.ndarray, n_joints
-    "observation.velocity": joint_velocities,  # list[float] or np.ndarray, n_joints
-    "observation.imu":      [gx, gy, gz, wx, wy, wz],  # gravity + angular vel
-    "observation.task_cmd": [vx, vy, omega],   # base velocity command (3 floats)
+    "observation.state": joint_positions,
+    "observation.velocity": joint_velocities,
+    "observation.imu": [gx, gy, gz, wx, wy, wz],
+    "observation.task_cmd": [vx, vy, omega],
 }
-action = ctrl.step(obs_dict)
-joint_targets = action["action"]   # list[float], n_joints
+action = controller.step(obs_dict)
+print(action["action"])
 ```
 
-The `load_from_config` convenience function (also available at module level)
-reads the TOML file and returns a `Policy` in one call:
-
-```python
-import robowbc
-policy = robowbc.load_from_config("configs/sonic_g1.toml")
-```
-
-See `docs/community/lerobot-rfc.md` for the full RFC and submission plan.
-
-## Roboharness live backend path
-
-`examples/python/roboharness_backend.py` shows the intended ownership boundary:
-
-- Python adapts `robowbc.MujocoSession` to roboharness's `SimulatorBackend`
-  protocol
-- Rust continues to own live simulator state reads, policy inference, target
-  generation, and MuJoCo stepping
-- roboharness remains an optional Python-side dependency; no RoboWBC Rust crate
-  depends on it directly
+That adapter normalizes LeRobot's 3-float `[vx, vy, omega]` task command into
+RoboWBC's 6D structured velocity command and fails fast unless the loaded
+policy advertises `velocity` support.
 
 ## Publishing new releases
 
 Wheels are built automatically on every `v*` tag via
-`.github/workflows/publish.yml`.  The workflow:
+`.github/workflows/publish.yml`. The workflow:
 
-1. Builds `manylinux2014` wheels via `PyO3/maturin-action`.
-2. Builds an sdist.
-3. Publishes everything to PyPI using [trusted publishing] (no API token
-   needed — configure the `pypi` GitHub environment in repo Settings →
-   Environments, then add the `miaodx/robowbc` publisher in your PyPI project).
+1. Builds `manylinux2014` wheels via `PyO3/maturin-action`
+2. Builds an sdist
+3. Publishes everything to PyPI using trusted publishing
 
 To cut a release:
 
@@ -293,5 +308,3 @@ To cut a release:
 git tag v0.2.0
 git push origin v0.2.0
 ```
-
-[trusted publishing]: https://docs.pypi.org/trusted-publishers/

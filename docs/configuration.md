@@ -1,6 +1,13 @@
 # Configuration schema
 
-RoboWBC CLI reads a single TOML file for runtime selection of policy, robot, communication, and inference backend.
+RoboWBC uses one TOML schema across the CLI and the file-based embedded Python
+entry points (`load_from_config`, `Registry.build`, and `MujocoSession`). This
+document describes the embedded runtime configuration surface, not a
+`server/daemon`, `ROS2`, or `zenoh` customer API.
+
+For file-based Python entry points, relative `config_path`, `model_path`, and
+`context_path` values are normalized from the config document before the policy
+or session is built.
 
 ## Top-level sections
 
@@ -155,6 +162,23 @@ Rules:
 
 - Uses `runtime.kinematic_pose`
 
+Example:
+
+```toml
+[[runtime.kinematic_pose.links]]
+name = "left_wrist"
+translation = [0.35, 0.20, 0.95]
+rotation_xyzw = [0.0, 0.0, 0.0, 1.0]
+
+[[runtime.kinematic_pose.links]]
+name = "right_wrist"
+translation = [0.35, -0.20, 0.95]
+rotation_xyzw = [0.0, 0.0, 0.0, 1.0]
+```
+
+The public manipulation surface is `kinematic_pose` with named links. There is
+no public `EndEffectorPoses` config surface in v1.
+
 ### `bfm_zero`
 
 - Uses its own prompt/context config under `[policy.config.tracking]`
@@ -171,6 +195,37 @@ Rules:
 - `standing_placeholder_tracking` is only supported when `policy.name = "gear_sonic"`
 - Named `runtime.velocity_schedule.segments` must either all define
   `phase_name` or all omit it; duplicate or unsafe phase names are rejected
+- `runtime.kinematic_pose.links[*]` must provide `name`, `translation[3]`, and `rotation_xyzw[4]`
+
+## Live Python session command shapes
+
+`robowbc.MujocoSession.step(...)` accepts the same public command families as
+the embedded Python SDK:
+
+```python
+session.step({"velocity": [0.3, 0.0, 0.1]})
+session.step({"motion_tokens": [0.1, 0.2]})
+session.step({"joint_targets": [0.0] * 29})
+session.step(
+    {
+        "kinematic_pose": [
+            {
+                "name": "left_wrist",
+                "translation": [0.35, 0.20, 0.95],
+                "rotation_xyzw": [0.0, 0.0, 0.0, 1.0],
+            }
+        ]
+    }
+)
+```
+
+State export uses the same canonical shapes:
+
+- Flat commands appear as `{"command_type": "...", "command_data": [...]}`
+- Manipulation appears as `{"kinematic_pose": [...]}` with the named link-pose
+  payload shown above
+
+The checked-in reference example is `examples/python/mujoco_kinematic_pose_session.py`.
 
 ## Optional artifact sections
 
