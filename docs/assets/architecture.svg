@@ -1,171 +1,140 @@
-<svg width="1400" height="860" viewBox="0 0 1400 860" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
-  <title id="title">RoboWBC architecture</title>
-  <desc id="desc">Config-driven CLI and registry route whole-body control policies through ONNX Runtime or PyO3 backends, then into communication, simulation, and visual reporting outputs.</desc>
+<svg width="1600" height="940" viewBox="0 0 1600 940" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">RoboWBC codebase architecture</title>
+  <desc id="desc">A codebase-derived map of RoboWBC showing TOML configs flowing into the CLI and registry, then through the core WbcPolicy contract, ONNX and PyO3 policy backends, control transports, simulation, visualization, and report artifacts.</desc>
   <defs>
-    <linearGradient id="bg" x1="120" y1="60" x2="1260" y2="800" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#F7FBFF"/>
-      <stop offset="0.55" stop-color="#EEF6F1"/>
-      <stop offset="1" stop-color="#FFF6EA"/>
+    <linearGradient id="bg" x1="40" y1="20" x2="1560" y2="900" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F8FBFF"/>
+      <stop offset="0.58" stop-color="#F6FBF7"/>
+      <stop offset="1" stop-color="#FFF7EC"/>
     </linearGradient>
-    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
-      <stop stop-color="#FFFFFF"/>
-      <stop offset="1" stop-color="#F8FBFD"/>
-    </linearGradient>
-    <linearGradient id="core" x1="380" y1="120" x2="1000" y2="680" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#F3F8FF"/>
-      <stop offset="1" stop-color="#FFFFFF"/>
-    </linearGradient>
-    <linearGradient id="blueCard" x1="0" y1="0" x2="1" y2="1">
-      <stop stop-color="#E9F2FF"/>
+    <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#EAF3FF"/>
       <stop offset="1" stop-color="#F8FBFF"/>
     </linearGradient>
-    <linearGradient id="greenCard" x1="0" y1="0" x2="1" y2="1">
+    <linearGradient id="green" x1="0" y1="0" x2="1" y2="1">
       <stop stop-color="#EAF8EF"/>
-      <stop offset="1" stop-color="#F8FDF9"/>
+      <stop offset="1" stop-color="#F9FDF9"/>
     </linearGradient>
-    <linearGradient id="orangeCard" x1="0" y1="0" x2="1" y2="1">
-      <stop stop-color="#FFF1E3"/>
+    <linearGradient id="amber" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#FFF0DA"/>
       <stop offset="1" stop-color="#FFF9F2"/>
     </linearGradient>
-    <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%" color-interpolation-filters="sRGB">
-      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#0F172A" flood-opacity="0.10"/>
+    <linearGradient id="slate" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#F8FAFC"/>
+      <stop offset="1" stop-color="#EEF2F7"/>
+    </linearGradient>
+    <filter id="shadow" x="-12%" y="-16%" width="124%" height="136%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#0F172A" flood-opacity="0.08"/>
     </filter>
     <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
-      <path d="M1 1L11 6L1 11" fill="none" stroke="#5F6F85" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M1 1L11 6L1 11" fill="none" stroke="#64748B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
     </marker>
   </defs>
 
-  <rect x="20" y="20" width="1360" height="820" rx="36" fill="url(#bg)"/>
+  <rect x="20" y="20" width="1560" height="900" rx="34" fill="url(#bg)"/>
 
-  <text x="70" y="92" fill="#142033" font-size="42" font-weight="700" font-family="IBM Plex Sans, Segoe UI, sans-serif">RoboWBC</text>
-  <text x="70" y="126" fill="#506176" font-size="20" font-weight="500" font-family="IBM Plex Sans, Segoe UI, sans-serif">One runtime for switching humanoid WBC policies, transports, and reports.</text>
-
-  <rect x="1020" y="62" width="300" height="56" rx="18" fill="#0F172A" opacity="0.92"/>
-  <text x="1046" y="88" fill="#F8FAFC" font-size="14" font-weight="700" font-family="IBM Plex Sans, Segoe UI, sans-serif">LIVE TODAY</text>
-  <text x="1046" y="108" fill="#D5E6FB" font-size="14" font-weight="500" font-family="IBM Plex Sans, Segoe UI, sans-serif">gear_sonic · decoupled_wbc · wbc_agile · bfm_zero</text>
-
-  <g filter="url(#shadow)">
-    <rect x="60" y="160" width="250" height="560" rx="28" fill="url(#panel)" stroke="#D8E1EB"/>
-    <rect x="360" y="140" width="640" height="590" rx="32" fill="url(#core)" stroke="#D8E1EB"/>
-    <rect x="1050" y="160" width="290" height="560" rx="28" fill="url(#panel)" stroke="#D8E1EB"/>
-  </g>
-
-  <text x="92" y="204" fill="#142033" font-size="26" font-weight="700" font-family="IBM Plex Sans, Segoe UI, sans-serif">Inputs</text>
-  <text x="392" y="188" fill="#142033" font-size="28" font-weight="700" font-family="IBM Plex Sans, Segoe UI, sans-serif">Runtime Core</text>
-  <text x="1082" y="204" fill="#142033" font-size="26" font-weight="700" font-family="IBM Plex Sans, Segoe UI, sans-serif">Outputs</text>
-
-  <g filter="url(#shadow)">
-    <rect x="84" y="236" width="202" height="92" rx="20" fill="url(#blueCard)" stroke="#C9D8EA"/>
-    <rect x="84" y="346" width="202" height="92" rx="20" fill="url(#blueCard)" stroke="#C9D8EA"/>
-    <rect x="84" y="456" width="202" height="92" rx="20" fill="url(#blueCard)" stroke="#C9D8EA"/>
-    <rect x="84" y="566" width="202" height="118" rx="20" fill="url(#blueCard)" stroke="#C9D8EA"/>
-  </g>
-
-  <g font-family="IBM Plex Sans, Segoe UI, sans-serif" fill="#142033">
-    <text x="106" y="270" font-size="18" font-weight="700">TOML config</text>
-    <text x="106" y="296" font-size="14" fill="#5F6F85">policy name, model paths,</text>
-    <text x="106" y="316" font-size="14" fill="#5F6F85">robot setup, vis/report opts</text>
-
-    <text x="106" y="380" font-size="18" font-weight="700">Checkpoint assets</text>
-    <text x="106" y="406" font-size="14" fill="#5F6F85">public downloads or</text>
-    <text x="106" y="426" font-size="14" fill="#5F6F85">user-supplied local models</text>
-
-    <text x="106" y="490" font-size="18" font-weight="700">Command streams</text>
-    <text x="106" y="516" font-size="14" fill="#5F6F85">velocity, motion tokens,</text>
-    <text x="106" y="536" font-size="14" fill="#5F6F85">end-effector or body poses</text>
-
-    <text x="106" y="600" font-size="18" font-weight="700">Robot state</text>
-    <text x="106" y="626" font-size="14" fill="#5F6F85">joint positions, velocities,</text>
-    <text x="106" y="646" font-size="14" fill="#5F6F85">gravity vector, IMU gyro,</text>
-    <text x="106" y="666" font-size="14" fill="#5F6F85">transport feedback loop</text>
+  <g font-family="IBM Plex Sans, Inter, Segoe UI, sans-serif">
+    <text x="70" y="78" fill="#122033" font-size="40" font-weight="800">RoboWBC code map</text>
+    <text x="70" y="112" fill="#4B5D73" font-size="19" font-weight="500">What actually runs when a contributor changes a config, adds a policy, or builds the report site.</text>
   </g>
 
   <g filter="url(#shadow)">
-    <rect x="398" y="214" width="564" height="88" rx="22" fill="url(#blueCard)" stroke="#C9D8EA"/>
-    <rect x="398" y="324" width="248" height="110" rx="22" fill="url(#blueCard)" stroke="#C9D8EA"/>
-    <rect x="670" y="324" width="292" height="110" rx="22" fill="#F9FBFD" stroke="#C9D8EA"/>
-    <rect x="398" y="462" width="172" height="118" rx="22" fill="url(#greenCard)" stroke="#C9E0D0"/>
-    <rect x="594" y="462" width="172" height="118" rx="22" fill="url(#greenCard)" stroke="#C9E0D0"/>
-    <rect x="790" y="462" width="172" height="118" rx="22" fill="url(#orangeCard)" stroke="#E7D3BE"/>
-    <rect x="398" y="610" width="266" height="88" rx="22" fill="url(#blueCard)" stroke="#C9D8EA"/>
-    <rect x="692" y="610" width="270" height="88" rx="22" fill="url(#greenCard)" stroke="#C9E0D0"/>
+    <rect x="70" y="160" width="300" height="560" rx="22" fill="url(#blue)" stroke="#C9D8EA"/>
+    <rect x="430" y="160" width="300" height="560" rx="22" fill="url(#green)" stroke="#C9E0D0"/>
+    <rect x="790" y="160" width="340" height="560" rx="22" fill="url(#slate)" stroke="#CBD5E1"/>
+    <rect x="1190" y="160" width="340" height="560" rx="22" fill="url(#amber)" stroke="#E7D3BE"/>
+    <rect x="70" y="770" width="1460" height="116" rx="22" fill="#FFFFFF" stroke="#D7DEE8"/>
   </g>
 
-  <g font-family="IBM Plex Sans, Segoe UI, sans-serif">
-    <text x="424" y="248" fill="#142033" font-size="24" font-weight="700">robowbc-cli</text>
-    <text x="424" y="276" fill="#5F6F85" font-size="15">run, init, config loading, policy selection, control-loop orchestration</text>
+  <g font-family="IBM Plex Sans, Inter, Segoe UI, sans-serif">
+    <text x="100" y="208" fill="#122033" font-size="25" font-weight="800">Inputs on disk</text>
 
-    <text x="424" y="360" fill="#142033" font-size="22" font-weight="700">robowbc-registry</text>
-    <text x="424" y="388" fill="#5F6F85" font-size="15">inventory-based discovery</text>
-    <text x="424" y="410" fill="#5F6F85" font-size="15">and config-driven builders</text>
+    <text x="100" y="262" fill="#122033" font-size="19" font-weight="800">configs/*.toml</text>
+    <text x="100" y="290" fill="#52657B" font-size="15">[policy] name + config</text>
+    <text x="100" y="314" fill="#52657B" font-size="15">[runtime] velocity / schedule / pose</text>
+    <text x="100" y="338" fill="#52657B" font-size="15">[comm] 50 Hz topics</text>
 
-    <text x="696" y="360" fill="#142033" font-size="22" font-weight="700">robowbc-core</text>
-    <text x="696" y="388" fill="#5F6F85" font-size="15">WbcPolicy trait</text>
-    <text x="696" y="410" fill="#5F6F85" font-size="15">Observation · WbcCommand</text>
-    <text x="696" y="432" fill="#5F6F85" font-size="15">JointPositionTargets · RobotConfig</text>
+    <line x1="100" y1="372" x2="340" y2="372" stroke="#CAD6E3"/>
+    <text x="100" y="414" fill="#122033" font-size="19" font-weight="800">configs/robots/*.toml</text>
+    <text x="100" y="442" fill="#52657B" font-size="15">joint names, PD gains, limits</text>
+    <text x="100" y="466" fill="#52657B" font-size="15">default pose, MJCF path</text>
 
-    <text x="422" y="498" fill="#142033" font-size="20" font-weight="700">robowbc-ort</text>
-    <text x="422" y="524" fill="#5F6F85" font-size="14">Live ONNX-backed paths</text>
-    <text x="422" y="546" fill="#5F6F85" font-size="14">gear_sonic · decoupled_wbc</text>
-    <text x="422" y="566" fill="#5F6F85" font-size="14">wbc_agile · bfm_zero</text>
+    <line x1="100" y1="500" x2="340" y2="500" stroke="#CAD6E3"/>
+    <text x="100" y="542" fill="#122033" font-size="19" font-weight="800">models/*</text>
+    <text x="100" y="570" fill="#52657B" font-size="15">ONNX checkpoints, context files,</text>
+    <text x="100" y="594" fill="#52657B" font-size="15">or a Python module for py_model</text>
 
-    <text x="618" y="498" fill="#142033" font-size="20" font-weight="700">robowbc-pyo3</text>
-    <text x="618" y="524" fill="#5F6F85" font-size="14">Python-backed runtime</text>
-    <text x="618" y="546" fill="#5F6F85" font-size="14">for user-supplied `py_model`</text>
+    <text x="460" y="208" fill="#122033" font-size="25" font-weight="800">Build the policy</text>
 
-    <text x="814" y="498" fill="#142033" font-size="20" font-weight="700">Blocked / future</text>
-    <text x="814" y="524" fill="#5F6F85" font-size="14">hover needs checkpoint</text>
-    <text x="814" y="546" fill="#5F6F85" font-size="14">wholebody_vla needs runnable upstream</text>
+    <text x="460" y="262" fill="#122033" font-size="19" font-weight="800">robowbc-cli</text>
+    <text x="460" y="290" fill="#52657B" font-size="15">robowbc run --config ...</text>
+    <text x="460" y="314" fill="#52657B" font-size="15">build_policy()</text>
+    <text x="460" y="338" fill="#52657B" font-size="15">ParsedRuntimeCommand</text>
 
-    <text x="424" y="644" fill="#142033" font-size="20" font-weight="700">robowbc-comm + robowbc-sim</text>
-    <text x="424" y="670" fill="#5F6F85" font-size="14">synthetic, MuJoCo, and robot-facing transport loop</text>
+    <line x1="460" y1="372" x2="700" y2="372" stroke="#C9E0D0"/>
+    <text x="460" y="414" fill="#122033" font-size="19" font-weight="800">robowbc-registry</text>
+    <text x="460" y="442" fill="#52657B" font-size="15">WbcRegistry::build(name, config)</text>
+    <text x="460" y="466" fill="#52657B" font-size="15">inventory::submit!</text>
 
-    <text x="718" y="644" fill="#142033" font-size="20" font-weight="700">robowbc-vis</text>
-    <text x="718" y="670" fill="#5F6F85" font-size="14">Rerun `.rrd` capture and JSON report export</text>
+    <line x1="460" y1="500" x2="700" y2="500" stroke="#C9E0D0"/>
+    <text x="460" y="542" fill="#122033" font-size="19" font-weight="800">registered names</text>
+    <text x="460" y="570" fill="#52657B" font-size="15">gear_sonic · decoupled_wbc</text>
+    <text x="460" y="594" fill="#52657B" font-size="15">wbc_agile · bfm_zero</text>
+    <text x="460" y="618" fill="#52657B" font-size="15">hover · wholebody_vla · py_model</text>
+
+    <text x="820" y="208" fill="#122033" font-size="25" font-weight="800">Runtime contract</text>
+
+    <text x="820" y="262" fill="#122033" font-size="19" font-weight="800">robowbc-core</text>
+    <text x="820" y="290" fill="#52657B" font-size="15">WbcPolicy::predict(&amp;Observation)</text>
+    <text x="820" y="314" fill="#52657B" font-size="15">-&gt; JointPositionTargets</text>
+
+    <line x1="820" y1="348" x2="1100" y2="348" stroke="#CBD5E1"/>
+    <text x="820" y="390" fill="#122033" font-size="19" font-weight="800">Observation fields</text>
+    <text x="820" y="418" fill="#52657B" font-size="15">joint_positions, joint_velocities</text>
+    <text x="820" y="442" fill="#52657B" font-size="15">gravity_vector, angular_velocity</text>
+    <text x="820" y="466" fill="#52657B" font-size="15">base_pose, command, timestamp</text>
+
+    <line x1="820" y1="500" x2="1100" y2="500" stroke="#CBD5E1"/>
+    <text x="820" y="542" fill="#122033" font-size="19" font-weight="800">WbcCommand variants</text>
+    <text x="820" y="570" fill="#52657B" font-size="15">Velocity · MotionTokens</text>
+    <text x="820" y="594" fill="#52657B" font-size="15">KinematicPose · EndEffectorPoses</text>
+    <text x="820" y="618" fill="#52657B" font-size="15">JointTargets</text>
+
+    <text x="1220" y="208" fill="#122033" font-size="25" font-weight="800">Backends + evidence</text>
+
+    <text x="1220" y="262" fill="#122033" font-size="19" font-weight="800">robowbc-ort</text>
+    <text x="1220" y="290" fill="#52657B" font-size="15">OrtBackend, CPU / CUDA / TensorRT</text>
+    <text x="1220" y="314" fill="#52657B" font-size="15">public ONNX policy wrappers</text>
+
+    <line x1="1220" y1="348" x2="1500" y2="348" stroke="#E7D3BE"/>
+    <text x="1220" y="390" fill="#122033" font-size="19" font-weight="800">robowbc-pyo3</text>
+    <text x="1220" y="418" fill="#52657B" font-size="15">PyModelPolicy calls predict(obs)</text>
+    <text x="1220" y="442" fill="#52657B" font-size="15">inside the Python GIL</text>
+
+    <line x1="1220" y1="476" x2="1500" y2="476" stroke="#E7D3BE"/>
+    <text x="1220" y="518" fill="#122033" font-size="19" font-weight="800">control + report path</text>
+    <text x="1220" y="546" fill="#52657B" font-size="15">run_control_tick()</text>
+    <text x="1220" y="570" fill="#52657B" font-size="15">RobotTransport / MujocoTransport</text>
+    <text x="1220" y="594" fill="#52657B" font-size="15">RerunVisualizer, JSON, HTML site</text>
   </g>
 
-  <g filter="url(#shadow)">
-    <rect x="1076" y="236" width="238" height="92" rx="20" fill="url(#greenCard)" stroke="#C9E0D0"/>
-    <rect x="1076" y="346" width="238" height="92" rx="20" fill="url(#blueCard)" stroke="#C9D8EA"/>
-    <rect x="1076" y="456" width="238" height="92" rx="20" fill="url(#blueCard)" stroke="#C9D8EA"/>
-    <rect x="1076" y="566" width="238" height="118" rx="20" fill="url(#orangeCard)" stroke="#E7D3BE"/>
+  <g stroke="#64748B" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)">
+    <line x1="370" y1="440" x2="430" y2="440"/>
+    <line x1="730" y1="440" x2="790" y2="440"/>
+    <line x1="1130" y1="440" x2="1190" y2="440"/>
   </g>
 
-  <g font-family="IBM Plex Sans, Segoe UI, sans-serif" fill="#142033">
-    <text x="1098" y="270" font-size="18" font-weight="700">Joint targets @ 50 Hz</text>
-    <text x="1098" y="296" font-size="14" fill="#5F6F85">uniform output contract</text>
-    <text x="1098" y="316" font-size="14" fill="#5F6F85">for policy switching</text>
+  <g font-family="IBM Plex Sans, Inter, Segoe UI, sans-serif">
+    <text x="100" y="810" fill="#122033" font-size="20" font-weight="800">Smoke path</text>
+    <text x="100" y="840" fill="#52657B" font-size="15">configs/decoupled_smoke.toml</text>
+    <text x="100" y="862" fill="#52657B" font-size="15">checked-in ONNX fixture + 4-joint mock robot</text>
 
-    <text x="1098" y="380" font-size="18" font-weight="700">Robot or MuJoCo</text>
-    <text x="1098" y="406" font-size="14" fill="#5F6F85">transport applies commands</text>
-    <text x="1098" y="426" font-size="14" fill="#5F6F85">and feeds observations back</text>
+    <text x="610" y="810" fill="#122033" font-size="20" font-weight="800">Add a model</text>
+    <text x="610" y="840" fill="#52657B" font-size="15">WbcPolicy + RegistryPolicy</text>
+    <text x="610" y="862" fill="#52657B" font-size="15">WbcRegistration + policy config</text>
 
-    <text x="1098" y="490" font-size="18" font-weight="700">Run artifacts</text>
-    <text x="1098" y="516" font-size="14" fill="#5F6F85">per-policy JSON, logs,</text>
-    <text x="1098" y="536" font-size="14" fill="#5F6F85">and downloadable `.rrd` traces</text>
-
-    <text x="1098" y="600" font-size="18" font-weight="700">Published HTML report</text>
-    <text x="1098" y="626" font-size="14" fill="#5F6F85">embedded Rerun viewer,</text>
-    <text x="1098" y="646" font-size="14" fill="#5F6F85">current live policies, honest</text>
-    <text x="1098" y="666" font-size="14" fill="#5F6F85">blocked cards on Pages</text>
+    <text x="1090" y="810" fill="#122033" font-size="20" font-weight="800">Add a robot</text>
+    <text x="1090" y="840" fill="#52657B" font-size="15">RobotConfig TOML</text>
+    <text x="1090" y="862" fill="#52657B" font-size="15">joint order, gains, limits, default pose</text>
   </g>
-
-  <g stroke="#5F6F85" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow)">
-    <line x1="286" y1="282" x2="398" y2="258"/>
-    <line x1="286" y1="392" x2="398" y2="258"/>
-    <line x1="286" y1="502" x2="398" y2="258"/>
-    <line x1="286" y1="626" x2="398" y2="378"/>
-    <line x1="680" y1="302" x2="520" y2="324"/>
-    <line x1="720" y1="302" x2="814" y2="462"/>
-    <line x1="780" y1="434" x2="780" y2="462"/>
-    <line x1="484" y1="580" x2="484" y2="610"/>
-    <line x1="680" y1="580" x2="826" y2="610"/>
-    <line x1="664" y1="654" x2="1076" y2="282"/>
-    <line x1="962" y1="654" x2="1076" y2="502"/>
-  </g>
-
-  <path d="M1188 436C1188 496 1120 520 1008 520C902 520 280 554 206 620" stroke="#94A3B8" stroke-width="3" stroke-linecap="round" stroke-dasharray="8 10" marker-end="url(#arrow)"/>
-  <text x="1048" y="478" fill="#5F6F85" font-size="14" font-weight="600" font-family="IBM Plex Sans, Segoe UI, sans-serif">observation feedback loop</text>
-
-  <text x="394" y="770" fill="#506176" font-size="15" font-family="IBM Plex Sans, Segoe UI, sans-serif">Same crates power the CLI smoke path, live public-policy runs, JSON logs, raw `.rrd` traces, and the published HTML report.</text>
 </svg>
