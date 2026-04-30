@@ -63,6 +63,7 @@ test: ## Run cargo test across the workspace and all targets.
 
 sim-feature-test: ## Run the feature-enabled MuJoCo sim transport tests with the runtime/plugin env wired.
 	download_dir="$(abspath $(MUJOCO_DOWNLOAD_DIR))"; \
+	"$(PYTHON)" scripts/ensure_mujoco_runtime.py --download-dir "$$download_dir" >/dev/null; \
 	link_dir="$(MUJOCO_DYNAMIC_LINK_DIR)"; \
 	runtime_ld_library_path="$$link_dir:$${LD_LIBRARY_PATH:-}"; \
 	if [[ -f "$$link_dir/libmujoco.so" || -f "$$link_dir/libmujoco.dylib" || -f "$$link_dir/mujoco.lib" ]]; then \
