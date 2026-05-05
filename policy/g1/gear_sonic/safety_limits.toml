@@ -1,0 +1,54 @@
+# Safety limits for GEAR-SONIC on Unitree G1 (29 DOF).
+#
+# max_dq_per_step: maximum |q_target[i] - q_target_prev[i]| per 500 Hz tick.
+#   = 5 rad/s * (1 / 500 Hz) = 0.010 rad  (conservative for leg joints)
+#   = 10 rad/s * (1/500 Hz) = 0.020 rad   (arm joints, less inertia)
+#
+# divergence_threshold: maximum |q_target[i] - q_current[i]| before a fault.
+#   Tuned conservatively; widen after validated on real hardware.
+
+[defaults]
+max_dq_per_step = 0.01
+divergence_threshold = 0.5
+
+# Arm joints (indices 19–28 in GEAR-SONIC G1 ordering) carry less inertia and
+# can tolerate a slightly higher rate limit without mechanical risk.
+[[joint_overrides]]
+index = 19
+max_dq_per_step = 0.02
+
+[[joint_overrides]]
+index = 20
+max_dq_per_step = 0.02
+
+[[joint_overrides]]
+index = 21
+max_dq_per_step = 0.02
+
+[[joint_overrides]]
+index = 22
+max_dq_per_step = 0.02
+
+[[joint_overrides]]
+index = 23
+max_dq_per_step = 0.02
+
+[[joint_overrides]]
+index = 24
+max_dq_per_step = 0.02
+
+[[joint_overrides]]
+index = 25
+max_dq_per_step = 0.02
+
+[[joint_overrides]]
+index = 26
+max_dq_per_step = 0.02
+
+[[joint_overrides]]
+index = 27
+max_dq_per_step = 0.02
+
+[[joint_overrides]]
+index = 28
+max_dq_per_step = 0.02

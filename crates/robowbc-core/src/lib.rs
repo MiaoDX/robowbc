@@ -1,5 +1,7 @@
 //! Core interfaces and data types for `RoboWBC`.
 
+pub mod validator;
+
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
