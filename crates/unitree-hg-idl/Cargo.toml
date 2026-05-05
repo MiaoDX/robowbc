@@ -1,0 +1,14 @@
+[package]
+name = "unitree-hg-idl"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "CDR-serializable Rust types for the unitree_hg IDL family (G1 / H1-2)"
+# IDL types are derived from unitree_sdk2 (BSD-3-Clause); see LICENSES/ in the repo root.
+
+[dependencies]
+thiserror = "2"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
