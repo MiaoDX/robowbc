@@ -28,6 +28,10 @@
 - [Roadmap](roadmap-2026-q2.md)
 - [Ecosystem Strategy](ecosystem-strategy.md)
 
+# Research
+
+- [2026-05 Merged Tech Report (Path A)](research/2026-05-merged-tech-report.md)
+
 # Community
 
 - [GR00T-WBC Integration Guide](community/groot-wbc-integration.md)
