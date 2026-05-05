@@ -245,12 +245,7 @@ impl MotorState {
         let temperature = r.read_f32()?;
         let vol = r.read_f32()?;
         let sensor = [r.read_u16()?, r.read_u16()?];
-        let temperature_ntc = [
-            r.read_i16()?,
-            r.read_i16()?,
-            r.read_i16()?,
-            r.read_i16()?,
-        ];
+        let temperature_ntc = [r.read_i16()?, r.read_i16()?, r.read_i16()?, r.read_i16()?];
         r.align(4);
         let reserve = [r.read_u32()?, r.read_u32()?, r.read_u32()?];
         Ok(Self {
@@ -953,8 +948,8 @@ mod tests {
             bq_ntc: [35, 36],
             mcu_ntc: [38, 39],
             cell_vol: [
-                4100, 4105, 4095, 4110, 4088, 4102, 4099, 4107, 4093, 4115, 4087, 4103, 4098,
-                4111, 4090,
+                4100, 4105, 4095, 4110, 4088, 4102, 4099, 4107, 4093, 4115, 4087, 4103, 4098, 4111,
+                4090,
             ],
             reserve: [0; 9],
         };
@@ -980,9 +975,11 @@ mod tests {
 
     #[test]
     fn low_cmd_round_trip() {
-        let mut original = LowCmd::default();
-        original.mode_pr = 1;
-        original.mode_machine = 2;
+        let mut original = LowCmd {
+            mode_pr: 1,
+            mode_machine: 2,
+            ..LowCmd::default()
+        };
         original.motor_cmd[0].q = 0.5;
         original.motor_cmd[0].kp = 15.0;
         original.motor_cmd[0].kd = 0.5;
@@ -1005,7 +1002,6 @@ mod tests {
     #[test]
     fn low_cmd_crc_encode_and_verify() {
         let mut cmd = LowCmd::default();
-        cmd.mode_pr = 0;
         cmd.motor_cmd[0].q = 0.1;
         cmd.motor_cmd[0].kp = 20.0;
 
@@ -1039,8 +1035,10 @@ mod tests {
 
     #[test]
     fn low_state_round_trip() {
-        let mut original = LowState::default();
-        original.tick = 123_456_789;
+        let mut original = LowState {
+            tick: 123_456_789,
+            ..LowState::default()
+        };
         original.imu_state.gyroscope = [0.01, -0.02, 0.03];
         original.imu_state.quaternion = [0.9999, 0.001, 0.002, 0.003];
         original.motor_state[0].q = 0.312;
