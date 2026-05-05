@@ -8,6 +8,7 @@ members = [
     "crates/robowbc-vis",
     "crates/robowbc-cli",
     "crates/robowbc-pyo3",
+    "crates/unitree-hg-idl",
 ]
 # robowbc-py is a standalone maturin project excluded from the workspace to
 # prevent pyo3 feature-flag conflicts: extension-module (robowbc-py) and
