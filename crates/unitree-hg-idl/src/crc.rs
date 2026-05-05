@@ -72,7 +72,10 @@ mod tests {
     fn crc32_single_zero_word() {
         // CRC of a single 0x00000000 word — deterministic.
         let crc = crc32_core(&[0]);
-        assert_ne!(crc, 0xFFFF_FFFF, "CRC should change after processing a word");
+        assert_ne!(
+            crc, 0xFFFF_FFFF,
+            "CRC should change after processing a word"
+        );
         // Verify determinism.
         assert_eq!(crc, crc32_core(&[0]));
     }
