@@ -1,0 +1,25 @@
+Component: ort (pykeio/ort) — ONNX Runtime Rust bindings
+Upstream:  https://github.com/pykeio/ort
+SPDX-License-Identifier: Apache-2.0 OR MIT
+Used by:   robowbc-ort — primary ONNX inference backend.
+
+ort is dual licensed under "Apache-2.0 OR MIT". This file documents the
+Apache-2.0 branch of that dual license. The full canonical Apache-2.0
+text is in ./Apache-2.0.txt in this directory. The MIT branch is
+documented in ort-MIT.txt.
+
+Copyright notice from upstream:
+
+   Copyright (c) 2022 pykeio
+
+   Licensed under either of
+     * Apache License, Version 2.0
+       (./Apache-2.0.txt or http://www.apache.org/licenses/LICENSE-2.0)
+     * MIT license
+       (./MIT.txt or http://opensource.org/licenses/MIT)
+   at your option.
+
+Note: ort wraps Microsoft's ONNX Runtime C/C++ library, which is itself
+licensed MIT. The bundled `libonnxruntime` shared library has its own
+license file in the upstream ONNX Runtime project
+(https://github.com/microsoft/onnxruntime).

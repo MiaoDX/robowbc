@@ -1,0 +1,17 @@
+Component: Eclipse CycloneDDS (BSD-3-Clause branch of dual license)
+Upstream:  https://github.com/eclipse-cyclonedds/cyclonedds
+SPDX-License-Identifier: BSD-3-Clause
+Used by:   robowbc-transport (vendored via cyclors).
+
+CycloneDDS is offered under "EPL-2.0 OR BSD-3-Clause". This file documents
+the BSD-3-Clause branch of that dual license. The full canonical
+BSD-3-Clause text is in ./BSD-3-Clause.txt in this directory.
+
+Copyright notice from upstream:
+
+   Copyright (c) 2006 to 2022 ZettaScale Technology and others
+
+   Redistribution and use in source and binary forms, with or without
+   modification, are permitted provided that the conditions of the BSD
+   3-Clause License (./BSD-3-Clause.txt) are met. SPDX expression for
+   the project as a whole: EPL-2.0 OR BSD-3-Clause.

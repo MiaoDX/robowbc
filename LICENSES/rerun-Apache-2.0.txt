@@ -1,0 +1,20 @@
+Component: rerun (rerun-io/rerun) — Rust SDK + viewer
+Upstream:  https://github.com/rerun-io/rerun
+SPDX-License-Identifier: Apache-2.0 OR MIT
+Used by:   robowbc-vis — live and recorded telemetry visualization (#133).
+
+rerun is dual licensed under "Apache-2.0 OR MIT". This file documents the
+Apache-2.0 branch of that dual license. The full canonical Apache-2.0
+text is in ./Apache-2.0.txt in this directory. The MIT branch is
+documented in rerun-MIT.txt.
+
+Copyright notice from upstream:
+
+   Copyright Rerun Technologies AB and contributors
+
+   Licensed under either of
+     * Apache License, Version 2.0
+       (./Apache-2.0.txt or http://www.apache.org/licenses/LICENSE-2.0)
+     * MIT license
+       (./MIT.txt or http://opensource.org/licenses/MIT)
+   at your option.

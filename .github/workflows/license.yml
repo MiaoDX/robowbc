@@ -1,0 +1,82 @@
+name: license
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-deny:
+    name: cargo deny check licenses + advisories + bans
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo deny check
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses bans advisories sources
+          arguments: --all-features --workspace
+
+  licenses-dir-coverage:
+    name: LICENSES/ directory coverage
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify minimum LICENSES/ directory layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=(
+            "LICENSES/README.md"
+            "LICENSES/Apache-2.0.txt"
+            "LICENSES/MIT.txt"
+            "LICENSES/BSD-3-Clause.txt"
+            "LICENSES/EPL-2.0.txt"
+            "LICENSES/cyclors-Apache-2.0.txt"
+            "LICENSES/cyclonedds-EPL-2.0.txt"
+            "LICENSES/cyclonedds-BSD-3-Clause.txt"
+            "LICENSES/ort-Apache-2.0.txt"
+            "LICENSES/ort-MIT.txt"
+            "LICENSES/crossterm-MIT.txt"
+            "LICENSES/rerun-Apache-2.0.txt"
+            "LICENSES/rerun-MIT.txt"
+            "LICENSES/unitree_sdk2-BSD-3-Clause.txt"
+            "LICENSES/nvidia-open-model-license.txt"
+          )
+          missing=()
+          for f in "${required[@]}"; do
+            if [[ ! -f "$f" ]]; then
+              missing+=("$f")
+            fi
+          done
+          if (( ${#missing[@]} )); then
+            printf 'Missing required LICENSES/ entries:\n'
+            printf '  %s\n' "${missing[@]}"
+            exit 1
+          fi
+          if [[ ! -f "LICENSE" ]]; then
+            echo "Missing root LICENSE file" >&2
+            exit 1
+          fi
+          if ! grep -q "MIT License" LICENSE; then
+            echo "Root LICENSE is not MIT — license posture mismatch" >&2
+            exit 1
+          fi
+          if [[ ! -f "docs/third-party-notices.md" ]]; then
+            echo "Missing docs/third-party-notices.md" >&2
+            exit 1
+          fi
+          echo "LICENSES/ layout OK"

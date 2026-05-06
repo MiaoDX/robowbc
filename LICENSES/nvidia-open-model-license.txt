@@ -1,0 +1,36 @@
+Component: NVIDIA Open Model License Agreement
+Applies to: GEAR-SONIC pretrained weights (model_encoder.onnx,
+            model_decoder.onnx, planner_sonic.onnx) — fetched at runtime
+            from HuggingFace, NEVER baked into this repository.
+Upstream:   https://developer.download.nvidia.com/licenses/nvidia-open-model-license-agreement-june-2024.pdf
+            (also published at the model's HuggingFace card under "License")
+
+robowbc itself does NOT bundle, redistribute, or modify these weights.
+Bundled weights remain governed by the NVIDIA Open Model License at all
+times; users fetch them on first run via scripts/download_*.sh and
+accept the license out of band.
+
+The NVIDIA Open Model License is a custom NVIDIA license — it is not
+SPDX-listed and its terms differ in material ways from the permissive
+software licenses elsewhere in this directory. Notable points (NOT a
+substitute for reading the actual license at the URL above):
+
+  * Royalty-free, worldwide, non-exclusive license to use, reproduce,
+    modify, and distribute the Model and Derivative Models.
+  * Distribution must include the license text and a notice that the
+    work is governed by the NVIDIA Open Model License.
+  * Derivative Models must be made available under the same terms.
+  * Restricted use: cannot be used to violate applicable laws, infringe
+    the rights of any third party, or circumvent safety evaluations.
+  * NVIDIA reserves the right to terminate the license for material
+    breach.
+  * No warranty; NVIDIA disclaims all liability.
+
+Anyone redistributing a robowbc + GEAR-SONIC bundle (e.g. a Docker
+image with weights pre-fetched) MUST include the verbatim NVIDIA Open
+Model License text alongside the weights. The robowbc Docker image
+(see issue #131) deliberately does NOT include weights for exactly this
+reason — the license isolation is structural.
+
+For the full, authoritative license text, retrieve the PDF from the URL
+above. This file is a pointer, not a substitute.

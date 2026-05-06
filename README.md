@@ -273,4 +273,10 @@ PyTorch policies. First-party embedded examples live at:
 
 ## License
 
-MIT
+robowbc itself is **MIT-licensed** — see [`LICENSE`](LICENSE).
+Third-party dependencies and runtime-fetched policy weights retain
+their original licenses; the per-component breakdown lives in
+[`LICENSES/`](LICENSES/) and the user-facing summary in
+[`docs/third-party-notices.md`](docs/third-party-notices.md).
+[`CONTRIBUTING.md`](CONTRIBUTING.md) documents the rule for adding a
+new dependency.
