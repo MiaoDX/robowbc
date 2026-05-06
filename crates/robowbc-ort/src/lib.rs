@@ -36,7 +36,7 @@ pub use hover::{HoverConfig, HoverPolicy};
 
 use ort::ep::ArbitrarilyConfigurableExecutionProvider;
 use ort::session::builder::GraphOptimizationLevel;
-use ort::session::Session;
+use ort::session::{IoBinding, Session};
 use ort::value::Tensor;
 use robowbc_core::{
     BasePose, JointPositionTargets, Observation, PolicyCapabilities, Result as CoreResult,
@@ -489,6 +489,59 @@ impl OrtBackend {
             .run(session_inputs)
             .map_err(|e| OrtError::InferenceFailed {
                 reason: e.to_string(),
+            })?;
+
+        Self::extract_typed_outputs(&self.output_names, &outputs)
+    }
+
+    /// Creates a fresh [`IoBinding`] for this session.
+    ///
+    /// `IoBinding` lets callers pre-bind input and output buffers once and
+    /// reuse them across many `run_with_io_binding` calls, avoiding a
+    /// session-input rebuild on each tick. The biggest win is on CUDA EP
+    /// where outputs can be bound to `CUDA_PINNED` host memory (matching
+    /// GR00T's `cudaMallocHost` pattern); on CPU EP the wrapper is still
+    /// useful for unchanging-input scenarios (e.g. a fixed conditioning
+    /// embedding) by skipping per-call tensor construction for that input.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrtError::InferenceFailed`] if ONNX Runtime fails to create
+    /// the binding.
+    pub fn create_io_binding(&self) -> Result<IoBinding, OrtError> {
+        self.session
+            .create_binding()
+            .map_err(|e| OrtError::InferenceFailed {
+                reason: format!("create_binding failed: {e}"),
+            })
+    }
+
+    /// Runs inference using a caller-managed [`IoBinding`].
+    ///
+    /// The caller is responsible for binding inputs (and optionally outputs)
+    /// on `binding` before each call. Inputs that change across runs should
+    /// be re-bound via `binding.bind_input(...)`; inputs that are stable
+    /// across runs (e.g. a one-shot prompt encoding) need only be bound
+    /// once. Outputs left unbound will be allocated by ONNX Runtime and
+    /// returned as part of the result.
+    ///
+    /// Output extraction matches [`run_typed`](Self::run_typed): one
+    /// [`OrtTensorOutput`] per declared model output, in declaration order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OrtError::InferenceFailed`] if ONNX Runtime cannot execute
+    /// the bound graph, or [`OrtError::OutputExtraction`] /
+    /// [`OrtError::UnsupportedTensorType`] if an output cannot be decoded.
+    pub fn run_with_io_binding(
+        &mut self,
+        binding: &IoBinding,
+    ) -> Result<Vec<OrtTensorOutput>, OrtError> {
+        let outputs = self
+            .session
+            .run_binding(binding)
+            .map_err(|e| OrtError::InferenceFailed {
+                reason: format!("run_binding failed: {e}"),
             })?;
 
         Self::extract_typed_outputs(&self.output_names, &outputs)
@@ -3196,6 +3249,73 @@ mod tests {
         let debug_str = format!("{backend:?}");
         assert!(debug_str.contains("input"));
         assert!(debug_str.contains("output"));
+    }
+
+    #[test]
+    fn io_binding_round_trips_identity_model() {
+        if !has_test_model() {
+            eprintln!(
+                "skipping: test model not found at {:?}",
+                identity_model_path()
+            );
+            return;
+        }
+
+        let mut backend = OrtBackend::from_file(identity_model_path()).expect("model should load");
+        let mut binding = backend
+            .create_io_binding()
+            .expect("io binding should be created");
+
+        let data: [f32; 4] = [0.1, -0.2, 0.3, -0.4];
+        let tensor =
+            Tensor::<f32>::from_array(([1_usize, 4], data.to_vec().into_boxed_slice())).unwrap();
+        binding
+            .bind_input("input", &tensor)
+            .expect("input bind should succeed");
+
+        let outputs = backend
+            .run_with_io_binding(&binding)
+            .expect("inference should succeed");
+
+        assert_eq!(outputs.len(), 1);
+        assert_eq!(outputs[0].name, "output");
+        assert_eq!(outputs[0].shape, vec![1, 4]);
+        let extracted = outputs[0].as_f32().expect("identity emits f32");
+        for (got, want) in extracted.iter().zip(data.iter()) {
+            assert!((got - want).abs() < 1e-6, "got {got}, want {want}");
+        }
+    }
+
+    #[test]
+    fn io_binding_supports_input_rebind_across_runs() {
+        if !has_test_model() {
+            eprintln!(
+                "skipping: test model not found at {:?}",
+                identity_model_path()
+            );
+            return;
+        }
+
+        let mut backend = OrtBackend::from_file(identity_model_path()).expect("model should load");
+        let mut binding = backend
+            .create_io_binding()
+            .expect("io binding should be created");
+
+        for tick in 0_i16..4 {
+            let f = f32::from(tick);
+            let data = [f, f + 1.0, f + 2.0, f + 3.0];
+            let tensor =
+                Tensor::<f32>::from_array(([1_usize, 4], data.to_vec().into_boxed_slice()))
+                    .unwrap();
+            binding
+                .bind_input("input", &tensor)
+                .expect("input rebind should succeed");
+            let outputs = backend
+                .run_with_io_binding(&binding)
+                .expect("inference should succeed");
+            let got = outputs[0].as_f32().expect("identity emits f32");
+            assert_eq!(got, &data[..], "tick {tick} round-trip mismatch");
+        }
     }
 
     #[test]
