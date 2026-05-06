@@ -1,0 +1,28 @@
+# Default keyboard teleop overlay for RoboWBC.
+#
+# This file is an OVERLAY: any commented-out entry falls back to the built-in
+# default. The defaults below match the rl_sar / GR00T conventions, kept as a
+# reference. Uncomment and edit any line to rebind that action.
+#
+# Recognized key specs:
+#   - single printable characters: "w", "]", "/", ...
+#   - "space" (case-insensitive)
+#   - "esc" / "escape"
+#   - "enter" / "return"
+#   - "tab"
+#   - "backspace"
+#
+# To use a non-default file, pass it to the runtime (FSM #126 wires the path
+# through the CLI config).
+
+# velocity_forward  = "w"
+# velocity_backward = "s"
+# velocity_left     = "a"
+# velocity_right    = "d"
+# yaw_left          = "q"
+# yaw_right         = "e"
+# zero_command      = "space"
+# emergency_stop    = "o"
+# engage            = "]"
+# reset             = "r"
+# quit              = "esc"
