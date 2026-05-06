@@ -1,0 +1,27 @@
+[package]
+name = "robowbc-transport"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Pluggable wire-level DDS transport for the Unitree CycloneDDS bridge"
+# CycloneDDS interop is provided via the optional `cyclors` backend (Apache-2.0); see LICENSES/.
+
+[features]
+default = []
+# Enable the cyclors-backed `CyclorsTransport`. Requires cmake + a C compiler at build time
+# and vendors the CycloneDDS C source through the cyclors crate.
+cyclors-backend = ["dep:cyclors"]
+
+[dependencies]
+unitree-hg-idl = { path = "../unitree-hg-idl" }
+thiserror = "2"
+# cyclors brings in a vendored CycloneDDS C build (cmake + cc), so it's
+# optional: workspace builds without it by default. The `cyclors-backend`
+# feature wires in `CyclorsTransport`.
+cyclors = { version = "0.3", optional = true }
+
+[dev-dependencies]
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
