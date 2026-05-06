@@ -1,0 +1,27 @@
+Component: Eclipse CycloneDDS
+Upstream:  https://github.com/eclipse-cyclonedds/cyclonedds
+SPDX-License-Identifier: EPL-2.0 OR BSD-3-Clause
+Used by:   robowbc-transport (vendored via cyclors) — DDS wire protocol
+           used to talk to unitree_mujoco and the real Unitree G1.
+
+CycloneDDS is dual licensed under the Eclipse Public License v2.0 OR
+the BSD 3-Clause License. The full canonical EPL-2.0 text is in
+./EPL-2.0.txt in this directory. The full canonical BSD-3-Clause text
+covering the alternative is in cyclonedds-BSD-3-Clause.txt and the
+shared text in ./BSD-3-Clause.txt in this directory.
+
+Copyright notice from upstream:
+
+   Copyright (c) 2006 to 2022 ZettaScale Technology and others
+
+   This program and the accompanying materials are made available under
+   the terms of the Eclipse Public License v. 2.0 which is available at
+   http://www.eclipse.org/legal/epl-2.0, or the Eclipse Distribution
+   License v. 1.0 which is available at
+   http://www.eclipse.org/org/documents/edl-v10.php.
+
+   SPDX-License-Identifier: EPL-2.0 OR BSD-3-Clause
+
+Note: robowbc downstream consumers may select either branch of the dual
+license. The default choice for redistribution is documented in
+docs/third-party-notices.md.

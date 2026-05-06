@@ -1,0 +1,72 @@
+# cargo-deny configuration for robowbc.
+#
+# Enforced by `.github/workflows/license.yml`. Locally, install cargo-deny
+# (`cargo install cargo-deny`) and run:
+#
+#     cargo deny check licenses bans advisories sources --all-features --workspace
+#
+# Adding a new dependency? Read LICENSES/README.md "Adding a new dependency"
+# first. License changes have legal implications — coordinate with a human
+# reviewer if unsure.
+
+[graph]
+# Match the workspace's MSRV / target needs. Empty means "all targets".
+all-features = true
+
+[output]
+feature-depth = 1
+
+[advisories]
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "warn"
+ignore = []
+
+[licenses]
+# robowbc itself is MIT. The allowlist below covers permissive licenses we
+# accept without further review and weak-copyleft licenses we accept with
+# attribution. Strong copyleft (GPL / AGPL) is deliberately absent — adding
+# such a dependency requires an explicit human decision and a license-policy
+# change.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "MPL-2.0",
+    "EPL-2.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "BSL-1.0",
+    "OpenSSL",
+]
+confidence-threshold = 0.8
+exceptions = []
+
+# Some crates publish license expressions that cargo-deny cannot resolve
+# (no `license` field, only a LICENSE file in tree). Add per-crate clarifications
+# here when they come up — keep this list short and document the upstream URL.
+[[licenses.clarify]]
+name = "ring"
+expression = "ISC AND MIT AND OpenSSL"
+license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
+
+[bans]
+multiple-versions = "allow"
+wildcards = "warn"
+highlight = "all"
+allow = []
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

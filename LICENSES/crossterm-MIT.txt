@@ -1,0 +1,18 @@
+Component: crossterm
+Upstream:  https://github.com/crossterm-rs/crossterm
+SPDX-License-Identifier: MIT
+Used by:   robowbc-teleop — keyboard input for the v1 keyboard teleop source.
+
+crossterm is licensed under the MIT License. The full canonical MIT text
+is in ./MIT.txt in this directory.
+
+Copyright notice from upstream:
+
+   MIT License
+
+   Copyright (c) 2019 Timon Post
+
+   Permission is hereby granted, free of charge, to any person obtaining
+   a copy of this software and associated documentation files (the
+   "Software"), to deal in the Software without restriction, subject to
+   the conditions stated in ./MIT.txt.

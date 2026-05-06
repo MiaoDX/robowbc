@@ -1,0 +1,28 @@
+Component: cyclors
+Upstream:  https://github.com/ZettaScaleLabs/cyclors
+SPDX-License-Identifier: Apache-2.0
+Used by:   robowbc-transport (cargo feature `cyclors-backend`) — primary
+           CycloneDDS Rust binding for the wire-level transport layer.
+
+cyclors is licensed under the Apache License, Version 2.0. The full
+canonical license text is in ./Apache-2.0.txt in this directory.
+
+Copyright notice from upstream (https://github.com/ZettaScaleLabs/cyclors):
+
+   Copyright (c) 2022 ZettaScale Technology
+
+   Licensed under the Apache License, Version 2.0 (the "License"); you
+   may not use this file except in compliance with the License. You may
+   obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+   implied. See the License for the specific language governing
+   permissions and limitations under the License.
+
+Note: cyclors vendors CycloneDDS source. CycloneDDS itself is dual
+licensed (EPL-2.0 OR BSD-3-Clause) — see cyclonedds-EPL-2.0.txt and
+cyclonedds-BSD-3-Clause.txt in this directory for those terms.
