@@ -18,6 +18,7 @@ vis = ["dep:robowbc-vis", "robowbc-vis/rerun"]
 [dependencies]
 anyhow = "1"
 robowbc-comm = { path = "../robowbc-comm" }
+robowbc-config = { path = "../robowbc-config" }
 robowbc-core = { path = "../robowbc-core" }
 robowbc-ort = { path = "../robowbc-ort" }
 robowbc-registry = { path = "../robowbc-registry" }

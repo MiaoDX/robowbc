@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/robowbc-core",
+    "crates/robowbc-config",
     "crates/robowbc-ort",
     "crates/robowbc-registry",
     "crates/robowbc-comm",

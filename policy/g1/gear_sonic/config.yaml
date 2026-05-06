@@ -1,0 +1,21 @@
+# Per-policy parameters for GEAR-SONIC on the Unitree G1.
+#
+# These observation/action scales mirror the upstream `policy_parameters.hpp`
+# defaults. Joint mapping is the identity permutation: GEAR-SONIC's training
+# order matches the physical (wire) order documented in `../base.yaml`, so
+# `joint_mapping` is omitted.
+
+name: gear_sonic
+control_frequency_hz: 50
+
+observation:
+  history_length: 5
+  ang_vel_scale: 0.25
+  lin_vel_scale: 2.0
+  gravity_scale: 1.0
+  dof_pos_scale: 1.0
+  dof_vel_scale: 0.05
+
+action:
+  scale: 0.25
+  clip: 100.0

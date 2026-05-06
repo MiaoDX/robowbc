@@ -9485,6 +9485,7 @@ dependencies = [
  "anyhow",
  "ctrlc",
  "robowbc-comm",
+ "robowbc-config",
  "robowbc-core",
  "robowbc-ort",
  "robowbc-registry",
@@ -9506,6 +9507,15 @@ dependencies = [
  "tokio",
  "toml",
  "zenoh",
+]
+
+[[package]]
+name = "robowbc-config"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_yaml",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

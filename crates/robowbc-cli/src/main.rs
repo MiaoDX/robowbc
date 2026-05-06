@@ -836,9 +836,22 @@ struct ReplayTrace {
     frames: Vec<ReplayFrame>,
 }
 
+#[derive(Debug)]
 enum CliCommand {
-    Run { config_path: PathBuf },
-    Init { output_path: PathBuf },
+    Run {
+        config_path: PathBuf,
+    },
+    Init {
+        output_path: PathBuf,
+    },
+    /// `robowbc policy --robot <name> --config <policy_name>`
+    ///
+    /// Resolves a `policy/<robot>/<policy>/` folder under the configured
+    /// roots, loads `base.yaml` + `config.yaml`, and prints a summary.
+    Policy {
+        robot: String,
+        policy: String,
+    },
 }
 
 fn parse_args(args: &[String]) -> Result<CliCommand, String> {
@@ -860,8 +873,30 @@ fn parse_args(args: &[String]) -> Result<CliCommand, String> {
         });
     }
 
+    if args.len() == 6 && args[1] == "policy" {
+        // Accept --robot and --config in either order.
+        let mut robot: Option<&str> = None;
+        let mut policy: Option<&str> = None;
+        let mut idx = 2;
+        while idx + 1 < args.len() {
+            match args[idx].as_str() {
+                "--robot" => robot = Some(&args[idx + 1]),
+                "--config" | "--policy" => policy = Some(&args[idx + 1]),
+                other => return Err(format!("unknown flag for `policy`: {other}")),
+            }
+            idx += 2;
+        }
+        return match (robot, policy) {
+            (Some(r), Some(p)) => Ok(CliCommand::Policy {
+                robot: r.to_owned(),
+                policy: p.to_owned(),
+            }),
+            _ => Err("usage: robowbc policy --robot <name> --config <policy_name>".to_owned()),
+        };
+    }
+
     Err(
-        "usage: robowbc run --config <path/to/config.toml>\n       robowbc init [--output <path/to/template.toml>]"
+        "usage: robowbc run --config <path/to/config.toml>\n       robowbc init [--output <path/to/template.toml>]\n       robowbc policy --robot <name> --config <policy_name>"
             .to_owned(),
     )
 }
@@ -1691,6 +1726,31 @@ fn print_cli_error(err: &anyhow::Error) {
     }
 }
 
+fn run_policy_command(robot: &str, policy: &str) -> anyhow::Result<()> {
+    let resolver = robowbc_config::PolicyResolver::new();
+    let runtime = resolver.load(robot, policy).with_context(|| {
+        format!("resolving policy folder for robot '{robot}' policy '{policy}'")
+    })?;
+
+    println!("robot:           {}", runtime.robot.name);
+    println!("policy:          {}", runtime.policy.name);
+    println!("control_freq_hz: {}", runtime.policy.control_frequency_hz);
+    println!("joint_count:     {}", runtime.robot.joint_count);
+    println!("policy_root:     {}", runtime.paths.root.display());
+    println!("base_yaml:       {}", runtime.paths.base_yaml.display());
+    println!("config_yaml:     {}", runtime.paths.config_yaml.display());
+    println!(
+        "safety_limits:   {} ({})",
+        runtime.paths.safety_limits_toml.display(),
+        if runtime.paths.safety_limits_toml.is_file() {
+            "present"
+        } else {
+            "absent"
+        },
+    );
+    Ok(())
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
@@ -1705,6 +1765,7 @@ fn main() {
     let result = match command {
         CliCommand::Init { output_path } => run_init_command(&output_path),
         CliCommand::Run { config_path } => run_with_config(&config_path),
+        CliCommand::Policy { robot, policy } => run_policy_command(&robot, &policy),
     };
 
     if let Err(err) = result {
@@ -1777,7 +1838,9 @@ mod tests {
             CliCommand::Run { config_path } => {
                 assert_eq!(config_path, PathBuf::from("configs/sonic_g1.toml"));
             }
-            CliCommand::Init { .. } => panic!("expected run command"),
+            CliCommand::Init { .. } | CliCommand::Policy { .. } => {
+                panic!("expected run command");
+            }
         }
     }
 
@@ -1789,8 +1852,64 @@ mod tests {
             CliCommand::Init { output_path } => {
                 assert_eq!(output_path, PathBuf::from("robowbc.template.toml"));
             }
-            CliCommand::Run { .. } => panic!("expected init command"),
+            CliCommand::Run { .. } | CliCommand::Policy { .. } => {
+                panic!("expected init command");
+            }
         }
+    }
+
+    #[test]
+    fn args_parse_policy_command() {
+        let args = vec![
+            "robowbc".to_owned(),
+            "policy".to_owned(),
+            "--robot".to_owned(),
+            "g1".to_owned(),
+            "--config".to_owned(),
+            "gear_sonic".to_owned(),
+        ];
+        let parsed = parse_args(&args).expect("policy should parse");
+        match parsed {
+            CliCommand::Policy { robot, policy } => {
+                assert_eq!(robot, "g1");
+                assert_eq!(policy, "gear_sonic");
+            }
+            other => panic!("expected policy command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn args_parse_policy_command_accepts_flag_order() {
+        let args = vec![
+            "robowbc".to_owned(),
+            "policy".to_owned(),
+            "--config".to_owned(),
+            "gear_sonic".to_owned(),
+            "--robot".to_owned(),
+            "g1".to_owned(),
+        ];
+        let parsed = parse_args(&args).expect("policy should parse");
+        match parsed {
+            CliCommand::Policy { robot, policy } => {
+                assert_eq!(robot, "g1");
+                assert_eq!(policy, "gear_sonic");
+            }
+            other => panic!("expected policy command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn args_parse_policy_command_rejects_missing_flag() {
+        let args = vec![
+            "robowbc".to_owned(),
+            "policy".to_owned(),
+            "--robot".to_owned(),
+            "g1".to_owned(),
+            "--robot".to_owned(),
+            "g1".to_owned(),
+        ];
+        // Missing --config / --policy → must reject.
+        assert!(parse_args(&args).is_err());
     }
 
     #[test]
