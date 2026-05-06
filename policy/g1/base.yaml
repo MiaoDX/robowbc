@@ -1,0 +1,144 @@
+# Robot-level invariants for the Unitree G1 (29-DOF) used by the rl_sar-style
+# policy folder convention.
+#
+# Joint ordering matches the `unitree_hg` IDL motor index assignment that
+# arrives over DDS and is identical to `configs/robots/unitree_g1_gear_sonic.toml`
+# (the existing TOML config). Defaults below mirror the GEAR-SONIC
+# `policy_parameters.hpp` values; downstream policies (decoupled_wbc,
+# wbc_agile, bfm_zero) override per-policy gains in their own `config.yaml`.
+
+name: g1
+joint_count: 29
+
+joint_names:
+  - left_hip_pitch_joint
+  - left_hip_roll_joint
+  - left_hip_yaw_joint
+  - left_knee_joint
+  - left_ankle_pitch_joint
+  - left_ankle_roll_joint
+  - right_hip_pitch_joint
+  - right_hip_roll_joint
+  - right_hip_yaw_joint
+  - right_knee_joint
+  - right_ankle_pitch_joint
+  - right_ankle_roll_joint
+  - waist_yaw_joint
+  - waist_roll_joint
+  - waist_pitch_joint
+  - left_shoulder_pitch_joint
+  - left_shoulder_roll_joint
+  - left_shoulder_yaw_joint
+  - left_elbow_joint
+  - left_wrist_roll_joint
+  - left_wrist_pitch_joint
+  - left_wrist_yaw_joint
+  - right_shoulder_pitch_joint
+  - right_shoulder_roll_joint
+  - right_shoulder_yaw_joint
+  - right_elbow_joint
+  - right_wrist_roll_joint
+  - right_wrist_pitch_joint
+  - right_wrist_yaw_joint
+
+# Standing default pose (radians, physical order).
+default_dof_pos:
+  - -0.312     # left_hip_pitch
+  -  0.0       # left_hip_roll
+  -  0.0       # left_hip_yaw
+  -  0.669     # left_knee
+  - -0.363     # left_ankle_pitch
+  -  0.0       # left_ankle_roll
+  - -0.312     # right_hip_pitch
+  -  0.0       # right_hip_roll
+  -  0.0       # right_hip_yaw
+  -  0.669     # right_knee
+  - -0.363     # right_ankle_pitch
+  -  0.0       # right_ankle_roll
+  -  0.0       # waist_yaw
+  -  0.0       # waist_roll
+  -  0.0       # waist_pitch
+  -  0.2       # left_shoulder_pitch
+  -  0.2       # left_shoulder_roll
+  -  0.0       # left_shoulder_yaw
+  -  0.6       # left_elbow
+  -  0.0       # left_wrist_roll
+  -  0.0       # left_wrist_pitch
+  -  0.0       # left_wrist_yaw
+  -  0.2       # right_shoulder_pitch
+  - -0.2       # right_shoulder_roll
+  -  0.0       # right_shoulder_yaw
+  -  0.6       # right_elbow
+  -  0.0       # right_wrist_roll
+  -  0.0       # right_wrist_pitch
+  -  0.0       # right_wrist_yaw
+
+# Default per-joint q_target proportional gains (rl_sar-style baseline).
+kp:
+  - 99.098428  # left_hip_pitch
+  - 99.098428  # left_hip_roll
+  - 40.179238  # left_hip_yaw
+  - 99.098428  # left_knee
+  - 28.501246  # left_ankle_pitch
+  - 28.501246  # left_ankle_roll
+  - 99.098428  # right_hip_pitch
+  - 99.098428  # right_hip_roll
+  - 40.179238  # right_hip_yaw
+  - 99.098428  # right_knee
+  - 28.501246  # right_ankle_pitch
+  - 28.501246  # right_ankle_roll
+  - 40.179238  # waist_yaw
+  - 28.501246  # waist_roll
+  - 28.501246  # waist_pitch
+  - 14.250623  # left_shoulder_pitch
+  - 14.250623  # left_shoulder_roll
+  - 14.250623  # left_shoulder_yaw
+  - 14.250623  # left_elbow
+  - 14.250623  # left_wrist_roll
+  - 16.778327  # left_wrist_pitch
+  - 16.778327  # left_wrist_yaw
+  - 14.250623  # right_shoulder_pitch
+  - 14.250623  # right_shoulder_roll
+  - 14.250623  # right_shoulder_yaw
+  - 14.250623  # right_elbow
+  - 14.250623  # right_wrist_roll
+  - 16.778327  # right_wrist_pitch
+  - 16.778327  # right_wrist_yaw
+
+# Default per-joint q_target derivative gains.
+kd:
+  - 6.308802   # left_hip_pitch
+  - 6.308802   # left_hip_roll
+  - 2.557890   # left_hip_yaw
+  - 6.308802   # left_knee
+  - 1.814446   # left_ankle_pitch
+  - 1.814446   # left_ankle_roll
+  - 6.308802   # right_hip_pitch
+  - 6.308802   # right_hip_roll
+  - 2.557890   # right_hip_yaw
+  - 6.308802   # right_knee
+  - 1.814446   # right_ankle_pitch
+  - 1.814446   # right_ankle_roll
+  - 2.557890   # waist_yaw
+  - 1.814446   # waist_roll
+  - 1.814446   # waist_pitch
+  - 0.907223   # left_shoulder_pitch
+  - 0.907223   # left_shoulder_roll
+  - 0.907223   # left_shoulder_yaw
+  - 0.907223   # left_elbow
+  - 0.907223   # left_wrist_roll
+  - 1.068142   # left_wrist_pitch
+  - 1.068142   # left_wrist_yaw
+  - 0.907223   # right_shoulder_pitch
+  - 0.907223   # right_shoulder_roll
+  - 0.907223   # right_shoulder_yaw
+  - 0.907223   # right_elbow
+  - 0.907223   # right_wrist_roll
+  - 1.068142   # right_wrist_pitch
+  - 1.068142   # right_wrist_yaw
+
+# IMU mounting orientation. Default flat-on-pelvis (zero offsets).
+imu:
+  roll: 0.0
+  pitch: 0.0
+  yaw: 0.0
