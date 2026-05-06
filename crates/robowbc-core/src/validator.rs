@@ -292,7 +292,7 @@ mod tests {
     #[test]
     fn per_joint_override_applied_correctly() {
         let config = SafetyLimitsConfig::from_toml_str(
-            r#"
+            r"
 [defaults]
 max_dq_per_step = 0.01
 divergence_threshold = 0.5
@@ -300,7 +300,7 @@ divergence_threshold = 0.5
 [[joint_overrides]]
 index = 1
 divergence_threshold = 0.1
-"#,
+",
         )
         .expect("valid TOML");
 
