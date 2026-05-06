@@ -6,6 +6,7 @@ members = [
     "crates/robowbc-registry",
     "crates/robowbc-comm",
     "crates/robowbc-sim",
+    "crates/robowbc-teleop",
     "crates/robowbc-vis",
     "crates/robowbc-cli",
     "crates/robowbc-pyo3",

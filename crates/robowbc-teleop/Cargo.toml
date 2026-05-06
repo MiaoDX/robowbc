@@ -1,0 +1,20 @@
+[package]
+name = "robowbc-teleop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Teleoperation input sources for RoboWBC (keyboard and beyond)"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+robowbc-core = { path = "../robowbc-core" }
+crossterm = "0.29"
+serde = { workspace = true }
+toml = { workspace = true }
+thiserror = "2"
+
+[lints]
+workspace = true
