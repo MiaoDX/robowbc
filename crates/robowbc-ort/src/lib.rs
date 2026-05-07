@@ -3252,6 +3252,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires real ONNX Runtime dylib + IoBinding-capable EP; run with `cargo test -- --ignored`"]
     fn io_binding_round_trips_identity_model() {
         if !has_test_model() {
             eprintln!(
@@ -3287,6 +3288,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires real ONNX Runtime dylib + IoBinding-capable EP; run with `cargo test -- --ignored`"]
     fn io_binding_supports_input_rebind_across_runs() {
         if !has_test_model() {
             eprintln!(
