@@ -16,6 +16,13 @@
 //! and run with `docker compose run --rm robowbc <bin>` so the container
 //! attaches to your terminal. Without `tty: true`, [`enable_raw_mode`] errors
 //! with `Inappropriate ioctl for device`.
+//!
+//! A copy-pasteable reference compose file lives at
+//! `docker/keyboard-teleop.compose.yaml` at the workspace root:
+//!
+//! ```text
+//! docker compose -f docker/keyboard-teleop.compose.yaml run --rm teleop
+//! ```
 
 use robowbc_teleop::{KeyboardTeleop, TeleopEvent, TeleopSource};
 use std::time::{Duration, Instant};
