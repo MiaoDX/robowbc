@@ -1,0 +1,39 @@
+version: "3.9"
+
+# Reference compose snippet for the keyboard teleop demo (issue #127).
+#
+# Caveat #10 of docs/research/2026-05-merged-tech-report.md: crossterm's
+# `enable_raw_mode` requires a real TTY. Without `tty: true` + `stdin_open: true`
+# the demo errors out with `Inappropriate ioctl for device` and the FSM never
+# sees any keystrokes.
+#
+# Usage:
+#   docker compose -f docker/keyboard-teleop.compose.yaml run --rm teleop
+#
+# The image is intentionally a generic Rust toolchain rather than a published
+# robowbc image — this file is the seed compose snippet operators can copy
+# into their own deployment compose files. The runtime CLI (#126) will ship a
+# proper image once the FSM is in place.
+
+services:
+  teleop:
+    image: rust:1.82-slim
+    working_dir: /workspace
+    volumes:
+      - ..:/workspace:ro
+      - cargo-cache:/usr/local/cargo/registry
+    # Both flags are required. `tty: true` allocates a pty so crossterm sees
+    # a TTY; `stdin_open: true` keeps stdin attached so keystrokes flow
+    # through to the container.
+    tty: true
+    stdin_open: true
+    command:
+      - cargo
+      - run
+      - -p
+      - robowbc-teleop
+      - --example
+      - keyboard_demo
+
+volumes:
+  cargo-cache:
