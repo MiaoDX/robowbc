@@ -9688,6 +9688,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "robowbc-runtime"
+version = "0.1.0"
+dependencies = [
+ "robowbc-core",
+ "robowbc-teleop",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "robowbc-sim"
 version = "0.1.0"
 dependencies = [
