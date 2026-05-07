@@ -1,0 +1,18 @@
+[package]
+name = "robowbc-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Runtime FSM orchestrating transport, policy, validator, and teleop for RoboWBC"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+robowbc-core = { path = "../robowbc-core" }
+robowbc-teleop = { path = "../robowbc-teleop" }
+thiserror = "2"
+
+[lints]
+workspace = true
