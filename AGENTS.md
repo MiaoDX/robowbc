@@ -17,6 +17,22 @@ If instructions conflict, priority is:
 
 ---
 
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs are tracked in GitHub Issues for `MiaoDX/robowbc` using GitHub MCP tools. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the default five-label triage vocabulary. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context repo; read the root project docs as the canonical domain context. See `docs/agents/domain.md`.
+
+---
+
 ## 1) Environment preflight (mandatory before tests)
 
 Do not run tests immediately on a fresh environment.
