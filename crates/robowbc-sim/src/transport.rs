@@ -51,6 +51,7 @@ struct LoadedModel {
 struct ElasticBand {
     body_id: usize,
     config: MujocoElasticBandConfig,
+    enabled: bool,
 }
 
 /// Serializable snapshot of the current live `MuJoCo` state.
@@ -172,10 +173,12 @@ impl MujocoTransport {
             3,
             "accelerometer",
         )?;
-        let elastic_band = resolve_elastic_band(&model, config.elastic_band.clone())?;
+        let elastic_band_body_id = resolve_elastic_band_body(&model, config.elastic_band.as_ref())?;
 
         let mut data = MjData::new(Box::new(model));
         initialize_state(&mut data, &robot_config, &joint_mappings);
+        let elastic_band =
+            build_elastic_band(&data, elastic_band_body_id, config.elastic_band.clone());
         let prev_positions = robot_config.default_pose.clone();
         #[cfg(feature = "mujoco-viewer")]
         let viewer = if config.viewer {
@@ -299,6 +302,19 @@ impl MujocoTransport {
         initialize_state(&mut self.data, &self.robot_config, &self.joint_mappings);
         self.prev_positions
             .clone_from(&self.robot_config.default_pose);
+    }
+
+    /// Returns whether the optional elastic support band is currently enabled.
+    #[must_use]
+    pub fn elastic_band_enabled(&self) -> Option<bool> {
+        self.elastic_band.as_ref().map(|band| band.enabled)
+    }
+
+    /// Toggles the optional elastic support band and returns its new state.
+    pub fn toggle_elastic_band_enabled(&mut self) -> Option<bool> {
+        let band = self.elastic_band.as_mut()?;
+        band.enabled = !band.enabled;
+        Some(band.enabled)
     }
 
     /// Saves the current full `MuJoCo` physics state.
@@ -516,6 +532,11 @@ impl MujocoTransport {
             return;
         };
 
+        self.data.xfrc_applied_mut().fill([0.0; 6]);
+        if !band.enabled {
+            return;
+        }
+
         let body_id = band.body_id;
         let config = &band.config;
         let position = self.data.xpos()[body_id];
@@ -535,7 +556,6 @@ impl MujocoTransport {
             -config.kp_ang * rotation_vector[2] - config.kd_ang * angular_velocity[2],
         ];
 
-        self.data.xfrc_applied_mut().fill([0.0; 6]);
         self.data.xfrc_applied_mut()[body_id] = force;
     }
 }
@@ -644,6 +664,10 @@ impl RobotTransport for MujocoTransport {
             })?;
 
         Ok(())
+    }
+
+    fn toggle_elastic_band(&mut self) -> Result<Option<bool>, CommError> {
+        Ok(self.toggle_elastic_band_enabled())
     }
 }
 
@@ -1019,10 +1043,10 @@ fn floating_base_mapping(model: &MjModel) -> Option<FloatingBaseMapping> {
         })
 }
 
-fn resolve_elastic_band(
+fn resolve_elastic_band_body(
     model: &MjModel,
-    config: Option<MujocoElasticBandConfig>,
-) -> Result<Option<ElasticBand>, SimError> {
+    config: Option<&MujocoElasticBandConfig>,
+) -> Result<Option<usize>, SimError> {
     let Some(config) = config else {
         return Ok(None);
     };
@@ -1035,7 +1059,25 @@ fn resolve_elastic_band(
             ),
         })?;
 
-    Ok(Some(ElasticBand { body_id, config }))
+    Ok(Some(body_id))
+}
+
+fn build_elastic_band(
+    data: &MjData<Box<MjModel>>,
+    body_id: Option<usize>,
+    config: Option<MujocoElasticBandConfig>,
+) -> Option<ElasticBand> {
+    let body_id = body_id?;
+    let mut config = config?;
+    if config.anchor_from_initial_pose {
+        config.anchor = data.xpos()[body_id];
+    }
+    let enabled = config.enabled;
+    Some(ElasticBand {
+        body_id,
+        config,
+        enabled,
+    })
 }
 
 fn joint_mapping(model: &MjModel, joint_name: &str) -> Result<JointMapping, SimError> {
@@ -1448,7 +1490,10 @@ mod tests {
                 model_path: gear_sonic_scene_path(),
                 timestep: 0.002,
                 substeps: 10,
-                elastic_band: Some(MujocoElasticBandConfig::default()),
+                elastic_band: Some(MujocoElasticBandConfig {
+                    anchor_from_initial_pose: true,
+                    ..MujocoElasticBandConfig::default()
+                }),
                 ..MujocoConfig::default()
             },
             robot.clone(),
@@ -1472,6 +1517,36 @@ mod tests {
             "GEAR-Sonic demo model fell during startup hold: base z={}",
             position[2]
         );
+        assert!(
+            position[2] < 0.86,
+            "GEAR-Sonic demo model was lifted off its standing pose: base z={}",
+            position[2]
+        );
+    }
+
+    #[test]
+    fn elastic_band_can_be_toggled_at_runtime() {
+        let robot = load_robot_config("configs/robots/unitree_g1_gear_sonic.toml");
+        let mut transport = MujocoTransport::new(
+            MujocoConfig {
+                model_path: gear_sonic_scene_path(),
+                timestep: 0.002,
+                substeps: 1,
+                elastic_band: Some(MujocoElasticBandConfig {
+                    anchor_from_initial_pose: true,
+                    ..MujocoElasticBandConfig::default()
+                }),
+                ..MujocoConfig::default()
+            },
+            robot,
+        )
+        .expect("GEAR-Sonic demo transport should initialize");
+
+        assert_eq!(transport.elastic_band_enabled(), Some(true));
+        assert_eq!(transport.toggle_elastic_band_enabled(), Some(false));
+        assert_eq!(transport.elastic_band_enabled(), Some(false));
+        assert_eq!(transport.toggle_elastic_band_enabled(), Some(true));
+        assert_eq!(transport.elastic_band_enabled(), Some(true));
     }
 
     #[test]

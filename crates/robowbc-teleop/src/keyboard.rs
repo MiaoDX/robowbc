@@ -174,6 +174,7 @@ impl KeyboardTeleop {
                 self.wz = 0.0;
                 TeleopEvent::Reset
             }
+            TeleopAction::ToggleElasticBand => TeleopEvent::ToggleElasticBand,
             TeleopAction::Quit => TeleopEvent::Quit,
         }
     }
@@ -338,6 +339,16 @@ mod tests {
         let event = teleop.handle_key(key_press(KeyCode::Char('r'))).unwrap();
         assert_eq!(event, TeleopEvent::Reset);
         assert_eq!(teleop.velocity(), (0.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn nine_toggles_elastic_band_without_clearing_accumulator() {
+        let mut teleop = KeyboardTeleop::new();
+        teleop.handle_key(key_press(KeyCode::Char('w')));
+        let pre = teleop.velocity();
+        let event = teleop.handle_key(key_press(KeyCode::Char('9'))).unwrap();
+        assert_eq!(event, TeleopEvent::ToggleElasticBand);
+        assert_eq!(teleop.velocity(), pre);
     }
 
     #[test]

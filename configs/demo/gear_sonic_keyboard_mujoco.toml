@@ -13,7 +13,8 @@
 #     --features robowbc-cli/sim-auto-download,robowbc-cli/sim-viewer \
 #     -- run --config configs/demo/gear_sonic_keyboard_mujoco.toml --teleop keyboard
 #
-# Keep your terminal focused for keyboard input and watch the MuJoCo window.
+# Keep your terminal focused for keyboard input and watch the MuJoCo window:
+# `]` engages policy, WASD/QE drive, `9` toggles the support band.
 
 [policy]
 name = "gear_sonic"
@@ -47,10 +48,12 @@ gain_profile = "simulation_pd"
 viewer = true
 
 [sim.elastic_band]
-# Matches GR00T's MuJoCo teleop support band. It keeps the humanoid recoverable
-# while a new user starts the keyboard demo and then drives with WASD/QE.
+# GR00T-style MuJoCo teleop support band. We anchor it to the initialized
+# pelvis pose so it catches a fall without lifting the feet off the ground.
+enabled = true
 body_name = "pelvis"
 anchor = [0.0, 0.0, 1.0]
+anchor_from_initial_pose = true
 length = 0.0
 kp_pos = 10000.0
 kd_pos = 1000.0
@@ -66,8 +69,9 @@ backend = "ort"
 device = "cpu"
 
 [runtime]
-# Keyboard teleop requires an initial velocity command. `--teleop keyboard`
-# then owns the command stream: WASD updates vx/vy, QE updates yaw, Space
-# zeroes velocity, O sends a zero-velocity e-stop tick, and Esc quits.
+# Keyboard teleop starts in an init pose. Press `]` to engage the policy, then
+# use WASD/QE to drive. Press `9` to toggle the elastic support band.
 velocity = [0.0, 0.0, 0.0]
+init_pose_secs = 3.0
+require_engage = true
 max_ticks = 200

@@ -342,7 +342,10 @@ impl<P: WbcPolicy> Fsm<P> {
                         self.transition_to_running(TransitionReason::EngageRequested, obs);
                     }
                 }
-                TeleopEvent::EmergencyStop | TeleopEvent::Velocity { .. } | TeleopEvent::Quit => {}
+                TeleopEvent::EmergencyStop
+                | TeleopEvent::Velocity { .. }
+                | TeleopEvent::ToggleElasticBand
+                | TeleopEvent::Quit => {}
             }
         }
 

@@ -73,6 +73,10 @@ pub enum TeleopEvent {
     Engage,
     /// Return to the configured `default_dof_pos` (re-enter `RL_Init`).
     Reset,
+    /// Toggle the simulator elastic support band.
+    ///
+    /// Matches GR00T's `9` key convention.
+    ToggleElasticBand,
     /// Quit the runtime gracefully.
     Quit,
 }
@@ -89,7 +93,11 @@ impl TeleopEvent {
                 linear: [vx, vy, 0.0],
                 angular: [0.0, 0.0, wz],
             })),
-            Self::EmergencyStop | Self::Engage | Self::Reset | Self::Quit => None,
+            Self::EmergencyStop
+            | Self::Engage
+            | Self::Reset
+            | Self::ToggleElasticBand
+            | Self::Quit => None,
         }
     }
 }
@@ -160,6 +168,7 @@ mod tests {
         assert!(TeleopEvent::EmergencyStop.to_wbc_command().is_none());
         assert!(TeleopEvent::Engage.to_wbc_command().is_none());
         assert!(TeleopEvent::Reset.to_wbc_command().is_none());
+        assert!(TeleopEvent::ToggleElasticBand.to_wbc_command().is_none());
         assert!(TeleopEvent::Quit.to_wbc_command().is_none());
     }
 }

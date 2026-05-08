@@ -100,6 +100,9 @@ const fn default_gain_profile() -> MujocoGainProfile {
 /// `RoboWBC` applies the same Cartesian spring-damper to `body_name`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MujocoElasticBandConfig {
+    /// Whether the support band starts enabled.
+    #[serde(default = "default_elastic_enabled")]
+    pub enabled: bool,
     /// Body that receives the support force. GR00T uses `pelvis` when waist is
     /// enabled and `torso_link` otherwise.
     #[serde(default = "default_elastic_body_name")]
@@ -107,6 +110,12 @@ pub struct MujocoElasticBandConfig {
     /// World-space spring anchor point in meters.
     #[serde(default = "default_elastic_anchor")]
     pub anchor: [f64; 3],
+    /// Replace `anchor` with the selected body's initialized world position.
+    ///
+    /// This preserves the standing height for local demos while still letting
+    /// the band catch the humanoid if it starts to fall.
+    #[serde(default)]
+    pub anchor_from_initial_pose: bool,
     /// Additional vertical rest length added to the spring error.
     #[serde(default)]
     pub length: f64,
@@ -127,8 +136,10 @@ pub struct MujocoElasticBandConfig {
 impl Default for MujocoElasticBandConfig {
     fn default() -> Self {
         Self {
+            enabled: default_elastic_enabled(),
             body_name: default_elastic_body_name(),
             anchor: default_elastic_anchor(),
+            anchor_from_initial_pose: false,
             length: 0.0,
             kp_pos: default_elastic_kp_pos(),
             kd_pos: default_elastic_kd_pos(),
@@ -136,6 +147,10 @@ impl Default for MujocoElasticBandConfig {
             kd_ang: default_elastic_kd_ang(),
         }
     }
+}
+
+const fn default_elastic_enabled() -> bool {
+    true
 }
 
 fn default_elastic_body_name() -> String {
