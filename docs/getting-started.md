@@ -57,8 +57,9 @@ For the "I just want to see the policy move a robot" path, use:
 make demo-keyboard
 ```
 
-This downloads the public GEAR-Sonic checkpoints if needed, builds the CLI with
-MuJoCo auto-download plus the live viewer feature, and runs:
+This downloads the public GEAR-Sonic checkpoints and the MuJoCo runtime if
+needed, builds the CLI with MuJoCo auto-download plus the live viewer feature,
+and runs:
 
 ```bash
 robowbc run --config configs/demo/gear_sonic_keyboard_mujoco.toml --teleop keyboard
@@ -67,8 +68,10 @@ robowbc run --config configs/demo/gear_sonic_keyboard_mujoco.toml --teleop keybo
 Keep the terminal focused for keyboard input and watch the MuJoCo window:
 `WASD` changes linear velocity, `QE` changes yaw, `Space` zeroes velocity,
 `O` sends a zero-velocity emergency-stop tick, and `Esc` quits. The demo config
-uses `[sim].viewer = true`, so it requires a Linux desktop/OpenGL session. For
-headless machines, use `make site` or `make showcase-verify` instead.
+uses the GR00T scene wrapper and virtual support band so the robot stays
+recoverable while you drive it. It also uses `[sim].viewer = true`, so it
+requires a Linux desktop/OpenGL session. For headless machines, use `make site`
+or `make showcase-verify` instead.
 
 ## Generate a local policy showcase
 

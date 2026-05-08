@@ -115,6 +115,22 @@ If a check cannot run because of environment limits, report the exact blocker.
 4. **Small, verifiable steps**: build → check → test → lint.
 5. **No dependency drift in fixes**: avoid ad-hoc single-crate installs unless doing triage.
 
+### 4.1 Keyboard demo guardrail
+
+`make demo-keyboard` is the "git clone and see it work" path. Keep
+`configs/demo/gear_sonic_keyboard_mujoco.toml` on the GR00T scene wrapper and
+the explicit `[sim.elastic_band]` support band unless replacing them with an
+equally verified upstream-style startup path. For MuJoCo demo changes, run the
+targeted stability test:
+
+```bash
+MUJOCO_DOWNLOAD_DIR="$(pwd)/.cache/mujoco" \
+MUJOCO_DYNAMIC_LINK_DIR="$(pwd)/.cache/mujoco/mujoco-3.6.0/lib" \
+LD_LIBRARY_PATH="$(pwd)/.cache/mujoco/mujoco-3.6.0/lib:${LD_LIBRARY_PATH:-}" \
+cargo test -p robowbc-sim --features mujoco-auto-download \
+  gear_sonic_demo_model_holds_default_pose_for_startup_window
+```
+
 ---
 
 ## 5) Quick command checklist (copy/paste)

@@ -2063,6 +2063,33 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "sim")]
+    #[test]
+    fn keyboard_demo_config_keeps_scene_wrapper_and_elastic_band() {
+        let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+        let raw = std::fs::read_to_string(
+            workspace_root.join("configs/demo/gear_sonic_keyboard_mujoco.toml"),
+        )
+        .expect("keyboard demo config should be readable");
+        let parsed: AppConfig = toml::from_str(&raw).expect("keyboard demo config should parse");
+        let sim = parsed.sim.expect("keyboard demo must configure MuJoCo");
+        assert_eq!(
+            sim.model_path,
+            PathBuf::from("assets/robots/groot_g1_gear_sonic/scene_29dof.xml")
+        );
+
+        let band = sim
+            .elastic_band
+            .expect("keyboard demo must keep the upstream-style support band");
+        assert_eq!(band.body_name, "pelvis");
+        assert_eq!(band.anchor, [0.0, 0.0, 1.0]);
+        assert_eq!(band.length, 0.0);
+        assert_eq!(band.kp_pos, 10_000.0);
+        assert_eq!(band.kd_pos, 1_000.0);
+        assert_eq!(band.kp_ang, 1_000.0);
+        assert_eq!(band.kd_ang, 10.0);
+    }
+
     #[test]
     fn teleop_velocity_event_updates_live_command() {
         let mut velocity = [0.0, 0.0, 0.0];

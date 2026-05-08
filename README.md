@@ -140,9 +140,11 @@ cd robowbc
 make demo-keyboard
 ```
 
-The target downloads the public GEAR-Sonic ONNX files on first run, starts the
-local MuJoCo transport with a live viewer, and runs `robowbc` with keyboard
-teleop. Keep the terminal focused for input and watch the MuJoCo window:
+The target downloads the public GEAR-Sonic ONNX files and the MuJoCo runtime
+on first run, starts the local MuJoCo transport with a live viewer, and runs
+`robowbc` with keyboard teleop. The checked-in demo uses the GR00T scene
+wrapper plus its virtual support band so the robot stays recoverable while you
+drive it. Keep the terminal focused for input and watch the MuJoCo window:
 `WASD` changes linear velocity, `QE` changes yaw, `Space` zeroes velocity,
 `O` sends a zero-velocity emergency-stop tick, and `Esc` quits. The underlying
 manual command is:

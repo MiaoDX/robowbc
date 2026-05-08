@@ -75,6 +75,10 @@ pub struct MujocoConfig {
     /// for local "I just want to see it move" demos, not headless CI.
     #[serde(default)]
     pub viewer: bool,
+    /// Optional upstream-style virtual support band applied as Cartesian
+    /// force/torque to one body before every physics substep.
+    #[serde(default)]
+    pub elastic_band: Option<MujocoElasticBandConfig>,
 }
 
 fn default_timestep() -> f64 {
@@ -89,6 +93,75 @@ const fn default_gain_profile() -> MujocoGainProfile {
     MujocoGainProfile::SimulationPd
 }
 
+/// Upstream-style `MuJoCo` virtual support band.
+///
+/// GR00T's G1 `MuJoCo` simulator enables this for the teleop path to keep the
+/// humanoid recoverable while the policy and operator settle. When configured,
+/// `RoboWBC` applies the same Cartesian spring-damper to `body_name`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MujocoElasticBandConfig {
+    /// Body that receives the support force. GR00T uses `pelvis` when waist is
+    /// enabled and `torso_link` otherwise.
+    #[serde(default = "default_elastic_body_name")]
+    pub body_name: String,
+    /// World-space spring anchor point in meters.
+    #[serde(default = "default_elastic_anchor")]
+    pub anchor: [f64; 3],
+    /// Additional vertical rest length added to the spring error.
+    #[serde(default)]
+    pub length: f64,
+    /// Translational spring gain.
+    #[serde(default = "default_elastic_kp_pos")]
+    pub kp_pos: f64,
+    /// Translational damping gain.
+    #[serde(default = "default_elastic_kd_pos")]
+    pub kd_pos: f64,
+    /// Orientation spring gain.
+    #[serde(default = "default_elastic_kp_ang")]
+    pub kp_ang: f64,
+    /// Orientation damping gain.
+    #[serde(default = "default_elastic_kd_ang")]
+    pub kd_ang: f64,
+}
+
+impl Default for MujocoElasticBandConfig {
+    fn default() -> Self {
+        Self {
+            body_name: default_elastic_body_name(),
+            anchor: default_elastic_anchor(),
+            length: 0.0,
+            kp_pos: default_elastic_kp_pos(),
+            kd_pos: default_elastic_kd_pos(),
+            kp_ang: default_elastic_kp_ang(),
+            kd_ang: default_elastic_kd_ang(),
+        }
+    }
+}
+
+fn default_elastic_body_name() -> String {
+    "pelvis".to_owned()
+}
+
+const fn default_elastic_anchor() -> [f64; 3] {
+    [0.0, 0.0, 1.0]
+}
+
+const fn default_elastic_kp_pos() -> f64 {
+    10_000.0
+}
+
+const fn default_elastic_kd_pos() -> f64 {
+    1_000.0
+}
+
+const fn default_elastic_kp_ang() -> f64 {
+    1_000.0
+}
+
+const fn default_elastic_kd_ang() -> f64 {
+    10.0
+}
+
 impl Default for MujocoConfig {
     fn default() -> Self {
         Self {
@@ -97,6 +170,7 @@ impl Default for MujocoConfig {
             substeps: default_substeps(),
             gain_profile: default_gain_profile(),
             viewer: false,
+            elastic_band: None,
         }
     }
 }
@@ -203,6 +277,7 @@ mod tests {
             substeps: 20,
             gain_profile: MujocoGainProfile::DefaultPd,
             viewer: true,
+            elastic_band: Some(MujocoElasticBandConfig::default()),
         };
         let toml_str = toml::to_string(&cfg).expect("serialization should succeed");
         let loaded: MujocoConfig =
