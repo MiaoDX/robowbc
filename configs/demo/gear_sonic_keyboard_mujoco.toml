@@ -40,11 +40,22 @@ num_threads = 1
 config_path = "configs/robots/unitree_g1_gear_sonic.toml"
 
 [sim]
-model_path = "assets/robots/groot_g1_gear_sonic/g1_29dof_old.xml"
+model_path = "assets/robots/groot_g1_gear_sonic/scene_29dof.xml"
 timestep = 0.002
 substeps = 10
 gain_profile = "simulation_pd"
 viewer = true
+
+[sim.elastic_band]
+# Matches GR00T's MuJoCo teleop support band. It keeps the humanoid recoverable
+# while a new user starts the keyboard demo and then drives with WASD/QE.
+body_name = "pelvis"
+anchor = [0.0, 0.0, 1.0]
+length = 0.0
+kp_pos = 10000.0
+kd_pos = 1000.0
+kp_ang = 1000.0
+kd_ang = 10.0
 
 [comm]
 frequency_hz = 50

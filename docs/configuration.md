@@ -229,6 +229,24 @@ The checked-in reference example is `examples/python/mujoco_kinematic_pose_sessi
 
 ## Optional artifact sections
 
+### `[sim.elastic_band]`
+
+The MuJoCo transport can apply an upstream-style virtual support band before
+each physics substep. This is intended for local humanoid teleop demos, matching
+GR00T's G1 simulator behavior.
+
+```toml
+[sim.elastic_band]
+body_name = "pelvis"
+anchor = [0.0, 0.0, 1.0]
+kp_pos = 10000.0
+kd_pos = 1000.0
+kp_ang = 1000.0
+kd_ang = 10.0
+```
+
+Omit the table to run without the support band.
+
 ### `[report]`
 
 The `[report]` section makes the CLI write a machine-readable JSON summary at

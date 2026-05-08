@@ -562,10 +562,10 @@ mod tests {
         assert_eq!(config.joint_names[0], "left_hip_pitch_joint");
         assert!((config.pd_gains[0].kp - 99.098).abs() < 1e-3);
         assert!((config.pd_gains[0].kd - 6.309).abs() < 1e-3);
-        assert!((config.simulation_pd_gains()[0].kp - 123.873).abs() < 1e-3);
-        assert!((config.simulation_pd_gains()[0].kd - 7.886).abs() < 1e-3);
-        assert!((config.simulation_pd_gains()[15].kp - 14.251).abs() < 1e-3);
-        assert!((config.simulation_pd_gains()[15].kd - 0.907).abs() < 1e-3);
+        assert!((config.simulation_pd_gains()[0].kp - 150.0).abs() < 1e-3);
+        assert!((config.simulation_pd_gains()[0].kd - 2.0).abs() < 1e-3);
+        assert!((config.simulation_pd_gains()[15].kp - 100.0).abs() < 1e-3);
+        assert!((config.simulation_pd_gains()[15].kd - 5.0).abs() < 1e-3);
         assert!((config.default_pose[0] - (-0.312)).abs() < 1e-3);
     }
 

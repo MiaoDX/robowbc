@@ -76,39 +76,40 @@ pd_gains = [
     { kp = 16.778327, kd = 1.068142 },  # right_wrist_yaw
 ]
 
-# MuJoCo needs a slightly stiffer lower body/waist than the official q_target
-# path to keep the showcase turn dynamics aligned. Keep the upper-body gains
-# unchanged so only the simulated plant compensation differs.
+# MuJoCo/raw-torque gains from the official GR00T G1 sim config
+# (`MOTOR_KP` / `MOTOR_KD` in g1_29dof_gear_wbc.yaml). These are intentionally
+# much stiffer than the hardware-side q_target gains above and are only used by
+# the simulation transport.
 sim_pd_gains = [
-    { kp = 123.873035, kd = 7.8860025 },  # left_hip_pitch
-    { kp = 123.873035, kd = 7.8860025 },  # left_hip_roll
-    { kp = 50.2240475, kd = 3.1973625 },  # left_hip_yaw
-    { kp = 123.873035, kd = 7.8860025 },  # left_knee
-    { kp = 35.6265575, kd = 2.2680575 },  # left_ankle_pitch
-    { kp = 35.6265575, kd = 2.2680575 },  # left_ankle_roll
-    { kp = 123.873035, kd = 7.8860025 },  # right_hip_pitch
-    { kp = 123.873035, kd = 7.8860025 },  # right_hip_roll
-    { kp = 50.2240475, kd = 3.1973625 },  # right_hip_yaw
-    { kp = 123.873035, kd = 7.8860025 },  # right_knee
-    { kp = 35.6265575, kd = 2.2680575 },  # right_ankle_pitch
-    { kp = 35.6265575, kd = 2.2680575 },  # right_ankle_roll
-    { kp = 50.2240475, kd = 3.1973625 },  # waist_yaw
-    { kp = 35.6265575, kd = 2.2680575 },  # waist_roll
-    { kp = 35.6265575, kd = 2.2680575 },  # waist_pitch
-    { kp = 14.250623, kd = 0.907223 },  # left_shoulder_pitch
-    { kp = 14.250623, kd = 0.907223 },  # left_shoulder_roll
-    { kp = 14.250623, kd = 0.907223 },  # left_shoulder_yaw
-    { kp = 14.250623, kd = 0.907223 },  # left_elbow
-    { kp = 14.250623, kd = 0.907223 },  # left_wrist_roll
-    { kp = 16.778327, kd = 1.068142 },  # left_wrist_pitch
-    { kp = 16.778327, kd = 1.068142 },  # left_wrist_yaw
-    { kp = 14.250623, kd = 0.907223 },  # right_shoulder_pitch
-    { kp = 14.250623, kd = 0.907223 },  # right_shoulder_roll
-    { kp = 14.250623, kd = 0.907223 },  # right_shoulder_yaw
-    { kp = 14.250623, kd = 0.907223 },  # right_elbow
-    { kp = 14.250623, kd = 0.907223 },  # right_wrist_roll
-    { kp = 16.778327, kd = 1.068142 },  # right_wrist_pitch
-    { kp = 16.778327, kd = 1.068142 },  # right_wrist_yaw
+    { kp = 150.0, kd = 2.0 },  # left_hip_pitch
+    { kp = 150.0, kd = 2.0 },  # left_hip_roll
+    { kp = 150.0, kd = 2.0 },  # left_hip_yaw
+    { kp = 200.0, kd = 4.0 },  # left_knee
+    { kp =  40.0, kd = 2.0 },  # left_ankle_pitch
+    { kp =  40.0, kd = 2.0 },  # left_ankle_roll
+    { kp = 150.0, kd = 2.0 },  # right_hip_pitch
+    { kp = 150.0, kd = 2.0 },  # right_hip_roll
+    { kp = 150.0, kd = 2.0 },  # right_hip_yaw
+    { kp = 200.0, kd = 4.0 },  # right_knee
+    { kp =  40.0, kd = 2.0 },  # right_ankle_pitch
+    { kp =  40.0, kd = 2.0 },  # right_ankle_roll
+    { kp = 250.0, kd = 5.0 },  # waist_yaw
+    { kp = 250.0, kd = 5.0 },  # waist_roll
+    { kp = 250.0, kd = 5.0 },  # waist_pitch
+    { kp = 100.0, kd = 5.0 },  # left_shoulder_pitch
+    { kp = 100.0, kd = 5.0 },  # left_shoulder_roll
+    { kp =  40.0, kd = 2.0 },  # left_shoulder_yaw
+    { kp =  40.0, kd = 2.0 },  # left_elbow
+    { kp =  20.0, kd = 2.0 },  # left_wrist_roll
+    { kp =  20.0, kd = 2.0 },  # left_wrist_pitch
+    { kp =  20.0, kd = 2.0 },  # left_wrist_yaw
+    { kp = 100.0, kd = 5.0 },  # right_shoulder_pitch
+    { kp = 100.0, kd = 5.0 },  # right_shoulder_roll
+    { kp =  40.0, kd = 2.0 },  # right_shoulder_yaw
+    { kp =  40.0, kd = 2.0 },  # right_elbow
+    { kp =  20.0, kd = 2.0 },  # right_wrist_roll
+    { kp =  20.0, kd = 2.0 },  # right_wrist_pitch
+    { kp =  20.0, kd = 2.0 },  # right_wrist_yaw
 ]
 
 # Joint limits from g1_29dof.xml MuJoCo model (radians).

@@ -1,6 +1,6 @@
 //! `MuJoCo`-backed [`RobotTransport`] implementation.
 
-use crate::{MujocoConfig, MujocoGainProfile, SimError};
+use crate::{MujocoConfig, MujocoElasticBandConfig, MujocoGainProfile, SimError};
 use mujoco_rs::renderer::MjRenderer;
 #[cfg(feature = "mujoco-viewer")]
 use mujoco_rs::viewer::MjViewer;
@@ -45,6 +45,12 @@ struct FloatingBaseMapping {
 struct LoadedModel {
     model: MjModel,
     model_variant: &'static str,
+}
+
+#[derive(Debug, Clone)]
+struct ElasticBand {
+    body_id: usize,
+    config: MujocoElasticBandConfig,
 }
 
 /// Serializable snapshot of the current live `MuJoCo` state.
@@ -103,6 +109,7 @@ pub struct MujocoTransport {
     floating_base: Option<FloatingBaseMapping>,
     gyro_sensor: SensorSpan,
     accel_sensor: SensorSpan,
+    elastic_band: Option<ElasticBand>,
     model_variant: &'static str,
     prev_positions: Vec<f32>,
     #[cfg(feature = "mujoco-viewer")]
@@ -165,6 +172,7 @@ impl MujocoTransport {
             3,
             "accelerometer",
         )?;
+        let elastic_band = resolve_elastic_band(&model, config.elastic_band.clone())?;
 
         let mut data = MjData::new(Box::new(model));
         initialize_state(&mut data, &robot_config, &joint_mappings);
@@ -198,6 +206,7 @@ impl MujocoTransport {
             floating_base,
             gyro_sensor,
             accel_sensor,
+            elastic_band,
             model_variant,
             prev_positions,
             #[cfg(feature = "mujoco-viewer")]
@@ -501,6 +510,34 @@ impl MujocoTransport {
         camera.lookat = [0.0, 0.0, 0.8];
         camera
     }
+
+    fn apply_elastic_band_force(&mut self) {
+        let Some(band) = &self.elastic_band else {
+            return;
+        };
+
+        let body_id = band.body_id;
+        let config = &band.config;
+        let position = self.data.xpos()[body_id];
+        let quaternion_wxyz = self.data.xquat()[body_id];
+        let velocity = self.data.cvel()[body_id];
+        let angular_velocity = [velocity[0], velocity[1], velocity[2]];
+        let linear_velocity = [velocity[3], velocity[4], velocity[5]];
+        let rotation_vector = quat_wxyz_to_rotation_vector(quaternion_wxyz);
+
+        let force = [
+            config.kp_pos * (config.anchor[0] - position[0]) - config.kd_pos * linear_velocity[0],
+            config.kp_pos * (config.anchor[1] - position[1]) - config.kd_pos * linear_velocity[1],
+            config.kp_pos * (config.anchor[2] - position[2] + config.length)
+                - config.kd_pos * linear_velocity[2],
+            -config.kp_ang * rotation_vector[0] - config.kd_ang * angular_velocity[0],
+            -config.kp_ang * rotation_vector[1] - config.kd_ang * angular_velocity[1],
+            -config.kp_ang * rotation_vector[2] - config.kd_ang * angular_velocity[2],
+        ];
+
+        self.data.xfrc_applied_mut().fill([0.0; 6]);
+        self.data.xfrc_applied_mut()[body_id] = force;
+    }
 }
 
 impl RobotTransport for MujocoTransport {
@@ -551,10 +588,7 @@ impl RobotTransport for MujocoTransport {
         };
         self.prev_positions.clone_from(&safe_targets.positions);
 
-        let pd_gains = match self.config.gain_profile {
-            MujocoGainProfile::DefaultPd => &self.robot_config.pd_gains,
-            MujocoGainProfile::SimulationPd => self.robot_config.simulation_pd_gains(),
-        };
+        let gain_profile = self.config.gain_profile;
 
         for _ in 0..self.config.substeps {
             let commanded_ctrls = {
@@ -570,7 +604,12 @@ impl RobotTransport for MujocoTransport {
                             |adr| qpos[adr],
                         );
                         let current_velocity = mapping.qvel_adr.map_or(0.0, |adr| qvel[adr]);
-                        let gains = pd_gains[joint_index];
+                        let gains = match gain_profile {
+                            MujocoGainProfile::DefaultPd => self.robot_config.pd_gains[joint_index],
+                            MujocoGainProfile::SimulationPd => {
+                                self.robot_config.simulation_pd_gains()[joint_index]
+                            }
+                        };
                         Some((
                             actuator_id,
                             compute_pd_control(
@@ -594,6 +633,7 @@ impl RobotTransport for MujocoTransport {
                 ctrl[actuator_id] = command;
             }
 
+            self.apply_elastic_band_force();
             self.data.step();
         }
 
@@ -979,6 +1019,25 @@ fn floating_base_mapping(model: &MjModel) -> Option<FloatingBaseMapping> {
         })
 }
 
+fn resolve_elastic_band(
+    model: &MjModel,
+    config: Option<MujocoElasticBandConfig>,
+) -> Result<Option<ElasticBand>, SimError> {
+    let Some(config) = config else {
+        return Ok(None);
+    };
+    let body_id = model
+        .name_to_id(MjtObj::mjOBJ_BODY, &config.body_name)
+        .ok_or_else(|| SimError::ModelLoadFailed {
+            reason: format!(
+                "sim.elastic_band.body_name {:?} does not exist in MJCF model",
+                config.body_name
+            ),
+        })?;
+
+    Ok(Some(ElasticBand { body_id, config }))
+}
+
 fn joint_mapping(model: &MjModel, joint_name: &str) -> Result<JointMapping, SimError> {
     let Some(joint_info) = model.joint(joint_name) else {
         return Ok(JointMapping::default());
@@ -1046,6 +1105,38 @@ fn gravity_from_free_joint_quaternion(quat_wxyz: [f64; 4]) -> [f32; 3] {
     } else {
         [0.0, 0.0, -1.0]
     }
+}
+
+fn quat_wxyz_to_rotation_vector(quat_wxyz: [f64; 4]) -> [f64; 3] {
+    let norm = (quat_wxyz[0] * quat_wxyz[0]
+        + quat_wxyz[1] * quat_wxyz[1]
+        + quat_wxyz[2] * quat_wxyz[2]
+        + quat_wxyz[3] * quat_wxyz[3])
+        .sqrt();
+    if norm <= f64::EPSILON {
+        return [0.0, 0.0, 0.0];
+    }
+
+    let mut w = quat_wxyz[0] / norm;
+    let mut x = quat_wxyz[1] / norm;
+    let mut y = quat_wxyz[2] / norm;
+    let mut z = quat_wxyz[3] / norm;
+    if w < 0.0 {
+        w = -w;
+        x = -x;
+        y = -y;
+        z = -z;
+    }
+
+    let w_clamped = w.clamp(-1.0, 1.0);
+    let angle = 2.0 * w_clamped.acos();
+    let axis_scale = (1.0 - w_clamped * w_clamped).sqrt();
+    if axis_scale <= 1e-9 {
+        return [2.0 * x, 2.0 * y, 2.0 * z];
+    }
+
+    let scale = angle / axis_scale;
+    [x * scale, y * scale, z * scale]
 }
 
 fn compute_pd_control(
@@ -1208,6 +1299,10 @@ mod tests {
         repo_root().join("assets/robots/unitree_g1/g1_29dof.xml")
     }
 
+    fn gear_sonic_scene_path() -> PathBuf {
+        repo_root().join("assets/robots/groot_g1_gear_sonic/scene_29dof.xml")
+    }
+
     #[test]
     fn new_applies_timestep_and_maps_full_g1_robot() {
         let robot = load_robot_config("configs/robots/unitree_g1.toml");
@@ -1346,6 +1441,40 @@ mod tests {
     }
 
     #[test]
+    fn gear_sonic_demo_model_holds_default_pose_for_startup_window() {
+        let robot = load_robot_config("configs/robots/unitree_g1_gear_sonic.toml");
+        let mut transport = MujocoTransport::new(
+            MujocoConfig {
+                model_path: gear_sonic_scene_path(),
+                timestep: 0.002,
+                substeps: 10,
+                elastic_band: Some(MujocoElasticBandConfig::default()),
+                ..MujocoConfig::default()
+            },
+            robot.clone(),
+        )
+        .expect("GEAR-Sonic demo transport should initialize");
+
+        for _ in 0..250 {
+            transport
+                .send_joint_targets(&JointPositionTargets {
+                    positions: robot.default_pose.clone(),
+                    timestamp: Instant::now(),
+                })
+                .expect("default pose command should hold the demo model");
+        }
+
+        let (position, _) = transport
+            .floating_base_pose()
+            .expect("GEAR-Sonic G1 model should expose a floating base");
+        assert!(
+            position[2] > 0.65,
+            "GEAR-Sonic demo model fell during startup hold: base z={}",
+            position[2]
+        );
+    }
+
+    #[test]
     fn send_joint_targets_computes_pd_control_from_position_error() {
         let mut robot = load_robot_config("configs/robots/unitree_g1.toml");
         robot.joint_velocity_limits = None;
@@ -1392,6 +1521,8 @@ mod tests {
                 timestep: 0.002,
                 substeps: 1,
                 gain_profile: MujocoGainProfile::DefaultPd,
+                viewer: false,
+                elastic_band: None,
             },
             robot.clone(),
         )
