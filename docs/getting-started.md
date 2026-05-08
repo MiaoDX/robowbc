@@ -66,12 +66,13 @@ robowbc run --config configs/demo/gear_sonic_keyboard_mujoco.toml --teleop keybo
 ```
 
 Keep the terminal focused for keyboard input and watch the MuJoCo window:
-`WASD` changes linear velocity, `QE` changes yaw, `Space` zeroes velocity,
-`O` sends a zero-velocity emergency-stop tick, and `Esc` quits. The demo config
-uses the GR00T scene wrapper and virtual support band so the robot stays
-recoverable while you drive it. It also uses `[sim].viewer = true`, so it
-requires a Linux desktop/OpenGL session. For headless machines, use `make site`
-or `make showcase-verify` instead.
+`]` engages the policy after the init pose settles, `WASD` changes linear
+velocity, `QE` changes yaw, `Space` zeroes velocity, `9` toggles the support
+band, `O` sends a zero-velocity emergency-stop tick, and `Esc` quits. The demo
+config uses the GR00T scene wrapper and a neutral-height virtual support band
+so the robot stays recoverable without being lifted off the ground. It also
+uses `[sim].viewer = true`, so it requires a Linux desktop/OpenGL session. For
+headless machines, use `make site` or `make showcase-verify` instead.
 
 ## Generate a local policy showcase
 

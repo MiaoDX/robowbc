@@ -148,6 +148,18 @@ pub trait RobotTransport {
     ///
     /// Returns [`CommError`] if the command cannot be sent.
     fn send_joint_targets(&mut self, targets: &JointPositionTargets) -> Result<(), CommError>;
+
+    /// Toggles an optional simulator support band.
+    ///
+    /// Real hardware and transports without this concept return `Ok(None)`.
+    /// Simulators that implement it return the new enabled state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommError`] if the transport cannot update the support band.
+    fn toggle_elastic_band(&mut self) -> Result<Option<bool>, CommError> {
+        Ok(None)
+    }
 }
 
 /// A test-friendly in-memory transport.

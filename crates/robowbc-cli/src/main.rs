@@ -295,6 +295,13 @@ struct RuntimeConfig {
     /// requires `[policy.config.reference_motion]` to select the official clip.
     #[serde(default)]
     reference_motion_tracking: bool,
+    /// Seconds spent interpolating from the observed pose to the configured
+    /// robot default pose before policy output is allowed.
+    #[serde(default)]
+    init_pose_secs: f32,
+    /// When true, hold the init pose until teleop sends `]`.
+    #[serde(default)]
+    require_engage: bool,
     #[serde(default)]
     max_ticks: Option<usize>,
 }
@@ -312,9 +319,61 @@ impl Default for RuntimeConfig {
             kinematic_pose: None,
             standing_placeholder_tracking: false,
             reference_motion_tracking: false,
+            init_pose_secs: 0.0,
+            require_engage: false,
             max_ticks: Some(200),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct RuntimeStartupConfig {
+    init_pose_secs: f32,
+    require_engage: bool,
+}
+
+impl RuntimeStartupConfig {
+    #[cfg(test)]
+    const fn disabled() -> Self {
+        Self {
+            init_pose_secs: 0.0,
+            require_engage: false,
+        }
+    }
+
+    const fn enabled(self) -> bool {
+        self.require_engage || self.init_pose_secs > 0.0
+    }
+}
+
+fn startup_config_from_runtime(runtime: &RuntimeConfig) -> RuntimeStartupConfig {
+    RuntimeStartupConfig {
+        init_pose_secs: runtime.init_pose_secs,
+        require_engage: runtime.require_engage,
+    }
+}
+
+fn smoothstep(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+fn init_pose_positions(
+    start_positions: &[f32],
+    default_pose: &[f32],
+    elapsed: Duration,
+    duration_secs: f32,
+) -> Vec<f32> {
+    if duration_secs <= 0.0 {
+        return default_pose.to_vec();
+    }
+    let alpha = (elapsed.as_secs_f32() / duration_secs).clamp(0.0, 1.0);
+    let s = smoothstep(alpha);
+    start_positions
+        .iter()
+        .zip(default_pose.iter())
+        .map(|(&start, &target)| start + (target - start) * s)
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -867,8 +926,16 @@ impl TeleopMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+enum TeleopControlRequest {
+    Engage,
+    Reset,
+    ToggleElasticBand,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 struct TeleopPollOutcome {
     velocity: [f32; 3],
+    requests: Vec<TeleopControlRequest>,
     stop_after_tick: bool,
 }
 
@@ -877,6 +944,7 @@ fn apply_teleop_events(
     events: &[TeleopEvent],
 ) -> TeleopPollOutcome {
     let mut stop_after_tick = false;
+    let mut requests = Vec::new();
     for event in events {
         match *event {
             TeleopEvent::Velocity { vx, vy, wz } => {
@@ -893,17 +961,23 @@ fn apply_teleop_events(
                 println!("teleop quit requested");
             }
             TeleopEvent::Engage => {
+                requests.push(TeleopControlRequest::Engage);
                 println!("teleop engage requested");
             }
             TeleopEvent::Reset => {
+                requests.push(TeleopControlRequest::Reset);
                 *current_velocity = [0.0, 0.0, 0.0];
                 println!("teleop reset requested: velocity zeroed");
+            }
+            TeleopEvent::ToggleElasticBand => {
+                requests.push(TeleopControlRequest::ToggleElasticBand);
             }
         }
     }
 
     TeleopPollOutcome {
         velocity: *current_velocity,
+        requests,
         stop_after_tick,
     }
 }
@@ -919,7 +993,9 @@ impl LiveTeleop {
         source
             .enable()
             .map_err(|err| format!("failed to enable keyboard teleop: {err}"))?;
-        println!("keyboard teleop active: WASD move, QE yaw, Space zeroes velocity, O e-stops, Esc quits");
+        println!(
+            "keyboard teleop active: ] engages policy, WASD move, QE yaw, Space zeroes velocity, 9 toggles support band, O e-stops, Esc quits"
+        );
         Ok(Self {
             source,
             current_velocity: initial_velocity,
@@ -1054,6 +1130,9 @@ fn validate_config(config: &AppConfig) -> Result<ParsedRuntimeCommand, String> {
     }
     if config.inference.device.trim().is_empty() {
         return Err("inference.device must not be empty".to_owned());
+    }
+    if !config.runtime.init_pose_secs.is_finite() || config.runtime.init_pose_secs < 0.0 {
+        return Err("runtime.init_pose_secs must be a finite value >= 0".to_owned());
     }
     if let Some(schedule) = &config.runtime.velocity_schedule {
         schedule.validate_for_frequency(config.comm.frequency_hz)?;
@@ -1437,8 +1516,10 @@ fn world_to_body_planar_delta(
 fn run_control_loop_inner<T: RobotTransport + ReportTelemetryProvider>(
     transport: &mut T,
     policy: &dyn WbcPolicy,
+    robot: &RobotConfig,
     comm: &CommConfig,
     runtime_command: &ParsedRuntimeCommand,
+    startup_config: RuntimeStartupConfig,
     live_teleop: &mut Option<LiveTeleop>,
     max_ticks: Option<usize>,
     running: &AtomicBool,
@@ -1452,6 +1533,12 @@ fn run_control_loop_inner<T: RobotTransport + ReportTelemetryProvider>(
     let mut ticks: usize = 0;
     let mut dropped_frames: usize = 0;
     let mut inference_total = Duration::ZERO;
+    let mut policy_engaged = !startup_config.enabled();
+    let mut init_pose_start: Option<(Instant, Vec<f32>)> = None;
+
+    if startup_config.require_engage {
+        println!("startup init pose active: press ] to engage policy after the robot settles");
+    }
 
     while running.load(Ordering::SeqCst) {
         if let Some(max_ticks) = max_ticks {
@@ -1465,6 +1552,40 @@ fn run_control_loop_inner<T: RobotTransport + ReportTelemetryProvider>(
         let mut stop_after_tick = false;
         let (command, tick_command_data) = if let Some(teleop) = live_teleop.as_mut() {
             let outcome = teleop.poll()?;
+            for request in &outcome.requests {
+                match request {
+                    TeleopControlRequest::Reset => {
+                        policy.reset();
+                        policy_engaged = false;
+                        init_pose_start = None;
+                        println!("startup init pose reset: press ] to re-engage policy");
+                    }
+                    TeleopControlRequest::Engage => {
+                        policy.reset();
+                        policy_engaged = true;
+                        init_pose_start = None;
+                        println!("policy engaged");
+                    }
+                    TeleopControlRequest::ToggleElasticBand => {
+                        match transport.toggle_elastic_band() {
+                            Ok(Some(enabled)) => {
+                                println!(
+                                    "elastic support band {}",
+                                    if enabled { "enabled" } else { "disabled" }
+                                );
+                            }
+                            Ok(None) => {
+                                println!("elastic support band unavailable for this transport");
+                            }
+                            Err(err) => {
+                                return Err(format!(
+                                    "failed to toggle elastic support band: {err}"
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
             stop_after_tick = outcome.stop_after_tick;
             (
                 velocity_command(outcome.velocity),
@@ -1483,7 +1604,29 @@ fn run_control_loop_inner<T: RobotTransport + ReportTelemetryProvider>(
 
         run_control_tick(transport, command.clone(), |obs| {
             let infer_start = Instant::now();
-            let output = policy.predict(&obs);
+            let output = if policy_engaged {
+                policy.predict(&obs)
+            } else {
+                let (start_time, start_positions) = init_pose_start
+                    .get_or_insert_with(|| (obs.timestamp, obs.joint_positions.clone()));
+                let elapsed = obs.timestamp.saturating_duration_since(*start_time);
+                if !startup_config.require_engage
+                    && elapsed.as_secs_f32() >= startup_config.init_pose_secs
+                {
+                    policy_engaged = true;
+                    policy.predict(&obs)
+                } else {
+                    Ok(JointPositionTargets {
+                        positions: init_pose_positions(
+                            start_positions,
+                            &robot.default_pose,
+                            elapsed,
+                            startup_config.init_pose_secs,
+                        ),
+                        timestamp: obs.timestamp,
+                    })
+                }
+            };
             let elapsed = infer_start.elapsed();
             inference_total += elapsed;
 
@@ -1569,6 +1712,7 @@ fn run_control_loop(
     robot: &RobotConfig,
     comm: &CommConfig,
     runtime_command: &ParsedRuntimeCommand,
+    startup_config: RuntimeStartupConfig,
     live_teleop: &mut Option<LiveTeleop>,
     requested_max_ticks: Option<usize>,
     report_config: Option<&ReportConfig>,
@@ -1616,8 +1760,10 @@ fn run_control_loop(
             let (ticks, dropped, inf) = run_control_loop_inner(
                 &mut transport,
                 policy,
+                robot,
                 comm,
                 runtime_command,
+                startup_config,
                 live_teleop,
                 requested_max_ticks,
                 running,
@@ -1649,8 +1795,10 @@ fn run_control_loop(
             let (ticks, dropped, inf) = run_control_loop_inner(
                 &mut transport,
                 policy,
+                robot,
                 comm,
                 runtime_command,
+                startup_config,
                 live_teleop,
                 requested_max_ticks,
                 running,
@@ -1681,8 +1829,10 @@ fn run_control_loop(
             let (ticks, dropped, inf) = run_control_loop_inner(
                 &mut transport,
                 policy,
+                robot,
                 comm,
                 runtime_command,
+                startup_config,
                 live_teleop,
                 requested_max_ticks,
                 running,
@@ -1712,8 +1862,10 @@ fn run_control_loop(
             let (ticks, dropped, inf) = run_control_loop_inner(
                 &mut transport,
                 policy,
+                robot,
                 comm,
                 runtime_command,
+                startup_config,
                 live_teleop,
                 requested_max_ticks,
                 running,
@@ -1735,8 +1887,10 @@ fn run_control_loop(
             let (ticks, dropped, inf) = run_control_loop_inner(
                 &mut transport,
                 policy,
+                robot,
                 comm,
                 runtime_command,
+                startup_config,
                 live_teleop,
                 requested_max_ticks,
                 running,
@@ -1865,6 +2019,11 @@ fn run_with_config(config_path: &Path, teleop_mode: Option<TeleopMode>) -> anyho
         .with_context(|| format!("while building policy {policy_name:?}"))?;
     let mut live_teleop = validate_teleop_mode(teleop_mode, &runtime_command, &*policy)
         .map_err(|err| anyhow!("invalid teleop setup: {err}"))?;
+    if app.runtime.require_engage && live_teleop.is_none() {
+        return Err(anyhow!(
+            "runtime.require_engage = true requires a live teleop mode such as `--teleop keyboard`"
+        ));
+    }
 
     let running = Arc::new(AtomicBool::new(true));
     install_ctrlc_handler(&running)?;
@@ -1881,6 +2040,7 @@ fn run_with_config(config_path: &Path, teleop_mode: Option<TeleopMode>) -> anyho
         &robot,
         &app.comm,
         &runtime_command,
+        startup_config_from_runtime(&app.runtime),
         &mut live_teleop,
         requested_max_ticks,
         report_config.as_ref(),
@@ -1965,6 +2125,54 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    struct CountingPolicy {
+        calls: AtomicUsize,
+        robot: Vec<RobotConfig>,
+        output_positions: Vec<f32>,
+    }
+
+    impl CountingPolicy {
+        fn new(robot: RobotConfig, output_positions: Vec<f32>) -> Self {
+            Self {
+                calls: AtomicUsize::new(0),
+                robot: vec![robot],
+                output_positions,
+            }
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    impl WbcPolicy for CountingPolicy {
+        fn predict(
+            &self,
+            obs: &robowbc_core::Observation,
+        ) -> robowbc_core::Result<JointPositionTargets> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(JointPositionTargets {
+                positions: self.output_positions.clone(),
+                timestamp: obs.timestamp,
+            })
+        }
+
+        fn capabilities(&self) -> robowbc_core::PolicyCapabilities {
+            robowbc_core::PolicyCapabilities::new([WbcCommandKind::Velocity])
+        }
+
+        fn control_frequency_hz(&self) -> u32 {
+            50
+        }
+
+        fn supported_robots(&self) -> &[RobotConfig] {
+            &self.robot
+        }
+    }
+
+    impl ReportTelemetryProvider for robowbc_comm::InMemoryTransport {}
 
     fn replay_frame(
         tick: usize,
@@ -2010,6 +2218,61 @@ mod tests {
             .join("tests")
             .join("fixtures")
             .join(path)
+    }
+
+    fn startup_test_robot() -> RobotConfig {
+        RobotConfig {
+            name: "startup_test".to_owned(),
+            joint_count: 2,
+            joint_names: vec!["left_joint".to_owned(), "right_joint".to_owned()],
+            pd_gains: vec![
+                robowbc_core::PdGains { kp: 1.0, kd: 0.1 },
+                robowbc_core::PdGains { kp: 1.0, kd: 0.1 },
+            ],
+            sim_pd_gains: None,
+            sim_joint_limits: None,
+            joint_limits: vec![
+                robowbc_core::JointLimit {
+                    min: -2.0,
+                    max: 2.0,
+                },
+                robowbc_core::JointLimit {
+                    min: -2.0,
+                    max: 2.0,
+                },
+            ],
+            default_pose: vec![1.0, 1.0],
+            model_path: None,
+            joint_velocity_limits: None,
+        }
+    }
+
+    fn push_startup_sample(
+        transport: &mut robowbc_comm::InMemoryTransport,
+        timestamp: Instant,
+        positions: Vec<f32>,
+    ) {
+        transport.push_joint_state(JointState {
+            velocities: vec![0.0; positions.len()],
+            positions,
+            timestamp,
+        });
+        transport.push_imu(ImuSample {
+            gravity_vector: [0.0, 0.0, -1.0],
+            angular_velocity: [0.0; 3],
+            base_pose: None,
+            timestamp,
+        });
+    }
+
+    fn assert_slice_approx_eq(actual: &[f32], expected: &[f32]) {
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected.iter()) {
+            assert!(
+                (actual - expected).abs() <= 1e-5,
+                "expected {expected}, got {actual}"
+            );
+        }
     }
 
     #[test]
@@ -2081,13 +2344,17 @@ mod tests {
         let band = sim
             .elastic_band
             .expect("keyboard demo must keep the upstream-style support band");
+        assert!(band.enabled);
         assert_eq!(band.body_name, "pelvis");
         assert_eq!(band.anchor, [0.0, 0.0, 1.0]);
+        assert!(band.anchor_from_initial_pose);
         assert_eq!(band.length, 0.0);
         assert_eq!(band.kp_pos, 10_000.0);
         assert_eq!(band.kd_pos, 1_000.0);
         assert_eq!(band.kp_ang, 1_000.0);
         assert_eq!(band.kd_ang, 10.0);
+        assert_eq!(parsed.runtime.init_pose_secs, 3.0);
+        assert!(parsed.runtime.require_engage);
     }
 
     #[test]
@@ -2104,6 +2371,7 @@ mod tests {
 
         assert_velocity_close(outcome.velocity, [0.3, -0.1, 0.2]);
         assert!(!outcome.stop_after_tick);
+        assert!(outcome.requests.is_empty());
     }
 
     #[test]
@@ -2113,6 +2381,139 @@ mod tests {
 
         assert_velocity_close(outcome.velocity, [0.0, 0.0, 0.0]);
         assert!(outcome.stop_after_tick);
+    }
+
+    #[test]
+    fn teleop_engage_reset_and_band_toggle_are_reported() {
+        let mut velocity = [0.3, 0.1, -0.2];
+        let outcome = apply_teleop_events(
+            &mut velocity,
+            &[
+                TeleopEvent::Engage,
+                TeleopEvent::ToggleElasticBand,
+                TeleopEvent::Reset,
+            ],
+        );
+
+        assert_velocity_close(outcome.velocity, [0.0, 0.0, 0.0]);
+        assert_eq!(
+            outcome.requests,
+            vec![
+                TeleopControlRequest::Engage,
+                TeleopControlRequest::ToggleElasticBand,
+                TeleopControlRequest::Reset,
+            ]
+        );
+        assert!(!outcome.stop_after_tick);
+    }
+
+    #[test]
+    fn startup_init_pose_interpolates_before_policy_runs() {
+        let robot = startup_test_robot();
+        let policy = CountingPolicy::new(robot.clone(), vec![9.0, 9.0]);
+        let mut transport = robowbc_comm::InMemoryTransport::new();
+        let start = Instant::now();
+        for tick in 0..4 {
+            push_startup_sample(
+                &mut transport,
+                start + Duration::from_millis(tick * 100),
+                vec![0.0, 2.0],
+            );
+        }
+
+        let comm = CommConfig {
+            frequency_hz: 1_000,
+            ..CommConfig::default()
+        };
+        let runtime_command = ParsedRuntimeCommand::Velocity([0.0, 0.0, 0.0]);
+        let mut live_teleop = None;
+        let mut replay_frames = Vec::new();
+        let mut report_frames = Vec::new();
+        #[cfg(feature = "vis")]
+        let mut visualizer = None;
+
+        let metrics = run_control_loop_inner(
+            &mut transport,
+            &policy,
+            &robot,
+            &comm,
+            &runtime_command,
+            RuntimeStartupConfig {
+                init_pose_secs: 0.2,
+                require_engage: false,
+            },
+            &mut live_teleop,
+            Some(4),
+            &AtomicBool::new(true),
+            &mut replay_frames,
+            &mut report_frames,
+            None,
+            #[cfg(feature = "vis")]
+            &mut visualizer,
+        )
+        .expect("startup loop should run");
+
+        assert_eq!(metrics.0, 4);
+        assert_eq!(policy.calls(), 2);
+        let sent = transport.sent_commands();
+        assert_slice_approx_eq(&sent[0].positions, &[0.0, 2.0]);
+        assert_slice_approx_eq(&sent[1].positions, &[0.5, 1.5]);
+        assert_slice_approx_eq(&sent[2].positions, &[9.0, 9.0]);
+        assert_slice_approx_eq(&sent[3].positions, &[9.0, 9.0]);
+    }
+
+    #[test]
+    fn startup_require_engage_holds_init_pose_without_policy_output() {
+        let robot = startup_test_robot();
+        let policy = CountingPolicy::new(robot.clone(), vec![9.0, 9.0]);
+        let mut transport = robowbc_comm::InMemoryTransport::new();
+        let start = Instant::now();
+        for tick in 0..3 {
+            push_startup_sample(
+                &mut transport,
+                start + Duration::from_millis(tick * 100),
+                vec![0.0, 2.0],
+            );
+        }
+
+        let comm = CommConfig {
+            frequency_hz: 1_000,
+            ..CommConfig::default()
+        };
+        let runtime_command = ParsedRuntimeCommand::Velocity([0.0, 0.0, 0.0]);
+        let mut live_teleop = None;
+        let mut replay_frames = Vec::new();
+        let mut report_frames = Vec::new();
+        #[cfg(feature = "vis")]
+        let mut visualizer = None;
+
+        let metrics = run_control_loop_inner(
+            &mut transport,
+            &policy,
+            &robot,
+            &comm,
+            &runtime_command,
+            RuntimeStartupConfig {
+                init_pose_secs: 0.2,
+                require_engage: true,
+            },
+            &mut live_teleop,
+            Some(3),
+            &AtomicBool::new(true),
+            &mut replay_frames,
+            &mut report_frames,
+            None,
+            #[cfg(feature = "vis")]
+            &mut visualizer,
+        )
+        .expect("startup loop should run");
+
+        assert_eq!(metrics.0, 3);
+        assert_eq!(policy.calls(), 0);
+        let sent = transport.sent_commands();
+        assert_slice_approx_eq(&sent[0].positions, &[0.0, 2.0]);
+        assert_slice_approx_eq(&sent[1].positions, &[0.5, 1.5]);
+        assert_slice_approx_eq(&sent[2].positions, &[1.0, 1.0]);
     }
 
     fn assert_velocity_close(actual: [f32; 3], expected: [f32; 3]) {
@@ -2584,6 +2985,8 @@ motion_tokens = []
                 kinematic_pose: None,
                 reference_motion_tracking: false,
                 standing_placeholder_tracking: false,
+                init_pose_secs: 0.0,
+                require_engage: false,
                 max_ticks: Some(1),
             },
             report: None,
@@ -3017,6 +3420,8 @@ standing_placeholder_tracking = true
             kinematic_pose: None,
             reference_motion_tracking: false,
             standing_placeholder_tracking: false,
+            init_pose_secs: 0.0,
+            require_engage: false,
             max_ticks: Some(1),
         };
         let runtime_command = ParsedRuntimeCommand::from_app_config(&AppConfig {
@@ -3046,6 +3451,7 @@ standing_placeholder_tracking = true
             &robot,
             &comm,
             &runtime_command,
+            RuntimeStartupConfig::disabled(),
             &mut live_teleop,
             runtime.max_ticks,
             None,

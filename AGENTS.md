@@ -119,9 +119,12 @@ If a check cannot run because of environment limits, report the exact blocker.
 
 `make demo-keyboard` is the "git clone and see it work" path. Keep
 `configs/demo/gear_sonic_keyboard_mujoco.toml` on the GR00T scene wrapper and
-the explicit `[sim.elastic_band]` support band unless replacing them with an
-equally verified upstream-style startup path. For MuJoCo demo changes, run the
-targeted stability test:
+the explicit `[sim.elastic_band]` support band anchored from the initialized
+pose unless replacing them with an equally verified upstream-style startup
+path. Keep `[runtime].require_engage = true` and `[runtime].init_pose_secs`
+enabled so `]` engages policy only after the robot settles. Keep the demo
+scene visibly lit enough to inspect foot contact in the MuJoCo viewer. For
+MuJoCo demo changes, run the targeted stability test:
 
 ```bash
 MUJOCO_DOWNLOAD_DIR="$(pwd)/.cache/mujoco" \

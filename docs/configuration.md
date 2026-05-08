@@ -117,6 +117,15 @@ for backward compatibility. `motion_tokens = []` is rejected; use
 `standing_placeholder_tracking = true` when you want the explicit Gear-Sonic
 standing-placeholder alias instead of an empty-array magic value.
 
+Optional startup fields may also be set under `[runtime]`:
+
+- `init_pose_secs = 3.0` interpolates from the observed pose to the robot
+  default pose before running policy output.
+- `require_engage = true` holds that init pose until live teleop sends `]`.
+
+The keyboard demo uses both fields so policy output does not hit the robot
+before the operator has seen the standing pose settle.
+
 ### `gear_sonic`
 
 - Default public path: `velocity = [vx, vy, yaw_rate]`
@@ -191,6 +200,7 @@ no public `EndEffectorPoses` config surface in v1.
 - `comm.frequency_hz` / `communication.frequency_hz` must be greater than zero
 - `inference.backend` currently supports only `ort`
 - `inference.device` must be non-empty
+- `runtime.init_pose_secs` must be finite and greater than or equal to zero
 - Runtime command fields are mutually exclusive; set exactly one of `motion_tokens`, `velocity`, `velocity_schedule`, `kinematic_pose`, or `standing_placeholder_tracking`
 - `standing_placeholder_tracking` is only supported when `policy.name = "gear_sonic"`
 - Named `runtime.velocity_schedule.segments` must either all define
@@ -237,15 +247,20 @@ GR00T's G1 simulator behavior.
 
 ```toml
 [sim.elastic_band]
+enabled = true
 body_name = "pelvis"
 anchor = [0.0, 0.0, 1.0]
+anchor_from_initial_pose = true
 kp_pos = 10000.0
 kd_pos = 1000.0
 kp_ang = 1000.0
 kd_ang = 10.0
 ```
 
-Omit the table to run without the support band.
+Omit the table to run without the support band. Set
+`anchor_from_initial_pose = true` for local teleop demos where the support band
+should catch a falling humanoid without lifting it away from its initialized
+standing height.
 
 ### `[report]`
 

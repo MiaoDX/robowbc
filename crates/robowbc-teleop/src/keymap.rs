@@ -41,6 +41,8 @@ pub enum TeleopAction {
     Engage,
     /// Re-enter `RL_Init` / interpolate back to `default_dof_pos`.
     Reset,
+    /// Toggle the simulator elastic support band.
+    ToggleElasticBand,
     /// Quit the runtime gracefully.
     Quit,
 }
@@ -93,6 +95,8 @@ pub struct KeymapOverlay {
     pub engage: Option<String>,
     /// Spec for [`TeleopAction::Reset`].
     pub reset: Option<String>,
+    /// Spec for [`TeleopAction::ToggleElasticBand`].
+    pub toggle_elastic_band: Option<String>,
     /// Spec for [`TeleopAction::Quit`].
     pub quit: Option<String>,
 }
@@ -123,6 +127,7 @@ impl Default for KeymapConfig {
             (KeyCode::Char('o'), TeleopAction::EmergencyStop),
             (KeyCode::Char(']'), TeleopAction::Engage),
             (KeyCode::Char('r'), TeleopAction::Reset),
+            (KeyCode::Char('9'), TeleopAction::ToggleElasticBand),
             (KeyCode::Esc, TeleopAction::Quit),
         ];
         let mut bindings = HashMap::with_capacity(pairs.len());
@@ -164,6 +169,10 @@ impl KeymapConfig {
             (TeleopAction::EmergencyStop, &overlay.emergency_stop),
             (TeleopAction::Engage, &overlay.engage),
             (TeleopAction::Reset, &overlay.reset),
+            (
+                TeleopAction::ToggleElasticBand,
+                &overlay.toggle_elastic_band,
+            ),
             (TeleopAction::Quit, &overlay.quit),
         ];
 
@@ -327,6 +336,10 @@ mod tests {
         assert_eq!(
             map.lookup(key(KeyCode::Char('r'))),
             Some(TeleopAction::Reset)
+        );
+        assert_eq!(
+            map.lookup(key(KeyCode::Char('9'))),
+            Some(TeleopAction::ToggleElasticBand)
         );
         assert_eq!(map.lookup(key(KeyCode::Esc)), Some(TeleopAction::Quit));
     }
