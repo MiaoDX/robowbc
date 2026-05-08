@@ -75,6 +75,20 @@ When a CI check fails, **always read the actual logs/error messages** before dia
 - Rust toolchain: stable (1.75+)
 - Key crates: `ort`, `zenoh`, `pyo3`, `inventory`, `serde`, `toml`
 
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs are tracked in GitHub Issues for `MiaoDX/robowbc` using GitHub MCP tools. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the default five-label triage vocabulary. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context repo; read the root project docs as the canonical domain context. See `docs/agents/domain.md`.
+
 ## Subagent strategy
 
 - **Maximize parallelism.** Run independent tasks as concurrent subagents.
