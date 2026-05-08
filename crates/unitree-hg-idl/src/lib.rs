@@ -502,7 +502,7 @@ pub const G1_MOTOR_COUNT: usize = 35;
 ///
 /// The `crc` field is computed by [`crc32_core`] over the first
 /// `(1276 / 4) - 1 = 318` u32 words of the encoded struct.
-/// Call [`LowCmd::set_crc`] before sending.
+/// Call [`LowCmd::encode_with_crc`] before sending.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LowCmd {
     /// PR mode selector (0 = PR mode, 1 = AB mode).
@@ -517,7 +517,7 @@ pub struct LowCmd {
     pub fan: u8,
     /// Reserved (must be zero).
     pub reserve: [u8; 3],
-    /// CRC32 checksum — computed by [`LowCmd::set_crc`].
+    /// CRC32 checksum — computed by [`LowCmd::encode_with_crc`].
     pub crc: u32,
 }
 

@@ -1,0 +1,62 @@
+# Interactive GEAR-Sonic keyboard demo on the local MuJoCo transport.
+#
+# Run through the repo-level shortcut:
+#
+#   make demo-keyboard
+#
+# Or manually:
+#
+#   bash scripts/download_gear_sonic_models.sh
+#   MUJOCO_DOWNLOAD_DIR="$(pwd)/.cache/mujoco" \
+#   LD_LIBRARY_PATH="$(pwd)/.cache/mujoco/mujoco-3.6.0/lib:${LD_LIBRARY_PATH:-}" \
+#   cargo run --release -p robowbc-cli \
+#     --features robowbc-cli/sim-auto-download,robowbc-cli/sim-viewer \
+#     -- run --config configs/demo/gear_sonic_keyboard_mujoco.toml --teleop keyboard
+#
+# Keep your terminal focused for keyboard input and watch the MuJoCo window.
+
+[policy]
+name = "gear_sonic"
+
+[policy.config.encoder]
+model_path = "models/gear-sonic/model_encoder.onnx"
+execution_provider = { type = "cpu" }
+optimization_level = "extended"
+num_threads = 1
+
+[policy.config.decoder]
+model_path = "models/gear-sonic/model_decoder.onnx"
+execution_provider = { type = "cpu" }
+optimization_level = "extended"
+num_threads = 1
+
+[policy.config.planner]
+model_path = "models/gear-sonic/planner_sonic.onnx"
+execution_provider = { type = "cpu" }
+optimization_level = "extended"
+num_threads = 1
+
+[robot]
+config_path = "configs/robots/unitree_g1_gear_sonic.toml"
+
+[sim]
+model_path = "assets/robots/groot_g1_gear_sonic/g1_29dof_old.xml"
+timestep = 0.002
+substeps = 10
+gain_profile = "simulation_pd"
+viewer = true
+
+[comm]
+frequency_hz = 50
+topics = { joint_state = "unitree/g1/joint_state", imu = "unitree/g1/imu", joint_target_command = "unitree/g1/command/joint_position" }
+
+[inference]
+backend = "ort"
+device = "cpu"
+
+[runtime]
+# Keyboard teleop requires an initial velocity command. `--teleop keyboard`
+# then owns the command stream: WASD updates vx/vy, QE updates yaw, Space
+# zeroes velocity, O sends a zero-velocity e-stop tick, and Esc quits.
+velocity = [0.0, 0.0, 0.0]
+max_ticks = 200

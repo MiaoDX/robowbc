@@ -130,6 +130,31 @@ fixture, so it is the intended no-download local smoke path. `make ci` runs
 the same repo entry points that GitHub CI uses for Rust validation, docs,
 Python SDK verification, and the generated HTML site bundle.
 
+### I Just Want To See It Move
+
+On Linux with a display and OpenGL available:
+
+```bash
+git clone https://github.com/MiaoDX/robowbc
+cd robowbc
+make demo-keyboard
+```
+
+The target downloads the public GEAR-Sonic ONNX files on first run, starts the
+local MuJoCo transport with a live viewer, and runs `robowbc` with keyboard
+teleop. Keep the terminal focused for input and watch the MuJoCo window:
+`WASD` changes linear velocity, `QE` changes yaw, `Space` zeroes velocity,
+`O` sends a zero-velocity emergency-stop tick, and `Esc` quits. The underlying
+manual command is:
+
+```bash
+MUJOCO_DOWNLOAD_DIR="$(pwd)/.cache/mujoco" \
+LD_LIBRARY_PATH="$(pwd)/.cache/mujoco/mujoco-3.6.0/lib:${LD_LIBRARY_PATH:-}" \
+cargo run --release -p robowbc-cli \
+  --features robowbc-cli/sim-auto-download,robowbc-cli/sim-viewer \
+  -- run --config configs/demo/gear_sonic_keyboard_mujoco.toml --teleop keyboard
+```
+
 <details>
 <summary><strong>Run the live public policies</strong></summary>
 

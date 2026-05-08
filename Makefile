@@ -25,7 +25,7 @@ PYTHON_SDK_TARGET_DIR ?= $(CURDIR)/target/python-sdk-wheel
 
 .DEFAULT_GOAL := help
 
-.PHONY: help toolchain build build-release check test sim-feature-test clippy fmt fmt-check rust-doc mdbook-install docs-book docs verify smoke models-public site-python-deps site-render-check benchmark-robowbc benchmark-official benchmark-summary benchmark-nvidia site showcase-verify site-smoke site-browser-smoke site-serve-check site-serve python-sdk-deps python-sdk-build python-sdk-install python-sdk-smoke python-sdk-verify ci
+.PHONY: help toolchain build build-release check test sim-feature-test clippy fmt fmt-check rust-doc mdbook-install docs-book docs verify smoke demo-keyboard models-public site-python-deps site-render-check benchmark-robowbc benchmark-official benchmark-summary benchmark-nvidia site showcase-verify site-smoke site-browser-smoke site-serve-check site-serve python-sdk-deps python-sdk-build python-sdk-install python-sdk-smoke python-sdk-verify ci
 
 help: ## Show available targets and useful variables.
 	@awk 'BEGIN {FS = ":.*## "; print "Targets:"} /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -105,6 +105,18 @@ verify: check test clippy fmt-check ## Run the standard Rust validation suite.
 
 smoke: ## Run the no-download local decoupled_wbc smoke config.
 	$(CARGO) run --bin robowbc -- run --config configs/decoupled_smoke.toml
+
+demo-keyboard: ## Run the interactive GEAR-Sonic + MuJoCo keyboard demo.
+	bash scripts/download_gear_sonic_models.sh models/gear-sonic
+	download_dir="$(abspath $(MUJOCO_DOWNLOAD_DIR))"; \
+	"$(PYTHON)" scripts/ensure_mujoco_runtime.py --download-dir "$$download_dir" >/dev/null; \
+	link_dir="$(MUJOCO_DYNAMIC_LINK_DIR)"; \
+	MUJOCO_DOWNLOAD_DIR="$$download_dir" \
+	MUJOCO_DYNAMIC_LINK_DIR="$$link_dir" \
+	LD_LIBRARY_PATH="$$link_dir:$${LD_LIBRARY_PATH:-}" \
+	$(CARGO) run --release -p robowbc-cli \
+		--features robowbc-cli/sim-auto-download,robowbc-cli/sim-viewer \
+		-- run --config configs/demo/gear_sonic_keyboard_mujoco.toml --teleop keyboard
 
 models-public: ## Download the public policy checkpoints used by the site and benchmarks.
 	bash scripts/download_gear_sonic_models.sh models/gear-sonic

@@ -9,6 +9,8 @@
 //!
 //! - **`mujoco`** — enables the `MuJoCo` backend via the `mujoco-rs` crate.
 //!   Requires the `MuJoCo` C library (v3.0+) to be installed on the host.
+//! - **`mujoco-viewer`** — enables the live Rust-native `MuJoCo` viewer for
+//!   keyboard-driven local demos.
 //! - **`mujoco-auto-download`** — Linux/Windows convenience feature that
 //!   enables `mujoco-rs`' automatic runtime download path. Requires
 //!   `MUJOCO_DOWNLOAD_DIR` to point at an absolute extraction directory.
@@ -67,6 +69,12 @@ pub struct MujocoConfig {
     /// when present.
     #[serde(default = "default_gain_profile")]
     pub gain_profile: MujocoGainProfile,
+    /// Open a live `MuJoCo` viewer and sync it after each control tick.
+    ///
+    /// Requires building with the `mujoco-viewer` feature. This is intended
+    /// for local "I just want to see it move" demos, not headless CI.
+    #[serde(default)]
+    pub viewer: bool,
 }
 
 fn default_timestep() -> f64 {
@@ -88,6 +96,7 @@ impl Default for MujocoConfig {
             timestep: default_timestep(),
             substeps: default_substeps(),
             gain_profile: default_gain_profile(),
+            viewer: false,
         }
     }
 }
@@ -122,6 +131,12 @@ pub enum SimError {
     /// Camera rendering failed.
     #[error("simulation render failed: {reason}")]
     RenderFailed {
+        /// Human-readable failure reason.
+        reason: String,
+    },
+    /// Live viewer failed to initialize or render.
+    #[error("simulation viewer failed: {reason}")]
+    ViewerFailed {
         /// Human-readable failure reason.
         reason: String,
     },
@@ -187,6 +202,7 @@ mod tests {
             timestep: 0.001,
             substeps: 20,
             gain_profile: MujocoGainProfile::DefaultPd,
+            viewer: true,
         };
         let toml_str = toml::to_string(&cfg).expect("serialization should succeed");
         let loaded: MujocoConfig =

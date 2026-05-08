@@ -18,9 +18,11 @@ use robowbc_comm::{
     UnitreeG1Config, UnitreeG1Transport,
 };
 use robowbc_core::{
-    BodyPose, JointPositionTargets, LinkPose, RobotConfig, Twist, WbcCommand, WbcPolicy, SE3,
+    BodyPose, JointPositionTargets, LinkPose, RobotConfig, Twist, WbcCommand, WbcCommandKind,
+    WbcPolicy, SE3,
 };
 use robowbc_registry::{RegistryError, WbcRegistry};
+use robowbc_teleop::{KeyboardTeleop, TeleopEvent, TeleopSource};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -254,6 +256,18 @@ fn elapsed_secs_for_tick(tick: usize, frequency_hz: u32) -> f32 {
     tick as f32 / frequency_hz as f32
 }
 
+fn velocity_command([vx, vy, yaw]: [f32; 3]) -> WbcCommand {
+    WbcCommand::Velocity(Twist {
+        linear: [vx, vy, 0.0],
+        angular: [0.0, 0.0, yaw],
+    })
+}
+
+#[cfg(feature = "vis")]
+fn velocity_from_command_data(command_data: &[f32]) -> Option<[f32; 3]> {
+    (command_data.len() == 3).then(|| [command_data[0], command_data[1], command_data[2]])
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct RuntimeConfig {
     #[serde(default)]
@@ -464,7 +478,7 @@ impl ParsedRuntimeCommand {
         }
     }
 
-    #[cfg(any(feature = "vis", test))]
+    #[cfg(test)]
     fn velocity_for_tick(&self, tick: usize, frequency_hz: u32) -> Option<[f32; 3]> {
         match self {
             Self::Velocity(velocity) => Some(*velocity),
@@ -836,10 +850,102 @@ struct ReplayTrace {
     frames: Vec<ReplayFrame>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TeleopMode {
+    Keyboard,
+}
+
+impl TeleopMode {
+    fn parse(raw: &str) -> Result<Self, String> {
+        match raw {
+            "keyboard" => Ok(Self::Keyboard),
+            other => Err(format!(
+                "unsupported teleop mode {other:?}; expected \"keyboard\""
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct TeleopPollOutcome {
+    velocity: [f32; 3],
+    stop_after_tick: bool,
+}
+
+fn apply_teleop_events(
+    current_velocity: &mut [f32; 3],
+    events: &[TeleopEvent],
+) -> TeleopPollOutcome {
+    let mut stop_after_tick = false;
+    for event in events {
+        match *event {
+            TeleopEvent::Velocity { vx, vy, wz } => {
+                *current_velocity = [vx, vy, wz];
+                println!("teleop velocity: vx={vx:.2} m/s, vy={vy:.2} m/s, yaw={wz:.2} rad/s");
+            }
+            TeleopEvent::EmergencyStop => {
+                *current_velocity = [0.0, 0.0, 0.0];
+                stop_after_tick = true;
+                println!("teleop emergency stop: sending zero velocity before shutdown");
+            }
+            TeleopEvent::Quit => {
+                stop_after_tick = true;
+                println!("teleop quit requested");
+            }
+            TeleopEvent::Engage => {
+                println!("teleop engage requested");
+            }
+            TeleopEvent::Reset => {
+                *current_velocity = [0.0, 0.0, 0.0];
+                println!("teleop reset requested: velocity zeroed");
+            }
+        }
+    }
+
+    TeleopPollOutcome {
+        velocity: *current_velocity,
+        stop_after_tick,
+    }
+}
+
+struct LiveTeleop {
+    source: KeyboardTeleop,
+    current_velocity: [f32; 3],
+}
+
+impl LiveTeleop {
+    fn keyboard(initial_velocity: [f32; 3]) -> Result<Self, String> {
+        let mut source = KeyboardTeleop::new();
+        source
+            .enable()
+            .map_err(|err| format!("failed to enable keyboard teleop: {err}"))?;
+        println!("keyboard teleop active: WASD move, QE yaw, Space zeroes velocity, O e-stops, Esc quits");
+        Ok(Self {
+            source,
+            current_velocity: initial_velocity,
+        })
+    }
+
+    fn poll(&mut self) -> Result<TeleopPollOutcome, String> {
+        let events = self
+            .source
+            .poll()
+            .map_err(|err| format!("failed to poll keyboard teleop: {err}"))?;
+        Ok(apply_teleop_events(&mut self.current_velocity, &events))
+    }
+}
+
+impl Drop for LiveTeleop {
+    fn drop(&mut self) {
+        let _ = self.source.disable();
+    }
+}
+
 #[derive(Debug)]
 enum CliCommand {
     Run {
         config_path: PathBuf,
+        teleop_mode: Option<TeleopMode>,
     },
     Init {
         output_path: PathBuf,
@@ -855,10 +961,35 @@ enum CliCommand {
 }
 
 fn parse_args(args: &[String]) -> Result<CliCommand, String> {
-    if args.len() == 4 && args[1] == "run" && args[2] == "--config" {
-        return Ok(CliCommand::Run {
-            config_path: PathBuf::from(&args[3]),
-        });
+    if args.len() >= 2 && args[1] == "run" {
+        let mut config_path: Option<PathBuf> = None;
+        let mut teleop_mode: Option<TeleopMode> = None;
+        let mut idx = 2;
+        while idx < args.len() {
+            if idx + 1 >= args.len() {
+                return Err(format!("missing value for flag {}", args[idx]));
+            }
+            match args[idx].as_str() {
+                "--config" => config_path = Some(PathBuf::from(&args[idx + 1])),
+                "--teleop" => teleop_mode = Some(TeleopMode::parse(&args[idx + 1])?),
+                other => return Err(format!("unknown flag for `run`: {other}")),
+            }
+            idx += 2;
+        }
+        return config_path.map_or_else(
+            || {
+                Err(
+                    "usage: robowbc run --config <path/to/config.toml> [--teleop keyboard]"
+                        .to_owned(),
+                )
+            },
+            |path| {
+                Ok(CliCommand::Run {
+                    config_path: path,
+                    teleop_mode,
+                })
+            },
+        );
     }
 
     if args.len() == 2 && args[1] == "init" {
@@ -896,7 +1027,7 @@ fn parse_args(args: &[String]) -> Result<CliCommand, String> {
     }
 
     Err(
-        "usage: robowbc run --config <path/to/config.toml>\n       robowbc init [--output <path/to/template.toml>]\n       robowbc policy --robot <name> --config <policy_name>"
+        "usage: robowbc run --config <path/to/config.toml> [--teleop keyboard]\n       robowbc init [--output <path/to/template.toml>]\n       robowbc policy --robot <name> --config <policy_name>"
             .to_owned(),
     )
 }
@@ -1071,6 +1202,31 @@ fn build_policy(app: &AppConfig) -> Result<(Box<dyn WbcPolicy>, RobotConfig), St
         .map_err(|e: RegistryError| format!("failed to build policy '{}': {e}", app.policy.name))?;
 
     Ok((policy, robot))
+}
+
+fn validate_teleop_mode(
+    teleop_mode: Option<TeleopMode>,
+    runtime_command: &ParsedRuntimeCommand,
+    policy: &dyn WbcPolicy,
+) -> Result<Option<LiveTeleop>, String> {
+    let Some(mode) = teleop_mode else {
+        return Ok(None);
+    };
+
+    if !policy.capabilities().supports(WbcCommandKind::Velocity) {
+        return Err("keyboard teleop requires a policy that supports velocity commands".to_owned());
+    }
+
+    let ParsedRuntimeCommand::Velocity(initial_velocity) = runtime_command else {
+        return Err(
+            "keyboard teleop requires `[runtime] velocity = [0.0, 0.0, 0.0]` as the initial command"
+                .to_owned(),
+        );
+    };
+
+    match mode {
+        TeleopMode::Keyboard => LiveTeleop::keyboard(*initial_velocity).map(Some),
+    }
 }
 
 trait ReportTelemetryProvider {
@@ -1277,12 +1433,13 @@ fn world_to_body_planar_delta(
     ]
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn run_control_loop_inner<T: RobotTransport + ReportTelemetryProvider>(
     transport: &mut T,
     policy: &dyn WbcPolicy,
     comm: &CommConfig,
     runtime_command: &ParsedRuntimeCommand,
+    live_teleop: &mut Option<LiveTeleop>,
     max_ticks: Option<usize>,
     running: &AtomicBool,
     replay_frames: &mut Vec<ReplayFrame>,
@@ -1305,7 +1462,20 @@ fn run_control_loop_inner<T: RobotTransport + ReportTelemetryProvider>(
 
         let cycle_start = Instant::now();
         let tick_index = ticks;
-        let command = runtime_command.command_for_tick(tick_index, comm.frequency_hz);
+        let mut stop_after_tick = false;
+        let (command, tick_command_data) = if let Some(teleop) = live_teleop.as_mut() {
+            let outcome = teleop.poll()?;
+            stop_after_tick = outcome.stop_after_tick;
+            (
+                velocity_command(outcome.velocity),
+                outcome.velocity.to_vec(),
+            )
+        } else {
+            (
+                runtime_command.command_for_tick(tick_index, comm.frequency_hz),
+                runtime_command.command_data_for_tick(tick_index, comm.frequency_hz),
+            )
+        };
         let base_pose = transport.report_base_pose();
         let sim_time_secs = transport.report_sim_time_secs(tick_index, comm.frequency_hz);
         let replay_state = transport.report_mujoco_state();
@@ -1320,7 +1490,7 @@ fn run_control_loop_inner<T: RobotTransport + ReportTelemetryProvider>(
             captured_tick = Some(ReplayFrame {
                 tick: tick_index,
                 sim_time_secs,
-                command_data: runtime_command.command_data_for_tick(tick_index, comm.frequency_hz),
+                command_data: tick_command_data.clone(),
                 phase_name: runtime_command.phase_name_for_tick(tick_index, comm.frequency_hz),
                 base_pose,
                 actual_positions: obs.joint_positions.clone(),
@@ -1351,9 +1521,7 @@ fn run_control_loop_inner<T: RobotTransport + ReportTelemetryProvider>(
                 #[allow(clippy::cast_precision_loss)]
                 let freq = 1.0_f64 / cycle_elapsed.as_secs_f64().max(f64::EPSILON);
                 let _ = vis.log_control_frequency(freq);
-                if let Some([vx, vy, yaw]) =
-                    runtime_command.velocity_for_tick(tick_index, comm.frequency_hz)
-                {
+                if let Some([vx, vy, yaw]) = velocity_from_command_data(&tick_command_data) {
                     let _ = vis.log_velocity_command(vx, vy, yaw);
                 } else {
                     match runtime_command {
@@ -1380,6 +1548,9 @@ fn run_control_loop_inner<T: RobotTransport + ReportTelemetryProvider>(
         }
 
         ticks = ticks.saturating_add(1);
+        if stop_after_tick {
+            running.store(false, Ordering::SeqCst);
+        }
 
         if cycle_elapsed > period {
             dropped_frames = dropped_frames.saturating_add(1);
@@ -1398,6 +1569,7 @@ fn run_control_loop(
     robot: &RobotConfig,
     comm: &CommConfig,
     runtime_command: &ParsedRuntimeCommand,
+    live_teleop: &mut Option<LiveTeleop>,
     requested_max_ticks: Option<usize>,
     report_config: Option<&ReportConfig>,
     running: &AtomicBool,
@@ -1446,6 +1618,7 @@ fn run_control_loop(
                 policy,
                 comm,
                 runtime_command,
+                live_teleop,
                 requested_max_ticks,
                 running,
                 &mut replay_frames,
@@ -1478,6 +1651,7 @@ fn run_control_loop(
                 policy,
                 comm,
                 runtime_command,
+                live_teleop,
                 requested_max_ticks,
                 running,
                 &mut replay_frames,
@@ -1509,6 +1683,7 @@ fn run_control_loop(
                 policy,
                 comm,
                 runtime_command,
+                live_teleop,
                 requested_max_ticks,
                 running,
                 &mut replay_frames,
@@ -1539,6 +1714,7 @@ fn run_control_loop(
                 policy,
                 comm,
                 runtime_command,
+                live_teleop,
                 requested_max_ticks,
                 running,
                 &mut replay_frames,
@@ -1561,6 +1737,7 @@ fn run_control_loop(
                 policy,
                 comm,
                 runtime_command,
+                live_teleop,
                 requested_max_ticks,
                 running,
                 &mut replay_frames,
@@ -1673,7 +1850,7 @@ fn install_ctrlc_handler(running: &Arc<AtomicBool>) -> anyhow::Result<()> {
     .context("failed to install Ctrl+C handler")
 }
 
-fn run_with_config(config_path: &Path) -> anyhow::Result<()> {
+fn run_with_config(config_path: &Path, teleop_mode: Option<TeleopMode>) -> anyhow::Result<()> {
     let app = load_app_config(config_path)
         .map_err(anyhow::Error::msg)
         .with_context(|| format!("while loading config {}", config_path.display()))?;
@@ -1686,18 +1863,26 @@ fn run_with_config(config_path: &Path) -> anyhow::Result<()> {
     let (policy, robot) = build_policy(&app)
         .map_err(anyhow::Error::msg)
         .with_context(|| format!("while building policy {policy_name:?}"))?;
+    let mut live_teleop = validate_teleop_mode(teleop_mode, &runtime_command, &*policy)
+        .map_err(|err| anyhow!("invalid teleop setup: {err}"))?;
 
     let running = Arc::new(AtomicBool::new(true));
     install_ctrlc_handler(&running)?;
 
     let report_config = app.report.clone();
+    let requested_max_ticks = if live_teleop.is_some() {
+        None
+    } else {
+        app.runtime.max_ticks
+    };
     let metrics = run_control_loop(
         &*policy,
         &policy_name,
         &robot,
         &app.comm,
         &runtime_command,
-        app.runtime.max_ticks,
+        &mut live_teleop,
+        requested_max_ticks,
         report_config.as_ref(),
         &running,
         app.hardware,
@@ -1764,7 +1949,10 @@ fn main() {
 
     let result = match command {
         CliCommand::Init { output_path } => run_init_command(&output_path),
-        CliCommand::Run { config_path } => run_with_config(&config_path),
+        CliCommand::Run {
+            config_path,
+            teleop_mode,
+        } => run_with_config(&config_path, teleop_mode),
         CliCommand::Policy { robot, policy } => run_policy_command(&robot, &policy),
     };
 
@@ -1835,12 +2023,74 @@ mod tests {
 
         let parsed = parse_args(&args).expect("args should parse");
         match parsed {
-            CliCommand::Run { config_path } => {
+            CliCommand::Run {
+                config_path,
+                teleop_mode,
+            } => {
                 assert_eq!(config_path, PathBuf::from("configs/sonic_g1.toml"));
+                assert_eq!(teleop_mode, None);
             }
             CliCommand::Init { .. } | CliCommand::Policy { .. } => {
                 panic!("expected run command");
             }
+        }
+    }
+
+    #[test]
+    fn args_parse_run_config_with_keyboard_teleop() {
+        let args = vec![
+            "robowbc".to_owned(),
+            "run".to_owned(),
+            "--config".to_owned(),
+            "configs/demo/gear_sonic_keyboard_mujoco.toml".to_owned(),
+            "--teleop".to_owned(),
+            "keyboard".to_owned(),
+        ];
+
+        let parsed = parse_args(&args).expect("args should parse");
+        match parsed {
+            CliCommand::Run {
+                config_path,
+                teleop_mode,
+            } => {
+                assert_eq!(
+                    config_path,
+                    PathBuf::from("configs/demo/gear_sonic_keyboard_mujoco.toml")
+                );
+                assert_eq!(teleop_mode, Some(TeleopMode::Keyboard));
+            }
+            other => panic!("expected run command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn teleop_velocity_event_updates_live_command() {
+        let mut velocity = [0.0, 0.0, 0.0];
+        let outcome = apply_teleop_events(
+            &mut velocity,
+            &[TeleopEvent::Velocity {
+                vx: 0.3,
+                vy: -0.1,
+                wz: 0.2,
+            }],
+        );
+
+        assert_velocity_close(outcome.velocity, [0.3, -0.1, 0.2]);
+        assert!(!outcome.stop_after_tick);
+    }
+
+    #[test]
+    fn teleop_emergency_stop_zeroes_command_and_stops_after_tick() {
+        let mut velocity = [0.3, 0.1, -0.2];
+        let outcome = apply_teleop_events(&mut velocity, &[TeleopEvent::EmergencyStop]);
+
+        assert_velocity_close(outcome.velocity, [0.0, 0.0, 0.0]);
+        assert!(outcome.stop_after_tick);
+    }
+
+    fn assert_velocity_close(actual: [f32; 3], expected: [f32; 3]) {
+        for (actual, expected) in actual.iter().zip(expected) {
+            assert!((*actual - expected).abs() < f32::EPSILON);
         }
     }
 
@@ -2762,12 +3012,14 @@ standing_placeholder_tracking = true
         })
         .expect("runtime should parse");
 
+        let mut live_teleop = None;
         let metrics = run_control_loop(
             &*policy,
             "decoupled_wbc",
             &robot,
             &comm,
             &runtime_command,
+            &mut live_teleop,
             runtime.max_ticks,
             None,
             &AtomicBool::new(true),
