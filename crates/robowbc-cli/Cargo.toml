@@ -12,6 +12,7 @@ path = "src/main.rs"
 [features]
 default = []
 sim = ["dep:robowbc-sim", "robowbc-sim/mujoco"]
+sim-viewer = ["sim", "robowbc-sim/mujoco-viewer"]
 sim-auto-download = ["sim", "robowbc-sim/mujoco-auto-download"]
 vis = ["dep:robowbc-vis", "robowbc-vis/rerun"]
 
@@ -23,6 +24,7 @@ robowbc-core = { path = "../robowbc-core" }
 robowbc-ort = { path = "../robowbc-ort" }
 robowbc-registry = { path = "../robowbc-registry" }
 robowbc-sim = { path = "../robowbc-sim", optional = true }
+robowbc-teleop = { path = "../robowbc-teleop" }
 robowbc-vis = { path = "../robowbc-vis", optional = true }
 serde.workspace = true
 serde_json = "1"

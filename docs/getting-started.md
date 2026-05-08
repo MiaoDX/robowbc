@@ -49,6 +49,27 @@ If an ONNX-backed run stalls before the first tick on Linux/x86_64, set
 `ROBOWBC_ORT_DYLIB_PATH` to a fully extracted `libonnxruntime.so.1.24.2` under
 `target/debug/build/robowbc-ort-*/out/onnxruntime-linux-x64-1.24.2/lib/`.
 
+## Run the interactive MuJoCo keyboard demo
+
+For the "I just want to see the policy move a robot" path, use:
+
+```bash
+make demo-keyboard
+```
+
+This downloads the public GEAR-Sonic checkpoints if needed, builds the CLI with
+MuJoCo auto-download plus the live viewer feature, and runs:
+
+```bash
+robowbc run --config configs/demo/gear_sonic_keyboard_mujoco.toml --teleop keyboard
+```
+
+Keep the terminal focused for keyboard input and watch the MuJoCo window:
+`WASD` changes linear velocity, `QE` changes yaw, `Space` zeroes velocity,
+`O` sends a zero-velocity emergency-stop tick, and `Esc` quits. The demo config
+uses `[sim].viewer = true`, so it requires a Linux desktop/OpenGL session. For
+headless machines, use `make site` or `make showcase-verify` instead.
+
 ## Generate a local policy showcase
 
 The repository includes a single site builder that assembles the policy pages,

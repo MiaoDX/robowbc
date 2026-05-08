@@ -2,6 +2,8 @@
 
 use crate::{MujocoConfig, MujocoGainProfile, SimError};
 use mujoco_rs::renderer::MjRenderer;
+#[cfg(feature = "mujoco-viewer")]
+use mujoco_rs::viewer::MjViewer;
 use mujoco_rs::wrappers::mj_plugin::load_all_plugin_libraries;
 use mujoco_rs::wrappers::{
     MjData, MjModel, MjtJoint, MjtObj, MjtSensor, MjtState, MjtTrn, MjvCamera,
@@ -45,7 +47,7 @@ struct LoadedModel {
     model_variant: &'static str,
 }
 
-/// Serializable snapshot of the current live MuJoCo state.
+/// Serializable snapshot of the current live `MuJoCo` state.
 #[derive(Debug, Clone)]
 pub struct MujocoLiveState {
     /// Simulation time in seconds.
@@ -60,9 +62,9 @@ pub struct MujocoLiveState {
     pub angular_velocity: [f32; 3],
     /// Optional floating-base pose in world coordinates.
     pub base_pose: Option<BasePose>,
-    /// Raw MuJoCo generalized coordinates.
+    /// Raw `MuJoCo` generalized coordinates.
     pub qpos: Vec<f32>,
-    /// Raw MuJoCo generalized velocities.
+    /// Raw `MuJoCo` generalized velocities.
     pub qvel: Vec<f32>,
 }
 
@@ -103,6 +105,8 @@ pub struct MujocoTransport {
     accel_sensor: SensorSpan,
     model_variant: &'static str,
     prev_positions: Vec<f32>,
+    #[cfg(feature = "mujoco-viewer")]
+    viewer: Option<MjViewer>,
 }
 
 impl MujocoTransport {
@@ -165,6 +169,25 @@ impl MujocoTransport {
         let mut data = MjData::new(Box::new(model));
         initialize_state(&mut data, &robot_config, &joint_mappings);
         let prev_positions = robot_config.default_pose.clone();
+        #[cfg(feature = "mujoco-viewer")]
+        let viewer = if config.viewer {
+            Some(
+                MjViewer::builder()
+                    .window_name("RoboWBC MuJoCo keyboard demo")
+                    .build_passive(data.model())
+                    .map_err(|error| SimError::ViewerFailed {
+                        reason: error.to_string(),
+                    })?,
+            )
+        } else {
+            None
+        };
+        #[cfg(not(feature = "mujoco-viewer"))]
+        if config.viewer {
+            return Err(SimError::ViewerFailed {
+                reason: "build with feature `robowbc-cli/sim-viewer` or `robowbc-sim/mujoco-viewer` to enable [sim].viewer".to_owned(),
+            });
+        }
 
         Ok(Self {
             data,
@@ -177,6 +200,8 @@ impl MujocoTransport {
             accel_sensor,
             model_variant,
             prev_positions,
+            #[cfg(feature = "mujoco-viewer")]
+            viewer,
         })
     }
 
@@ -239,7 +264,7 @@ impl MujocoTransport {
         self.data.time()
     }
 
-    /// Returns a snapshot of the current MuJoCo `qpos` state as `f32`.
+    /// Returns a snapshot of the current `MuJoCo` `qpos` state as `f32`.
     #[must_use]
     pub fn qpos_snapshot(&self) -> Vec<f32> {
         self.data
@@ -249,7 +274,7 @@ impl MujocoTransport {
             .collect()
     }
 
-    /// Returns a snapshot of the current MuJoCo `qvel` state as `f32`.
+    /// Returns a snapshot of the current `MuJoCo` `qvel` state as `f32`.
     #[must_use]
     pub fn qvel_snapshot(&self) -> Vec<f32> {
         self.data
@@ -267,7 +292,7 @@ impl MujocoTransport {
             .clone_from(&self.robot_config.default_pose);
     }
 
-    /// Saves the current full MuJoCo physics state.
+    /// Saves the current full `MuJoCo` physics state.
     #[must_use]
     pub fn full_physics_state(&self) -> Vec<f64> {
         self.data
@@ -275,7 +300,7 @@ impl MujocoTransport {
             .into_vec()
     }
 
-    /// Restores a previously saved full MuJoCo physics state.
+    /// Restores a previously saved full `MuJoCo` physics state.
     ///
     /// # Errors
     ///
@@ -314,7 +339,7 @@ impl MujocoTransport {
         }
     }
 
-    /// Captures an RGB frame from a named MuJoCo camera or a built-in preset.
+    /// Captures an RGB frame from a named `MuJoCo` camera or a built-in preset.
     ///
     /// # Errors
     ///
@@ -326,9 +351,15 @@ impl MujocoTransport {
         width: usize,
         height: usize,
     ) -> Result<MujocoCameraFrame, SimError> {
+        let renderer_width = u32::try_from(width).map_err(|_| SimError::RenderFailed {
+            reason: format!("camera width {width} exceeds u32::MAX"),
+        })?;
+        let renderer_height = u32::try_from(height).map_err(|_| SimError::RenderFailed {
+            reason: format!("camera height {height} exceeds u32::MAX"),
+        })?;
         let mut renderer = MjRenderer::builder()
-            .width(width as u32)
-            .height(height as u32)
+            .width(renderer_width)
+            .height(renderer_height)
             .rgb(true)
             .depth(false)
             .camera(self.camera_for_name(camera_name))
@@ -356,6 +387,20 @@ impl MujocoTransport {
             width,
             height,
             rgb,
+        })
+    }
+
+    #[cfg(feature = "mujoco-viewer")]
+    fn render_viewer_if_enabled(&mut self) -> Result<(), SimError> {
+        let Some(viewer) = self.viewer.as_mut() else {
+            return Ok(());
+        };
+        if !viewer.running() {
+            return Ok(());
+        }
+        viewer.sync_data(&mut self.data);
+        viewer.render().map_err(|error| SimError::ViewerFailed {
+            reason: error.to_string(),
         })
     }
 
@@ -552,6 +597,12 @@ impl RobotTransport for MujocoTransport {
             self.data.step();
         }
 
+        #[cfg(feature = "mujoco-viewer")]
+        self.render_viewer_if_enabled()
+            .map_err(|error| CommError::PublishFailed {
+                reason: error.to_string(),
+            })?;
+
         Ok(())
     }
 }
@@ -628,7 +679,8 @@ fn load_model_resolving_assets(model_path: &Path) -> Result<LoadedModel, SimErro
 }
 
 fn control_frequency_hz(config: &MujocoConfig) -> u32 {
-    let control_dt = config.timestep * config.substeps as f64;
+    let substeps = u32::try_from(config.substeps).unwrap_or(u32::MAX);
+    let control_dt = config.timestep * f64::from(substeps);
     if control_dt <= f64::EPSILON {
         return 0;
     }
@@ -685,8 +737,8 @@ fn ensure_mujoco_mesh_plugins_loaded() -> Result<(), SimError> {
 
 fn resolve_mujoco_plugin_dir() -> Option<PathBuf> {
     plugin_dir_from_env("MUJOCO_PLUGIN_DIR")
-        .or_else(|| plugin_dir_from_dynamic_link_dir())
-        .or_else(|| plugin_dir_from_download_dir())
+        .or_else(plugin_dir_from_dynamic_link_dir)
+        .or_else(plugin_dir_from_download_dir)
 }
 
 fn plugin_dir_from_env(var_name: &str) -> Option<PathBuf> {
@@ -736,7 +788,7 @@ fn collect_missing_mesh_assets(model_path: &Path, mjcf: &str) -> Result<Vec<Path
                 model_path.display()
             ),
         })?;
-    let mesh_dir = first_self_closing_tag(&mjcf, "compiler")
+    let mesh_dir = first_self_closing_tag(mjcf, "compiler")
         .and_then(|tag| xml_attribute(tag, "meshdir"))
         .map_or_else(
             || model_dir.to_path_buf(),
@@ -744,7 +796,7 @@ fn collect_missing_mesh_assets(model_path: &Path, mjcf: &str) -> Result<Vec<Path
         );
 
     let mut missing = BTreeSet::new();
-    for mesh_tag in self_closing_tags(&mjcf, "mesh") {
+    for mesh_tag in self_closing_tags(mjcf, "mesh") {
         let Some(file) = xml_attribute(mesh_tag, "file") else {
             continue;
         };
