@@ -1996,6 +1996,14 @@ fn run_init_command(output_path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn max_ticks_for_run(runtime: &RuntimeConfig, teleop_enabled: bool) -> Option<usize> {
+    if teleop_enabled {
+        None
+    } else {
+        runtime.max_ticks
+    }
+}
+
 fn install_ctrlc_handler(running: &Arc<AtomicBool>) -> anyhow::Result<()> {
     let signal = Arc::clone(running);
     ctrlc::set_handler(move || {
@@ -2029,11 +2037,7 @@ fn run_with_config(config_path: &Path, teleop_mode: Option<TeleopMode>) -> anyho
     install_ctrlc_handler(&running)?;
 
     let report_config = app.report.clone();
-    let requested_max_ticks = if live_teleop.is_some() {
-        None
-    } else {
-        app.runtime.max_ticks
-    };
+    let requested_max_ticks = max_ticks_for_run(&app.runtime, live_teleop.is_some());
     let metrics = run_control_loop(
         &*policy,
         &policy_name,
@@ -2355,6 +2359,17 @@ mod tests {
         assert_eq!(band.kd_ang, 10.0);
         assert_eq!(parsed.runtime.init_pose_secs, 3.0);
         assert!(parsed.runtime.require_engage);
+    }
+
+    #[test]
+    fn live_teleop_runs_until_user_exit_even_when_runtime_has_max_ticks() {
+        let runtime = RuntimeConfig {
+            max_ticks: Some(200),
+            ..RuntimeConfig::default()
+        };
+
+        assert_eq!(max_ticks_for_run(&runtime, false), Some(200));
+        assert_eq!(max_ticks_for_run(&runtime, true), None);
     }
 
     #[test]

@@ -70,8 +70,8 @@ device = "cpu"
 
 [runtime]
 # Keyboard teleop starts in an init pose. Press `]` to engage the policy, then
-# use WASD/QE to drive. Press `9` to toggle the elastic support band.
+# use WASD/QE to drive. Press `9` to toggle the elastic support band. Live
+# teleop runs until Esc or Ctrl-C.
 velocity = [0.0, 0.0, 0.0]
 init_pose_secs = 3.0
 require_engage = true
-max_ticks = 200
