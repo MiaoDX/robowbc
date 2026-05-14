@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 REPORT_PATH = ROOT / "scripts" / "reports" / "roboharness_report.py"
 
 SPEC = importlib.util.spec_from_file_location("roboharness_report", REPORT_PATH)

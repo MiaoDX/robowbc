@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 SHOWCASE_PATH = ROOT / "scripts" / "site" / "generate_policy_showcase.py"
 
 SHOWCASE_SPEC = importlib.util.spec_from_file_location(

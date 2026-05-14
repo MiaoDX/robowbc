@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 REGISTRY_PATH = ROOT / "benchmarks/nvidia/cases.json"
 NORMALIZER_PATH = ROOT / "scripts/benchmarks/normalize_nvidia_benchmarks.py"
 RENDER_PATH = ROOT / "scripts/benchmarks/render_nvidia_benchmark_summary.py"

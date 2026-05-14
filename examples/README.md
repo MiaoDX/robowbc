@@ -5,10 +5,10 @@ users may call them directly.
 
 ## Shell Examples
 
-- `list_and_switch_policies.sh` lists registry policies and shows config-driven
+- `shell/list_and_switch_policies.sh` lists registry policies and shows config-driven
   switching.
-- `run_gear_sonic.sh` runs the GEAR-Sonic policy path.
-- `run_decoupled_wbc.sh` runs the Decoupled WBC policy path.
+- `shell/run_gear_sonic.sh` runs the GEAR-Sonic policy path.
+- `shell/run_decoupled_wbc.sh` runs the Decoupled WBC policy path.
 
 ## Python Examples
 
