@@ -22,6 +22,7 @@
 # Operations And Evidence
 
 - [Benchmarks](benchmarks/README.md)
+- [Maintainer Scripts](scripts.md)
 - [Third-Party Notices](third-party-notices.md)
 
 # Project Direction

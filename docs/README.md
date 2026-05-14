@@ -41,6 +41,7 @@ transports.
 - [Getting Started](getting-started.md), build the workspace and run the smoke config
 - [G1 MJCF Review (2026-04-24)](g1-mjcf-review-2026-04-24.md), compare the reviewed upstream G1 MuJoCo models and the RoboWBC config decisions
 - [Configuration Reference](configuration.md), understand the TOML surface
+- [Maintainer Scripts](scripts.md), find the canonical script folders and edit checks
 - [Adding a New Policy](adding-a-model.md), wire a new model into the registry
 - [Adding a New Robot](adding-a-robot.md), add a new hardware target
 - [Detailed Architecture](architecture.md), understand the crate split and runtime flow

@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-from pathlib import Path
-import runpy
+from _compat import run_legacy_script
 
-runpy.run_path(
-    str(Path(__file__).resolve().parent / "benchmarks" / "render_nvidia_benchmark_summary.py"),
-    run_name="__main__",
-)
+run_legacy_script("benchmarks/render_nvidia_benchmark_summary.py")
