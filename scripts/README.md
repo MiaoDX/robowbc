@@ -3,6 +3,31 @@
 Prefer Makefile targets for stable workflows. Call scripts directly when you
 are changing or debugging that script.
 
+Canonical script implementations live in workflow folders. Root-level
+`scripts/*.py`, `scripts/*.sh`, and `scripts/bench_nvidia_gear_sonic_official.cpp`
+remain compatibility entrypoints for older commands, docs, and local user
+habits.
+
+## Workflow Folders
+
+| Folder | Purpose | Prefer |
+|--------|---------|--------|
+| `models/` | Download and normalize public policy assets | `make models-public` or the model-specific scripts |
+| `mujoco/` | Ensure and validate the local MuJoCo runtime | `make sim-feature-test`, `make site-render-check`, or `make demo-keyboard` |
+| `benchmarks/` | Generate and render NVIDIA comparison artifacts | `make benchmark-nvidia` |
+| `site/` | Build, validate, serve, and browser-smoke the static policy site | `make site`, `make site-smoke`, `make site-serve` |
+| `reports/` | Convert RoboWBC outputs into proof-pack report contracts | Direct script use while debugging reports |
+| `sdk/` | Smoke-test the installed Python SDK | `make python-sdk-verify` |
+
+## Compatibility Entrypoints
+
+Root-level Python wrappers use `_compat.py` to dispatch to the canonical
+workflow folders. Keep these wrappers small and keep new implementation logic
+inside the workflow folders above.
+
+Shell download wrappers remain at the root for public command compatibility and
+delegate to `scripts/models/`.
+
 ## Model Assets
 
 - `models/download_gear_sonic_models.sh`
@@ -45,3 +70,13 @@ Use `make benchmark-nvidia` for the full comparison package.
 - `sdk/python_sdk_smoke.py`
 
 Use `make python-sdk-verify` for the local SDK build/install/smoke path.
+
+## Script Edit Checks
+
+Use these focused checks after script changes:
+
+```bash
+python3 -m py_compile scripts/*.py scripts/*/*.py
+bash -n scripts/*.sh scripts/*/*.sh
+make python-test
+```
