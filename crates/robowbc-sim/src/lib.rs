@@ -112,8 +112,9 @@ pub struct MujocoElasticBandConfig {
     pub anchor: [f64; 3],
     /// Replace `anchor` with the selected body's initialized world position.
     ///
-    /// This preserves the standing height for local demos while still letting
-    /// the band catch the humanoid if it starts to fall.
+    /// Leave this `false` for official GR00T-style demos that use the fixed
+    /// `[0, 0, 1]` support point. Set it only for custom demos that need the
+    /// band anchored at the model's initialized body position.
     #[serde(default)]
     pub anchor_from_initial_pose: bool,
     /// Additional vertical rest length added to the spring error.

@@ -1035,7 +1035,7 @@ impl LiveTeleop {
             .enable()
             .map_err(|err| format!("failed to enable keyboard teleop: {err}"))?;
         println!(
-            "keyboard teleop active: press ] to engage policy after settle; WASD/QE update velocity, Space zeroes, 9 toggles support band (off can drop robot), O e-stops, Esc/Ctrl-C quits"
+            "keyboard teleop active: press ] to engage policy after settle; first 9 press in the terminal or MuJoCo viewer drops support band toward foot contact, WASD/QE update velocity, Space zeroes, O e-stops, Esc/Ctrl-C quits"
         );
         Ok(Self {
             source,
@@ -2419,7 +2419,7 @@ mod tests {
         assert!(band.enabled);
         assert_eq!(band.body_name, "pelvis");
         assert_eq!(band.anchor, [0.0, 0.0, 1.0]);
-        assert!(band.anchor_from_initial_pose);
+        assert!(!band.anchor_from_initial_pose);
         assert_eq!(band.length, 0.0);
         assert_eq!(band.kp_pos, 10_000.0);
         assert_eq!(band.kd_pos, 1_000.0);

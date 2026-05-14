@@ -45,10 +45,12 @@ make demo-keyboard
 `make demo-keyboard` is the protected clone-and-see-it-work path. It downloads
 the public GEAR-Sonic ONNX files and MuJoCo runtime on first run, starts the
 local MuJoCo viewer, and runs keyboard teleop. Keep the terminal focused:
-`]` engages after init-pose settle, `WASD` changes linear velocity, `QE` changes
-yaw, `Space` zeroes velocity, `9` toggles the support band, `O` sends a
-zero-velocity emergency-stop tick, and `Esc` quits. Preserve the demo guardrails
-in `docs/agents/keyboard-demo.md` when changing this path.
+`]` engages after init-pose settle. Then press `9` promptly in either the
+terminal or MuJoCo viewer if the support band is holding the robot high so it
+drops to foot contact. `WASD` changes linear velocity, `QE` changes yaw,
+`Space` zeroes velocity, `O` sends a zero-velocity emergency-stop tick, and
+`Esc` quits. Preserve the demo guardrails in `docs/agents/keyboard-demo.md`
+when changing this path.
 
 ## Runtime Surfaces
 

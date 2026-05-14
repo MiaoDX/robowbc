@@ -12,7 +12,7 @@ path = "src/lib.rs"
 [features]
 default = []
 mujoco = ["dep:mujoco-rs", "mujoco-rs/renderer"]
-mujoco-viewer = ["mujoco", "mujoco-rs/viewer"]
+mujoco-viewer = ["mujoco", "mujoco-rs/viewer-ui"]
 mujoco-auto-download = ["mujoco", "mujoco-rs/auto-download-mujoco"]
 
 [dependencies]

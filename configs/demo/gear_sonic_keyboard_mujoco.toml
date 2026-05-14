@@ -14,8 +14,10 @@
 #     -- run --config configs/demo/gear_sonic_keyboard_mujoco.toml --teleop keyboard
 #
 # Keep your terminal focused for keyboard input and watch the MuJoCo window:
-# `]` engages policy, WASD/QE drive, `9` toggles the support band. Turning the
-# band off can let the robot drop.
+# `]` engages policy, WASD/QE drive, and the first `9` press after policy
+# engagement toggles the MuJoCo support band off so the robot drops to foot
+# contact. The `9` support toggle works from both the terminal and the MuJoCo
+# viewer.
 
 [policy]
 name = "gear_sonic"
@@ -49,12 +51,13 @@ gain_profile = "simulation_pd"
 viewer = true
 
 [sim.elastic_band]
-# GR00T-style MuJoCo teleop support band. We anchor it to the initialized
-# pelvis pose so it catches a fall without lifting the feet off the ground.
+# GR00T-style MuJoCo teleop support band: fixed point [0, 0, 1] with the
+# published spring-damper gains. The first `9` press toggles it off, matching
+# the official "drop robot to ground" sim flow.
 enabled = true
 body_name = "pelvis"
 anchor = [0.0, 0.0, 1.0]
-anchor_from_initial_pose = true
+anchor_from_initial_pose = false
 length = 0.0
 kp_pos = 10000.0
 kd_pos = 1000.0
@@ -71,10 +74,11 @@ device = "cpu"
 
 [runtime]
 # Keyboard teleop starts in an init pose. Press `]` to queue policy engagement
-# after the 3.0s settle window, then use WASD/QE to drive. Press `9` to toggle
-# the elastic support band; turning it off can let the robot drop. Live teleop
-# runs until Esc or Ctrl-C. A zero command after engagement keeps holding the
-# default standing pose until the first nonzero velocity command.
+# after the 3.0s settle window. If the support band is holding the robot high,
+# press `9` promptly after engagement to drop to foot contact, then use WASD/QE
+# to drive. Live teleop runs until Esc or Ctrl-C. A zero command after
+# engagement keeps holding the default standing pose until the first nonzero
+# velocity command.
 velocity = [0.0, 0.0, 0.0]
 init_pose_secs = 3.0
 require_engage = true

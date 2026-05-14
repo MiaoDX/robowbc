@@ -67,14 +67,15 @@ robowbc run --config configs/demo/gear_sonic_keyboard_mujoco.toml --teleop keybo
 
 Keep the terminal focused for keyboard input and watch the MuJoCo window:
 `]` queues policy engagement after the 3.0s init-pose settle window, `WASD`
-changes linear velocity, `QE` changes yaw, `Space` zeroes velocity, `9` toggles
-the support band, `O` sends a zero-velocity emergency-stop tick, and
-`Esc`/`Ctrl-C` quits. WASD/QE velocity commands are held until engagement; if
-the command is still zero after engagement, the demo keeps holding the default
-standing pose until the first nonzero velocity command. Turning the support
-band off with `9` can let the robot drop. The demo config uses the GR00T scene
-wrapper and a neutral-height virtual support band so the robot stays
-recoverable without being lifted off the ground. It also uses
+changes linear velocity, `QE` changes yaw, `Space` zeroes velocity, and
+`O` sends a zero-velocity emergency-stop tick. After engagement, press `9`
+promptly in either the terminal or MuJoCo viewer if the support band is holding
+the robot high so it drops to foot contact; pressing `9` again toggles the band
+back on. `Esc`/`Ctrl-C` quits. WASD/QE velocity commands are held until
+engagement; if the command is still zero after engagement, the demo keeps
+holding the default standing pose until the first nonzero velocity command. The
+demo config uses the GR00T scene wrapper and the official MuJoCo support-band
+point/gains. It also uses
 `[sim].viewer = true`, so it requires a Linux desktop/OpenGL session. For
 headless machines, use `make site` or `make showcase-verify` instead.
 
