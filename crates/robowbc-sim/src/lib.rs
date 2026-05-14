@@ -69,6 +69,14 @@ pub struct MujocoConfig {
     /// when present.
     #[serde(default = "default_gain_profile")]
     pub gain_profile: MujocoGainProfile,
+    /// Apply [`robowbc_core::RobotConfig::joint_velocity_limits`] as a
+    /// software q-target slew limit before computing PD torques.
+    ///
+    /// The default preserves the generic hardware-style safety behavior. Set
+    /// this to `false` for official simulator parity when the upstream stack
+    /// sends each policy q-target directly to the `MuJoCo` PD loop.
+    #[serde(default = "default_enforce_target_velocity_limits")]
+    pub enforce_target_velocity_limits: bool,
     /// Open a live `MuJoCo` viewer and sync it after each control tick.
     ///
     /// Requires building with the `mujoco-viewer` feature. This is intended
@@ -91,6 +99,10 @@ fn default_substeps() -> usize {
 
 const fn default_gain_profile() -> MujocoGainProfile {
     MujocoGainProfile::SimulationPd
+}
+
+const fn default_enforce_target_velocity_limits() -> bool {
+    true
 }
 
 /// Upstream-style `MuJoCo` virtual support band.
@@ -185,6 +197,7 @@ impl Default for MujocoConfig {
             timestep: default_timestep(),
             substeps: default_substeps(),
             gain_profile: default_gain_profile(),
+            enforce_target_velocity_limits: default_enforce_target_velocity_limits(),
             viewer: false,
             elastic_band: None,
         }
@@ -283,6 +296,7 @@ mod tests {
         assert!((cfg.timestep - 0.002).abs() < f64::EPSILON);
         assert_eq!(cfg.substeps, 10);
         assert_eq!(cfg.gain_profile, MujocoGainProfile::SimulationPd);
+        assert!(cfg.enforce_target_velocity_limits);
     }
 
     #[test]
@@ -292,6 +306,7 @@ mod tests {
             timestep: 0.001,
             substeps: 20,
             gain_profile: MujocoGainProfile::DefaultPd,
+            enforce_target_velocity_limits: false,
             viewer: true,
             elastic_band: Some(MujocoElasticBandConfig::default()),
         };

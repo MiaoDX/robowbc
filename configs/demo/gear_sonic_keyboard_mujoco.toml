@@ -47,7 +47,11 @@ config_path = "configs/robots/unitree_g1_gear_sonic.toml"
 model_path = "assets/robots/groot_g1_gear_sonic/scene_29dof.xml"
 timestep = 0.002
 substeps = 10
-gain_profile = "simulation_pd"
+gain_profile = "default_pd"
+# Match the official GR00T MuJoCo bridge: policy q-targets and the deployment
+# kp/kd values go directly into the simulator PD loop without the hardware-side
+# target slew limiter.
+enforce_target_velocity_limits = false
 viewer = true
 
 [sim.elastic_band]
@@ -77,8 +81,9 @@ device = "cpu"
 # after the 3.0s settle window. If the support band is holding the robot high,
 # press `9` promptly after engagement to drop to foot contact, then use WASD/QE
 # to drive. Live teleop runs until Esc or Ctrl-C. A zero command after
-# engagement keeps holding the default standing pose until the first nonzero
-# velocity command.
+# engagement runs the official idle planner/controller path; keep the `9` drop
+# prompt and first velocity command close to engagement, matching upstream sim
+# teleop practice.
 velocity = [0.0, 0.0, 0.0]
 init_pose_secs = 3.0
 require_engage = true

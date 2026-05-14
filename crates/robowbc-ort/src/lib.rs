@@ -786,10 +786,15 @@ const GEAR_SONIC_DEFAULT_MODE_IDLE: i64 = 0;
 const GEAR_SONIC_DEFAULT_MODE_SLOW_WALK: i64 = 1;
 const GEAR_SONIC_DEFAULT_MODE_WALK: i64 = 2;
 const GEAR_SONIC_DEFAULT_MODE_RUN: i64 = 3;
+const GEAR_SONIC_DEFAULT_RANDOM_SEED: i64 = 1234;
 const GEAR_SONIC_CONTROL_DT_SECS: f32 = 1.0 / 50.0;
 const GEAR_SONIC_PLANNER_THREAD_INTERVAL_TICKS: usize = 5;
 const GEAR_SONIC_PLANNER_LOOK_AHEAD_STEPS: usize = 2;
 const GEAR_SONIC_PLANNER_BLEND_FRAMES: usize = 8;
+const GEAR_SONIC_IDLE_READAPT_BLEND_WEIGHT: f32 = 0.02;
+const GEAR_SONIC_IDLE_READAPT_ADAPT_TRIGGER_RAD: f32 = 0.10;
+const GEAR_SONIC_IDLE_READAPT_ADAPT_STOP_RAD: f32 = 0.05;
+const GEAR_SONIC_IDLE_READAPT_RECOVER_TRIGGER_RAD: f32 = 0.045;
 const GEAR_SONIC_ENCODER_DIM: usize = 64;
 const GEAR_SONIC_ENCODER_OBS_DICT_DIM: usize = 1762;
 const GEAR_SONIC_DECODER_OBS_DICT_DIM: usize = 994;
@@ -801,17 +806,30 @@ const GEAR_SONIC_ENCODER_MOTION_JOINT_POSITIONS_OFFSET: usize = 4;
 const GEAR_SONIC_ENCODER_MOTION_JOINT_VELOCITIES_OFFSET: usize = 294;
 const GEAR_SONIC_ENCODER_MOTION_ANCHOR_ORIENTATION_OFFSET: usize = 601;
 
-/// `IsaacLab` to `MuJoCo` joint index remapping for G1 29-DOF.
+/// Effective `MuJoCo` to `IsaacLab` joint index remapping for G1 29-DOF.
 ///
-/// Despite the upstream name, this table is used as the effective
-/// `MuJoCo -> IsaacLab` remap throughout the published GEAR-SONIC runtime.
-/// Planner outputs and live observations arrive in `MuJoCo` order, and
-/// decoder outputs are consumed by looking up the `IsaacLab` index for each
-/// `MuJoCo` joint.
-const GEAR_SONIC_ISAACLAB_TO_MUJOCO: [usize; 29] = [
+/// Upstream names this array `isaaclab_to_mujoco`, but its use in
+/// `CreatePolicyCommand()` is `raw_actions[isaaclab_to_mujoco[mujoco_idx]]`.
+/// It therefore maps a `MuJoCo`/hardware joint index to the policy's
+/// `IsaacLab` action/observation index.
+const GEAR_SONIC_MUJOCO_TO_ISAACLAB: [usize; 29] = [
     0, 3, 6, 9, 13, 17, 1, 4, 7, 10, 14, 18, 2, 5, 8, 11, 15, 19, 21, 23, 25, 27, 12, 16, 20, 22,
     24, 26, 28,
 ];
+
+/// Effective `IsaacLab` to `MuJoCo` joint index remapping for G1 29-DOF.
+///
+/// Upstream names this array `mujoco_to_isaaclab` and uses it when converting
+/// planner `mujoco_qpos` output into the policy-order motion sequence.
+const GEAR_SONIC_ISAACLAB_TO_MUJOCO: [usize; 29] = [
+    0, 6, 12, 1, 7, 13, 2, 8, 14, 3, 9, 15, 22, 4, 10, 16, 23, 5, 11, 17, 24, 18, 25, 19, 26, 20,
+    27, 21, 28,
+];
+
+/// Lower-body IsaacLab-order joint indexes used by upstream idle readaptation.
+const GEAR_SONIC_IDLE_READAPT_LOWER_BODY_ISAACLAB_INDICES: [usize; 12] =
+    [0, 1, 3, 4, 6, 7, 9, 10, 13, 14, 17, 18];
+const GEAR_SONIC_IDLE_READAPT_LOWER_BODY_COUNT_F32: f32 = 12.0;
 
 /// Per-joint action scale for G1 in `MuJoCo` order.
 ///
@@ -863,6 +881,16 @@ struct GearSonicPlannerState {
     init_ref_root_quat_wxyz: Option<[f32; 4]>,
     last_command: Option<GearSonicPlannerCommand>,
     pending_replan: Option<GearSonicPendingPlannerReplan>,
+    idle_readapt_original_targets_isaaclab: [f32; 29],
+    idle_readapt_stored: bool,
+    idle_readapt_state: GearSonicIdleReadaptState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GearSonicIdleReadaptState {
+    Idle,
+    Adapting,
+    Recovering,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -901,6 +929,9 @@ impl GearSonicPlannerState {
             init_ref_root_quat_wxyz: None,
             last_command: None,
             pending_replan: None,
+            idle_readapt_original_targets_isaaclab: [0.0; 29],
+            idle_readapt_stored: false,
+            idle_readapt_state: GearSonicIdleReadaptState::Idle,
         }
     }
 }
@@ -1635,19 +1666,19 @@ impl GearSonicPolicy {
 
     fn planner_joint_positions_isaaclab(frame: &[f32]) -> Vec<f32> {
         let mut positions = vec![0.0_f32; GEAR_SONIC_ISAACLAB_TO_MUJOCO.len()];
-        for (mujoco_idx, &isaaclab_idx) in GEAR_SONIC_ISAACLAB_TO_MUJOCO.iter().enumerate() {
+        for (isaaclab_idx, &mujoco_idx) in GEAR_SONIC_ISAACLAB_TO_MUJOCO.iter().enumerate() {
             positions[isaaclab_idx] = frame[GEAR_SONIC_PLANNER_JOINT_OFFSET + mujoco_idx];
         }
         positions
     }
 
     fn joint_positions_mujoco_to_isaaclab(joint_positions: &[f32]) -> Vec<f32> {
-        if joint_positions.len() != GEAR_SONIC_ISAACLAB_TO_MUJOCO.len() {
+        if joint_positions.len() != GEAR_SONIC_MUJOCO_TO_ISAACLAB.len() {
             return joint_positions.to_vec();
         }
 
         let mut positions = vec![0.0_f32; joint_positions.len()];
-        for (mujoco_idx, &isaaclab_idx) in GEAR_SONIC_ISAACLAB_TO_MUJOCO.iter().enumerate() {
+        for (mujoco_idx, &isaaclab_idx) in GEAR_SONIC_MUJOCO_TO_ISAACLAB.iter().enumerate() {
             positions[isaaclab_idx] = joint_positions[mujoco_idx];
         }
         positions
@@ -1657,8 +1688,8 @@ impl GearSonicPolicy {
         robot: &RobotConfig,
         obs: &Observation,
     ) -> Vec<f32> {
-        if obs.joint_positions.len() != GEAR_SONIC_ISAACLAB_TO_MUJOCO.len()
-            || robot.default_pose.len() != GEAR_SONIC_ISAACLAB_TO_MUJOCO.len()
+        if obs.joint_positions.len() != GEAR_SONIC_MUJOCO_TO_ISAACLAB.len()
+            || robot.default_pose.len() != GEAR_SONIC_MUJOCO_TO_ISAACLAB.len()
         {
             return obs
                 .joint_positions
@@ -1669,7 +1700,7 @@ impl GearSonicPolicy {
         }
 
         let mut positions = vec![0.0_f32; obs.joint_positions.len()];
-        for (mujoco_idx, &isaaclab_idx) in GEAR_SONIC_ISAACLAB_TO_MUJOCO.iter().enumerate() {
+        for (mujoco_idx, &isaaclab_idx) in GEAR_SONIC_MUJOCO_TO_ISAACLAB.iter().enumerate() {
             positions[isaaclab_idx] =
                 obs.joint_positions[mujoco_idx] - robot.default_pose[mujoco_idx];
         }
@@ -1677,12 +1708,12 @@ impl GearSonicPolicy {
     }
 
     fn observation_joint_velocities_isaaclab(obs: &Observation) -> Vec<f32> {
-        if obs.joint_velocities.len() != GEAR_SONIC_ISAACLAB_TO_MUJOCO.len() {
+        if obs.joint_velocities.len() != GEAR_SONIC_MUJOCO_TO_ISAACLAB.len() {
             return obs.joint_velocities.clone();
         }
 
         let mut velocities = vec![0.0_f32; obs.joint_velocities.len()];
-        for (mujoco_idx, &isaaclab_idx) in GEAR_SONIC_ISAACLAB_TO_MUJOCO.iter().enumerate() {
+        for (mujoco_idx, &isaaclab_idx) in GEAR_SONIC_MUJOCO_TO_ISAACLAB.iter().enumerate() {
             velocities[isaaclab_idx] = obs.joint_velocities[mujoco_idx];
         }
         velocities
@@ -1943,6 +1974,16 @@ impl GearSonicPolicy {
         }
     }
 
+    fn planner_periodic_replan_due(
+        command: GearSonicPlannerCommand,
+        steps_since_plan: usize,
+    ) -> bool {
+        if command.mode == GEAR_SONIC_DEFAULT_MODE_IDLE {
+            return false;
+        }
+        steps_since_plan >= Self::planner_replan_interval_ticks(command)
+    }
+
     fn build_velocity_encoder_obs_dict(
         obs: &Observation,
         planner_state: &GearSonicPlannerState,
@@ -2027,6 +2068,106 @@ impl GearSonicPolicy {
             .min(planner_state.motion_qpos_50hz.len() - 1);
     }
 
+    fn planner_qpos_isaaclab_joint(frame: &[f32], isaaclab_idx: usize) -> f32 {
+        let mujoco_idx = GEAR_SONIC_ISAACLAB_TO_MUJOCO[isaaclab_idx];
+        frame[GEAR_SONIC_PLANNER_JOINT_OFFSET + mujoco_idx]
+    }
+
+    fn set_planner_qpos_isaaclab_joint(frame: &mut [f32], isaaclab_idx: usize, value: f32) {
+        let mujoco_idx = GEAR_SONIC_ISAACLAB_TO_MUJOCO[isaaclab_idx];
+        frame[GEAR_SONIC_PLANNER_JOINT_OFFSET + mujoco_idx] = value;
+    }
+
+    fn maybe_apply_idle_readaptation(
+        planner_state: &mut GearSonicPlannerState,
+        obs: &Observation,
+        command: GearSonicPlannerCommand,
+    ) {
+        if command.mode != GEAR_SONIC_DEFAULT_MODE_IDLE
+            || planner_state.motion_qpos_50hz.is_empty()
+            || obs.joint_positions.len() != GEAR_SONIC_ISAACLAB_TO_MUJOCO.len()
+        {
+            return;
+        }
+
+        let last_frame_idx = planner_state.motion_qpos_50hz.len() - 1;
+        if planner_state.current_motion_frame < last_frame_idx {
+            return;
+        }
+
+        if !planner_state.idle_readapt_stored {
+            let frame = &planner_state.motion_qpos_50hz[last_frame_idx];
+            for &isaaclab_idx in &GEAR_SONIC_IDLE_READAPT_LOWER_BODY_ISAACLAB_INDICES {
+                planner_state.idle_readapt_original_targets_isaaclab[isaaclab_idx] =
+                    Self::planner_qpos_isaaclab_joint(frame, isaaclab_idx);
+            }
+            planner_state.idle_readapt_stored = true;
+            planner_state.idle_readapt_state = GearSonicIdleReadaptState::Idle;
+        }
+
+        let frame = &planner_state.motion_qpos_50hz[last_frame_idx];
+        let mut total_error = 0.0_f32;
+        for &isaaclab_idx in &GEAR_SONIC_IDLE_READAPT_LOWER_BODY_ISAACLAB_INDICES {
+            let mujoco_idx = GEAR_SONIC_ISAACLAB_TO_MUJOCO[isaaclab_idx];
+            total_error += (Self::planner_qpos_isaaclab_joint(frame, isaaclab_idx)
+                - obs.joint_positions[mujoco_idx])
+                .abs();
+        }
+        let avg_error = total_error / GEAR_SONIC_IDLE_READAPT_LOWER_BODY_COUNT_F32;
+
+        match planner_state.idle_readapt_state {
+            GearSonicIdleReadaptState::Idle => {
+                if avg_error > GEAR_SONIC_IDLE_READAPT_ADAPT_TRIGGER_RAD {
+                    planner_state.idle_readapt_state = GearSonicIdleReadaptState::Adapting;
+                } else if avg_error < GEAR_SONIC_IDLE_READAPT_RECOVER_TRIGGER_RAD {
+                    planner_state.idle_readapt_state = GearSonicIdleReadaptState::Recovering;
+                }
+            }
+            GearSonicIdleReadaptState::Adapting => {
+                if avg_error < GEAR_SONIC_IDLE_READAPT_ADAPT_STOP_RAD {
+                    planner_state.idle_readapt_state = GearSonicIdleReadaptState::Idle;
+                }
+            }
+            GearSonicIdleReadaptState::Recovering => {
+                if avg_error > GEAR_SONIC_IDLE_READAPT_ADAPT_TRIGGER_RAD {
+                    planner_state.idle_readapt_state = GearSonicIdleReadaptState::Adapting;
+                }
+            }
+        }
+
+        match planner_state.idle_readapt_state {
+            GearSonicIdleReadaptState::Adapting => {
+                let frame = &mut planner_state.motion_qpos_50hz[last_frame_idx];
+                for &isaaclab_idx in &GEAR_SONIC_IDLE_READAPT_LOWER_BODY_ISAACLAB_INDICES {
+                    let mujoco_idx = GEAR_SONIC_ISAACLAB_TO_MUJOCO[isaaclab_idx];
+                    let current = Self::planner_qpos_isaaclab_joint(frame, isaaclab_idx);
+                    let actual = obs.joint_positions[mujoco_idx];
+                    Self::set_planner_qpos_isaaclab_joint(
+                        frame,
+                        isaaclab_idx,
+                        (1.0 - GEAR_SONIC_IDLE_READAPT_BLEND_WEIGHT) * current
+                            + GEAR_SONIC_IDLE_READAPT_BLEND_WEIGHT * actual,
+                    );
+                }
+            }
+            GearSonicIdleReadaptState::Recovering => {
+                let frame = &mut planner_state.motion_qpos_50hz[last_frame_idx];
+                for &isaaclab_idx in &GEAR_SONIC_IDLE_READAPT_LOWER_BODY_ISAACLAB_INDICES {
+                    let current = Self::planner_qpos_isaaclab_joint(frame, isaaclab_idx);
+                    let original =
+                        planner_state.idle_readapt_original_targets_isaaclab[isaaclab_idx];
+                    Self::set_planner_qpos_isaaclab_joint(
+                        frame,
+                        isaaclab_idx,
+                        (1.0 - GEAR_SONIC_IDLE_READAPT_BLEND_WEIGHT) * current
+                            + GEAR_SONIC_IDLE_READAPT_BLEND_WEIGHT * original,
+                    );
+                }
+            }
+            GearSonicIdleReadaptState::Idle => {}
+        }
+    }
+
     fn run_fixture_motion_tokens(
         &self,
         obs: &Observation,
@@ -2090,7 +2231,7 @@ impl GearSonicPolicy {
         let target_vel = [command.target_vel];
         let mode = [command.mode];
         let height = [command.height];
-        let random_seed = [0_i64];
+        let random_seed = [GEAR_SONIC_DEFAULT_RANDOM_SEED];
         let has_specific_target = [0_i64];
         let specific_target_positions = vec![0.0_f32; 4 * 3];
         let specific_target_headings = vec![0.0_f32; 4];
@@ -2271,6 +2412,8 @@ impl GearSonicPolicy {
         planner_state.motion_joint_velocities_isaaclab =
             Self::compute_motion_joint_velocities_isaaclab(&planner_state.motion_qpos_50hz);
         planner_state.current_motion_frame = 0;
+        planner_state.idle_readapt_stored = false;
+        planner_state.idle_readapt_state = GearSonicIdleReadaptState::Idle;
         planner_state.init_ref_root_quat_wxyz = planner_state
             .motion_qpos_50hz
             .first()
@@ -2366,13 +2509,6 @@ impl GearSonicPolicy {
         })?;
         let command_speed =
             (twist.linear[0] * twist.linear[0] + twist.linear[1] * twist.linear[1]).sqrt();
-        if planner_state.motion_qpos_50hz.is_empty() && command_speed <= 0.01 {
-            drop(planner_state);
-            return Ok(JointPositionTargets {
-                positions: self.robot.default_pose.clone(),
-                timestamp: obs.timestamp,
-            });
-        }
         if planner_state.motion_qpos_50hz.is_empty() {
             planner_state.context = Self::initialize_planner_context(&self.robot, obs);
             planner_state.last_context_frame = planner_state
@@ -2387,13 +2523,12 @@ impl GearSonicPolicy {
         let initializing_planner = planner_state.motion_qpos_50hz.is_empty();
         let planner_command =
             Self::planner_command_for_velocity_bootstrap(&planner_state, command, command_speed);
-        let replan_interval_ticks = Self::planner_replan_interval_ticks(command);
         let planner_tick_due = initializing_planner
             || planner_state.steps_since_planner_tick >= GEAR_SONIC_PLANNER_THREAD_INTERVAL_TICKS;
         let needs_replan = initializing_planner
             || (planner_tick_due
                 && (Self::planner_command_changed(planner_state.last_command, command)
-                    || planner_state.steps_since_plan >= replan_interval_ticks));
+                    || Self::planner_periodic_replan_due(command, planner_state.steps_since_plan)));
 
         if needs_replan {
             if !planner_state.motion_qpos_50hz.is_empty() {
@@ -2451,6 +2586,7 @@ impl GearSonicPolicy {
             robowbc_core::WbcError::InferenceFailed("planner state mutex poisoned".to_owned())
         })?;
         Self::advance_planner_motion_frame(&mut planner_state);
+        Self::maybe_apply_idle_readaptation(&mut planner_state, obs, command);
         drop(planner_state);
 
         Ok(targets)
@@ -2668,7 +2804,7 @@ impl GearSonicPolicy {
         }
 
         let mut positions = vec![0.0_f32; self.robot.joint_count];
-        for (mujoco_idx, &isaaclab_idx) in GEAR_SONIC_ISAACLAB_TO_MUJOCO.iter().enumerate() {
+        for (mujoco_idx, &isaaclab_idx) in GEAR_SONIC_MUJOCO_TO_ISAACLAB.iter().enumerate() {
             let action = raw_actions[isaaclab_idx];
             let scaled = action * GEAR_SONIC_G1_ACTION_SCALE[mujoco_idx];
             positions[mujoco_idx] = self.robot.default_pose[mujoco_idx] + scaled;
@@ -2961,8 +3097,8 @@ mod tests {
     }
 
     fn joint_velocities_isaaclab_to_mujoco(isaaclab_velocities: &[f32]) -> Vec<f32> {
-        let mut mujoco_velocities = vec![0.0_f32; GEAR_SONIC_ISAACLAB_TO_MUJOCO.len()];
-        for (mujoco_idx, &isaaclab_idx) in GEAR_SONIC_ISAACLAB_TO_MUJOCO.iter().enumerate() {
+        let mut mujoco_velocities = vec![0.0_f32; GEAR_SONIC_MUJOCO_TO_ISAACLAB.len()];
+        for (mujoco_idx, &isaaclab_idx) in GEAR_SONIC_MUJOCO_TO_ISAACLAB.iter().enumerate() {
             mujoco_velocities[mujoco_idx] = isaaclab_velocities[isaaclab_idx];
         }
         mujoco_velocities
@@ -2980,7 +3116,7 @@ mod tests {
         let joint_velocities = motion_joint_velocities_isaaclab
             .get(clamped_idx)
             .map_or_else(
-                || vec![0.0_f32; GEAR_SONIC_ISAACLAB_TO_MUJOCO.len()],
+                || vec![0.0_f32; GEAR_SONIC_MUJOCO_TO_ISAACLAB.len()],
                 |velocities| joint_velocities_isaaclab_to_mujoco(velocities),
             );
 
@@ -3456,12 +3592,12 @@ mod tests {
     }
 
     /// Regression for the keyboard demo: pressing `]` engages the velocity
-    /// policy while the command is still zero. That must hold the default pose
-    /// instead of running the narrower standing-placeholder decoder path, which
-    /// can emit large upper-body targets with the published checkpoints.
+    /// policy while the command is still zero. That must start the real idle
+    /// planner/decoder path so the support band can be dropped while the
+    /// controller is already active.
     #[test]
     #[ignore = "requires real GEAR-SONIC ONNX models; run scripts/models/download_gear_sonic_models.sh first"]
-    fn gear_sonic_zero_velocity_without_planner_motion_holds_default_pose() {
+    fn gear_sonic_zero_velocity_bootstraps_idle_planner_motion() {
         let model_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../models/gear-sonic");
         let encoder_path = model_dir.join("model_encoder.onnx");
         let decoder_path = model_dir.join("model_decoder.onnx");
@@ -3517,9 +3653,21 @@ mod tests {
 
         let targets = policy
             .predict(&obs)
-            .expect("zero-velocity prediction should hold default pose");
+            .expect("zero-velocity prediction should run idle planner");
 
-        assert_eq!(targets.positions, robot.default_pose);
+        assert_eq!(targets.positions.len(), robot.joint_count);
+        let planner_state = policy
+            .planner_state
+            .lock()
+            .expect("planner state mutex should not be poisoned");
+        assert!(
+            !planner_state.motion_qpos_50hz.is_empty(),
+            "engaged zero-velocity mode must bootstrap an idle planner motion"
+        );
+        assert_eq!(
+            planner_state.last_command,
+            Some(GearSonicPolicy::idle_planner_command())
+        );
     }
 
     #[test]
@@ -3684,6 +3832,130 @@ mod tests {
     }
 
     #[test]
+    fn gear_sonic_idle_command_does_not_periodically_replan() {
+        assert!(!GearSonicPolicy::planner_periodic_replan_due(
+            GearSonicPolicy::idle_planner_command(),
+            GEAR_SONIC_PLANNER_REPLAN_INTERVAL_TICKS_DEFAULT
+        ));
+    }
+
+    #[test]
+    fn gear_sonic_idle_tail_readaptation_blends_lower_body_toward_actual_joints() {
+        let robot = test_robot_config(29);
+        let mut planner_state = GearSonicPlannerState::new(&robot);
+        planner_state.motion_qpos_50hz = vec![
+            GearSonicPolicy::make_standing_qpos(&robot),
+            GearSonicPolicy::make_standing_qpos(&robot),
+        ];
+        planner_state.current_motion_frame = planner_state.motion_qpos_50hz.len() - 1;
+
+        {
+            let tail_frame = planner_state
+                .motion_qpos_50hz
+                .last_mut()
+                .expect("tail frame should exist");
+            for &isaaclab_idx in &GEAR_SONIC_IDLE_READAPT_LOWER_BODY_ISAACLAB_INDICES {
+                GearSonicPolicy::set_planner_qpos_isaaclab_joint(tail_frame, isaaclab_idx, 0.5);
+            }
+        }
+
+        let obs = Observation {
+            joint_positions: vec![0.0; 29],
+            joint_velocities: vec![0.0; 29],
+            gravity_vector: [0.0, 0.0, -1.0],
+            angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
+            command: WbcCommand::Velocity(robowbc_core::Twist {
+                linear: [0.0, 0.0, 0.0],
+                angular: [0.0, 0.0, 0.0],
+            }),
+            timestamp: Instant::now(),
+        };
+
+        GearSonicPolicy::maybe_apply_idle_readaptation(
+            &mut planner_state,
+            &obs,
+            GearSonicPolicy::idle_planner_command(),
+        );
+
+        assert!(planner_state.idle_readapt_stored);
+        assert_eq!(
+            planner_state.idle_readapt_state,
+            GearSonicIdleReadaptState::Adapting
+        );
+        let tail_frame = planner_state
+            .motion_qpos_50hz
+            .last()
+            .expect("tail frame should exist");
+        for &isaaclab_idx in &GEAR_SONIC_IDLE_READAPT_LOWER_BODY_ISAACLAB_INDICES {
+            let target = GearSonicPolicy::planner_qpos_isaaclab_joint(tail_frame, isaaclab_idx);
+            assert!((target - 0.49).abs() < 1e-6);
+            assert!(
+                (planner_state.idle_readapt_original_targets_isaaclab[isaaclab_idx] - 0.5).abs()
+                    < 1e-6
+            );
+        }
+    }
+
+    #[test]
+    fn gear_sonic_idle_tail_readaptation_recovers_toward_original_target() {
+        let robot = test_robot_config(29);
+        let mut planner_state = GearSonicPlannerState::new(&robot);
+        planner_state.motion_qpos_50hz = vec![GearSonicPolicy::make_standing_qpos(&robot)];
+        planner_state.current_motion_frame = 0;
+        planner_state.idle_readapt_stored = true;
+        planner_state.idle_readapt_state = GearSonicIdleReadaptState::Recovering;
+
+        for &isaaclab_idx in &GEAR_SONIC_IDLE_READAPT_LOWER_BODY_ISAACLAB_INDICES {
+            planner_state.idle_readapt_original_targets_isaaclab[isaaclab_idx] = 0.5;
+        }
+
+        let obs = Observation {
+            joint_positions: vec![0.0; 29],
+            joint_velocities: vec![0.0; 29],
+            gravity_vector: [0.0, 0.0, -1.0],
+            angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
+            command: WbcCommand::Velocity(robowbc_core::Twist {
+                linear: [0.0, 0.0, 0.0],
+                angular: [0.0, 0.0, 0.0],
+            }),
+            timestamp: Instant::now(),
+        };
+
+        GearSonicPolicy::maybe_apply_idle_readaptation(
+            &mut planner_state,
+            &obs,
+            GearSonicPolicy::idle_planner_command(),
+        );
+
+        let tail_frame = planner_state
+            .motion_qpos_50hz
+            .last()
+            .expect("tail frame should exist");
+        for &isaaclab_idx in &GEAR_SONIC_IDLE_READAPT_LOWER_BODY_ISAACLAB_INDICES {
+            let target = GearSonicPolicy::planner_qpos_isaaclab_joint(tail_frame, isaaclab_idx);
+            assert!((target - 0.01).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn gear_sonic_walk_command_periodically_replans() {
+        let command = GearSonicPlannerCommand {
+            mode: GEAR_SONIC_DEFAULT_MODE_WALK,
+            target_vel: -1.0,
+            height: GEAR_SONIC_DEFAULT_HEIGHT_SENTINEL,
+            movement_direction: [1.0, 0.0, 0.0],
+            facing_direction: [1.0, 0.0, 0.0],
+        };
+
+        assert!(GearSonicPolicy::planner_periodic_replan_due(
+            command,
+            GEAR_SONIC_PLANNER_REPLAN_INTERVAL_TICKS_DEFAULT
+        ));
+    }
+
+    #[test]
     fn gear_sonic_planner_allowed_pred_mask_matches_upstream_default() {
         assert_eq!(
             GEAR_SONIC_ALLOWED_PRED_NUM_TOKENS_MASK,
@@ -3694,6 +3966,11 @@ mod tests {
     #[test]
     fn gear_sonic_planner_default_height_matches_upstream_default() {
         assert!((GEAR_SONIC_DEFAULT_HEIGHT_METERS - 0.788_74).abs() < 1e-6);
+    }
+
+    #[test]
+    fn gear_sonic_planner_random_seed_matches_upstream_default() {
+        assert_eq!(GEAR_SONIC_DEFAULT_RANDOM_SEED, 1234);
     }
 
     #[test]
@@ -3767,7 +4044,7 @@ mod tests {
         let offsets = GearSonicPolicy::observation_joint_positions_isaaclab_offsets(&robot, &obs);
         let velocities = GearSonicPolicy::observation_joint_velocities_isaaclab(&obs);
 
-        for (mujoco_idx, &isaaclab_idx) in GEAR_SONIC_ISAACLAB_TO_MUJOCO.iter().enumerate() {
+        for (mujoco_idx, &isaaclab_idx) in GEAR_SONIC_MUJOCO_TO_ISAACLAB.iter().enumerate() {
             let expected_offset = joint_positions[mujoco_idx] - robot.default_pose[mujoco_idx];
             assert!(
                 (offsets[isaaclab_idx] - expected_offset).abs() < 1e-6,
@@ -3872,6 +4149,8 @@ mod tests {
         let decoder_obs = GearSonicPolicy::build_decoder_obs_dict(&tokens, &history);
 
         let mut expected = tokens.clone();
+        // Upstream release observations call StateLogger::GetLatest with the
+        // default newest_first=false, so each history block is oldest-to-newest.
         for angular_velocity in &history.angular_velocity {
             expected.extend_from_slice(angular_velocity);
         }

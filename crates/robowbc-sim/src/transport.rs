@@ -629,13 +629,17 @@ impl RobotTransport for MujocoTransport {
         let after_pos =
             clamp_position_targets(targets, self.robot_config.simulation_joint_limits());
         let control_frequency_hz = control_frequency_hz(&self.config);
-        let safe_targets = if let Some(ref vel_limits) = self.robot_config.joint_velocity_limits {
-            clamp_velocity_targets(
-                &after_pos,
-                &self.prev_positions,
-                vel_limits,
-                control_frequency_hz,
-            )
+        let safe_targets = if self.config.enforce_target_velocity_limits {
+            if let Some(ref vel_limits) = self.robot_config.joint_velocity_limits {
+                clamp_velocity_targets(
+                    &after_pos,
+                    &self.prev_positions,
+                    vel_limits,
+                    control_frequency_hz,
+                )
+            } else {
+                after_pos
+            }
         } else {
             after_pos
         };
@@ -1629,6 +1633,7 @@ mod tests {
                 timestep: 0.002,
                 substeps: 1,
                 gain_profile: MujocoGainProfile::DefaultPd,
+                enforce_target_velocity_limits: true,
                 viewer: false,
                 elastic_band: None,
             },
@@ -1788,6 +1793,18 @@ mod tests {
     }
 
     #[test]
+    fn gravity_from_free_joint_quaternion_matches_official_projected_gravity_signs() {
+        let quarter_turn = std::f64::consts::FRAC_PI_4;
+        let pitch_up_gravity =
+            gravity_from_free_joint_quaternion([quarter_turn.cos(), 0.0, quarter_turn.sin(), 0.0]);
+        assert_vec3_approx_eq(pitch_up_gravity, [1.0, 0.0, 0.0]);
+
+        let roll_left_gravity =
+            gravity_from_free_joint_quaternion([quarter_turn.cos(), quarter_turn.sin(), 0.0, 0.0]);
+        assert_vec3_approx_eq(roll_left_gravity, [0.0, -1.0, 0.0]);
+    }
+
+    #[test]
     fn recv_imu_uses_floating_base_state_when_available() {
         let robot = load_robot_config("configs/robots/unitree_g1.toml");
         let mut transport = MujocoTransport::new(
@@ -1890,6 +1907,34 @@ mod tests {
             .expect("send should succeed");
 
         assert_eq!(transport.prev_positions, expected.positions);
+    }
+
+    #[test]
+    fn send_joint_targets_can_disable_target_velocity_limit_for_official_sim() {
+        let robot = load_robot_config("configs/robots/unitree_g1.toml");
+        let mut transport = MujocoTransport::new(
+            MujocoConfig {
+                model_path: g1_model_path(),
+                timestep: 0.002,
+                substeps: 10,
+                enforce_target_velocity_limits: false,
+                ..MujocoConfig::default()
+            },
+            robot.clone(),
+        )
+        .expect("transport should initialize");
+
+        let unsafe_targets = JointPositionTargets {
+            positions: vec![100.0; robot.joint_count],
+            timestamp: Instant::now(),
+        };
+        let after_pos = clamp_position_targets(&unsafe_targets, &robot.joint_limits);
+
+        transport
+            .send_joint_targets(&unsafe_targets)
+            .expect("send should succeed");
+
+        assert_eq!(transport.prev_positions, after_pos.positions);
     }
 
     #[test]

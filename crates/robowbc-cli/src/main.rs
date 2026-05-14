@@ -2412,6 +2412,15 @@ mod tests {
             sim.model_path,
             PathBuf::from("assets/robots/groot_g1_gear_sonic/scene_29dof.xml")
         );
+        assert_eq!(
+            sim.gain_profile.as_str(),
+            "default_pd",
+            "keyboard demo must use the official low-command kp/kd gains"
+        );
+        assert!(
+            !sim.enforce_target_velocity_limits,
+            "official MuJoCo bridge sends q-targets directly without the hardware target slew limiter"
+        );
 
         let band = sim
             .elastic_band
