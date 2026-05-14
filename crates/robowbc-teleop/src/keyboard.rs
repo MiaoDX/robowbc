@@ -17,7 +17,7 @@
 
 use crate::keymap::{KeymapConfig, TeleopAction};
 use crate::{TeleopError, TeleopEvent, TeleopSource};
-use crossterm::event::{poll, read, Event, KeyEvent, KeyEventKind};
+use crossterm::event::{poll, read, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use std::time::Duration;
 
@@ -109,6 +109,9 @@ impl KeyboardTeleop {
         // this is a no-op there.
         if !matches!(event.kind, KeyEventKind::Press) {
             return None;
+        }
+        if is_ctrl_c(event) {
+            return Some(TeleopEvent::Quit);
         }
         let action = self.keymap.lookup(event)?;
         Some(self.apply_action(action))
@@ -249,16 +252,25 @@ fn clamp_step(value: f32, clamp: f32) -> f32 {
     value.clamp(-abs_clamp, abs_clamp)
 }
 
+fn is_ctrl_c(event: KeyEvent) -> bool {
+    matches!(event.code, KeyCode::Char('c' | 'C'))
+        && event.modifiers.contains(KeyModifiers::CONTROL)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{KeyCode, KeyEventKind, KeyEventState, KeyModifiers};
+    use crossterm::event::{KeyEventKind, KeyEventState};
     use std::time::Instant;
 
     fn key_press(code: KeyCode) -> KeyEvent {
+        key_press_with_modifiers(code, KeyModifiers::NONE)
+    }
+
+    fn key_press_with_modifiers(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
         KeyEvent {
             code,
-            modifiers: KeyModifiers::NONE,
+            modifiers,
             kind: KeyEventKind::Press,
             state: KeyEventState::NONE,
         }
@@ -355,6 +367,18 @@ mod tests {
     fn esc_emits_quit() {
         let mut teleop = KeyboardTeleop::new();
         let event = teleop.handle_key(key_press(KeyCode::Esc)).unwrap();
+        assert_eq!(event, TeleopEvent::Quit);
+    }
+
+    #[test]
+    fn ctrl_c_emits_quit_in_raw_mode() {
+        let mut teleop = KeyboardTeleop::new();
+        let event = teleop
+            .handle_key(key_press_with_modifiers(
+                KeyCode::Char('c'),
+                KeyModifiers::CONTROL,
+            ))
+            .unwrap();
         assert_eq!(event, TeleopEvent::Quit);
     }
 

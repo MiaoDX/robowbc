@@ -2368,8 +2368,10 @@ impl GearSonicPolicy {
             (twist.linear[0] * twist.linear[0] + twist.linear[1] * twist.linear[1]).sqrt();
         if planner_state.motion_qpos_50hz.is_empty() && command_speed <= 0.01 {
             drop(planner_state);
-            let encoder_obs = Self::build_placeholder_encoder_obs_dict(&self.robot);
-            return self.run_tracking_contract_from_encoder_obs(obs, &encoder_obs);
+            return Ok(JointPositionTargets {
+                positions: self.robot.default_pose.clone(),
+                timestamp: obs.timestamp,
+            });
         }
         if planner_state.motion_qpos_50hz.is_empty() {
             planner_state.context = Self::initialize_planner_context(&self.robot, obs);
@@ -3451,6 +3453,73 @@ mod tests {
             .predict(&obs)
             .expect_err("fixture planner should reject velocity-mode real contract");
         assert!(matches!(err, robowbc_core::WbcError::UnsupportedCommand(_)));
+    }
+
+    /// Regression for the keyboard demo: pressing `]` engages the velocity
+    /// policy while the command is still zero. That must hold the default pose
+    /// instead of running the narrower standing-placeholder decoder path, which
+    /// can emit large upper-body targets with the published checkpoints.
+    #[test]
+    #[ignore = "requires real GEAR-SONIC ONNX models; run scripts/models/download_gear_sonic_models.sh first"]
+    fn gear_sonic_zero_velocity_without_planner_motion_holds_default_pose() {
+        let model_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../models/gear-sonic");
+        let encoder_path = model_dir.join("model_encoder.onnx");
+        let decoder_path = model_dir.join("model_decoder.onnx");
+        let planner_path = model_dir.join("planner_sonic.onnx");
+        for path in [&encoder_path, &decoder_path, &planner_path] {
+            assert!(
+                path.exists(),
+                "missing real GEAR-Sonic model at {}; run scripts/models/download_gear_sonic_models.sh first",
+                path.display()
+            );
+        }
+
+        let robot_config_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../configs/robots/unitree_g1_gear_sonic.toml");
+        let robot =
+            RobotConfig::from_toml_file(&robot_config_path).expect("robot config should load");
+        let policy = GearSonicPolicy::new(GearSonicConfig {
+            encoder: OrtConfig {
+                model_path: encoder_path,
+                optimization_level: OptimizationLevel::Extended,
+                num_threads: 1,
+                execution_provider: ExecutionProvider::Cpu,
+            },
+            decoder: OrtConfig {
+                model_path: decoder_path,
+                optimization_level: OptimizationLevel::Extended,
+                num_threads: 1,
+                execution_provider: ExecutionProvider::Cpu,
+            },
+            planner: OrtConfig {
+                model_path: planner_path,
+                optimization_level: OptimizationLevel::Extended,
+                num_threads: 1,
+                execution_provider: ExecutionProvider::Cpu,
+            },
+            reference_motion: None,
+            robot: robot.clone(),
+        })
+        .expect("real GEAR-Sonic policy should build");
+
+        let obs = Observation {
+            joint_positions: robot.default_pose.clone(),
+            joint_velocities: vec![0.0; robot.joint_count],
+            gravity_vector: [0.0, 0.0, -1.0],
+            angular_velocity: [0.0, 0.0, 0.0],
+            base_pose: None,
+            command: WbcCommand::Velocity(robowbc_core::Twist {
+                linear: [0.0, 0.0, 0.0],
+                angular: [0.0, 0.0, 0.0],
+            }),
+            timestamp: Instant::now(),
+        };
+
+        let targets = policy
+            .predict(&obs)
+            .expect("zero-velocity prediction should hold default pose");
+
+        assert_eq!(targets.positions, robot.default_pose);
     }
 
     #[test]
