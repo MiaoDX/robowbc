@@ -17,16 +17,14 @@ python3 -m pytest tests -m contract
 python3 -m pytest tests -m integration
 ```
 
-## Current Classification
+## Layout
 
-- `contract`: public script behavior, generated JSON/HTML shape, bundle
-  validation, and report/proof-pack contracts.
-- `integration`: tests that cross process or repository boundaries with
-  subprocesses, temporary git repositories, or wrapper commands.
-- `regression`: known bug or artifact-shape regressions when a future test needs
-  that stronger label.
-- `slow`, `local`: reserved for CI-safe slow tests and local-only tests.
+```text
+tests/
+  contract/     public script behavior, generated JSON/HTML shape, bundle validation, report contracts
+  integration/  subprocess, temporary repository, wrapper command, and external-boundary coverage
+```
 
-The current files stay flat because their paths are simple and direct consumers
-already reference `tests/`. Use markers first; move files into directories only
-after path consumers are updated.
+`tests/conftest.py` marks tests from these folders automatically. Future
+regression, slow, or local-only tests should get explicit folders or markers
+when they first appear.
