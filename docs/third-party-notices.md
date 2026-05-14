@@ -63,7 +63,7 @@ restrictions.
 * **NVIDIA Open Model License** — covers GEAR-SONIC weights
   (`model_encoder.onnx`, `model_decoder.onnx`, `planner_sonic.onnx`).
   robowbc **never bundles these weights**. Users fetch them on first
-  run via `scripts/download_gear_sonic_models.sh` from HuggingFace and
+  run via `scripts/models/download_gear_sonic_models.sh` from HuggingFace and
   accept the license at fetch time. If you build a derived
   distribution that bundles the weights, you take on the redistribution
   obligations of the NVIDIA Open Model License — see

@@ -51,4 +51,4 @@ Model switching is config-driven through registry names such as `gear_sonic`,
 - Config files under `configs/`.
 - CLI entry point: `cargo run --bin robowbc -- run --config ...`.
 - Generated JSON, Rerun, proof-pack, and site bundle contracts consumed by
-  `scripts/generate_policy_showcase.py` and `scripts/validate_site_bundle.py`.
+  `scripts/site/generate_policy_showcase.py` and `scripts/site/validate_site_bundle.py`.

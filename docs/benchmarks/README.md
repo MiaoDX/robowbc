@@ -10,8 +10,8 @@ The source of truth lives under:
 - `artifacts/benchmarks/nvidia/SUMMARY.md`
 - HTML summary generated either locally at `artifacts/benchmarks/nvidia/index.html`
   or in CI / Pages at `benchmarks/nvidia/index.html`
-- `scripts/bench_robowbc_compare.py`
-- `scripts/bench_nvidia_official.py`
+- `scripts/benchmarks/bench_robowbc_compare.py`
+- `scripts/benchmarks/bench_nvidia_official.py`
 
 The GEAR-Sonic package now answers three distinct latency questions instead of
 hiding them behind the old ambiguous `replan_tick` split:
@@ -92,8 +92,8 @@ Blocked GPU rows are expected and honest when any of the following is missing:
 
 ```bash
 git submodule update --init --recursive third_party/GR00T-WholeBodyControl
-bash scripts/download_gear_sonic_models.sh
-bash scripts/download_decoupled_wbc_models.sh
+bash scripts/models/download_gear_sonic_models.sh
+bash scripts/models/download_decoupled_wbc_models.sh
 ```
 
 The comparison uses a tracked git submodule checkout of
@@ -105,7 +105,7 @@ beside the downloaded assets so later artifact runs can record provenance.
 
 ```bash
 for provider in cpu cuda tensor_rt; do
-  python3 scripts/bench_robowbc_compare.py --all --provider "$provider"
+  python3 scripts/benchmarks/bench_robowbc_compare.py --all --provider "$provider"
 done
 ```
 
@@ -123,7 +123,7 @@ matches a CUDA or TensorRT request.
 
 ```bash
 for provider in cpu cuda tensor_rt; do
-  python3 scripts/bench_nvidia_official.py --all --provider "$provider"
+  python3 scripts/benchmarks/bench_nvidia_official.py --all --provider "$provider"
 done
 ```
 
@@ -138,13 +138,13 @@ a blocked artifact with the exact missing-EP or initialization error.
 ### 4. Render the summary
 
 ```bash
-python3 scripts/render_nvidia_benchmark_summary.py --output artifacts/benchmarks/nvidia/SUMMARY.md
+python3 scripts/benchmarks/render_nvidia_benchmark_summary.py --output artifacts/benchmarks/nvidia/SUMMARY.md
 ```
 
 In CI, the showcase job also renders the static HTML page:
 
 ```bash
-python3 scripts/render_nvidia_benchmark_summary.py \
+python3 scripts/benchmarks/render_nvidia_benchmark_summary.py \
   --root /tmp/policy-showcase/benchmarks/nvidia \
   --output /tmp/policy-showcase/benchmarks/nvidia/SUMMARY.md \
   --html-output /tmp/policy-showcase/benchmarks/nvidia/index.html

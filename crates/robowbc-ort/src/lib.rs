@@ -1141,7 +1141,7 @@ fn load_csv_matrix_f32(path: &Path) -> CoreResult<(usize, usize, Vec<f32>)> {
 
     if header.starts_with("version https://git-lfs.github.com/spec/v1") {
         return Err(robowbc_core::WbcError::InferenceFailed(format!(
-            "reference motion file {} is still a Git LFS pointer; run scripts/download_gear_sonic_reference_motions.sh to materialize the official clip payloads",
+            "reference motion file {} is still a Git LFS pointer; run scripts/models/download_gear_sonic_reference_motions.sh to materialize the official clip payloads",
             path.display()
         )));
     }
@@ -3824,7 +3824,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires real GEAR-SONIC ONNX models; run scripts/download_gear_sonic_models.sh first"]
+    #[ignore = "requires real GEAR-SONIC ONNX models; run scripts/models/download_gear_sonic_models.sh first"]
     fn gear_sonic_dump_model_meta() {
         let model_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../models/gear-sonic");
         let encoder = OrtBackend::from_file(model_dir.join("model_encoder.onnx")).unwrap();
@@ -3863,7 +3863,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires real GEAR-SONIC ONNX models; run scripts/download_gear_sonic_models.sh first"]
+    #[ignore = "requires real GEAR-SONIC ONNX models; run scripts/models/download_gear_sonic_models.sh first"]
     fn gear_sonic_dump_tracking_placeholder_tensors() {
         let model_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../models/gear-sonic");
         let encoder_path = model_dir.join("model_encoder.onnx");
@@ -3875,7 +3875,7 @@ mod tests {
         for path in [&encoder_path, &decoder_path, &planner_path] {
             assert!(
                 path.exists(),
-                "model not found: {path:?} — run scripts/download_gear_sonic_models.sh"
+                "model not found: {path:?} — run scripts/models/download_gear_sonic_models.sh"
             );
         }
 
@@ -3971,7 +3971,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires real GEAR-Sonic ONNX models; run scripts/download_gear_sonic_models.sh first"]
+    #[ignore = "requires real GEAR-Sonic ONNX models; run scripts/models/download_gear_sonic_models.sh first"]
     #[allow(clippy::too_many_lines)]
     fn gear_sonic_dump_velocity_first_live_replan_tensors() {
         let model_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../models/gear-sonic");
@@ -3984,7 +3984,7 @@ mod tests {
         for path in [&encoder_path, &decoder_path, &planner_path] {
             assert!(
                 path.exists(),
-                "model not found: {path:?} — run scripts/download_gear_sonic_models.sh"
+                "model not found: {path:?} — run scripts/models/download_gear_sonic_models.sh"
             );
         }
 
@@ -4188,7 +4188,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires real GEAR-Sonic ONNX models; run scripts/download_gear_sonic_models.sh first"]
+    #[ignore = "requires real GEAR-Sonic ONNX models; run scripts/models/download_gear_sonic_models.sh first"]
     #[allow(clippy::too_many_lines)]
     fn gear_sonic_dump_velocity_later_motion_tensors() {
         let model_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../models/gear-sonic");
@@ -4201,7 +4201,7 @@ mod tests {
         for path in [&encoder_path, &decoder_path, &planner_path] {
             assert!(
                 path.exists(),
-                "model not found: {path:?} — run scripts/download_gear_sonic_models.sh"
+                "model not found: {path:?} — run scripts/models/download_gear_sonic_models.sh"
             );
         }
 
@@ -4456,11 +4456,11 @@ mod tests {
     ///
     /// Run with:
     /// ```
-    /// bash scripts/download_gear_sonic_models.sh
+    /// bash scripts/models/download_gear_sonic_models.sh
     /// cargo test -p robowbc-ort -- --ignored gear_sonic_real_model_inference
     /// ```
     #[test]
-    #[ignore = "requires real GEAR-SONIC ONNX models; run scripts/download_gear_sonic_models.sh first"]
+    #[ignore = "requires real GEAR-SONIC ONNX models; run scripts/models/download_gear_sonic_models.sh first"]
     #[allow(clippy::too_many_lines)]
     fn gear_sonic_real_model_inference() {
         use robowbc_core::WbcPolicy;
@@ -4476,7 +4476,7 @@ mod tests {
         for path in [&encoder_path, &decoder_path, &planner_path] {
             assert!(
                 path.exists(),
-                "model not found: {path:?} — run scripts/download_gear_sonic_models.sh"
+                "model not found: {path:?} — run scripts/models/download_gear_sonic_models.sh"
             );
         }
 

@@ -129,7 +129,7 @@ artifacts and on the `main`-branch GitHub Pages site.
 ### Step 1 — download the models
 
 ```bash
-bash scripts/download_gear_sonic_models.sh
+bash scripts/models/download_gear_sonic_models.sh
 # Downloads model_encoder.onnx, model_decoder.onnx, planner_sonic.onnx
 # into models/gear-sonic/ and reuses cached files when already present.
 ```
@@ -156,7 +156,7 @@ a machine with matching ONNX Runtime and NVIDIA runtime dependencies.
 ### Step 1 — download and normalize the assets
 
 ```bash
-bash scripts/download_bfm_zero_models.sh
+bash scripts/models/download_bfm_zero_models.sh
 # Fetches the public ONNX + tracking context bundle into models/bfm_zero/
 # and converts zs_walking.pkl into zs_walking.npy for the Rust runtime.
 ```

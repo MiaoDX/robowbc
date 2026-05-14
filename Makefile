@@ -66,7 +66,7 @@ python-test: ## Run Python contract and integration tests.
 
 sim-feature-test: ## Run the feature-enabled MuJoCo sim transport tests with the runtime/plugin env wired.
 	download_dir="$(abspath $(MUJOCO_DOWNLOAD_DIR))"; \
-	"$(PYTHON)" scripts/ensure_mujoco_runtime.py --download-dir "$$download_dir" >/dev/null; \
+	"$(PYTHON)" scripts/mujoco/ensure_mujoco_runtime.py --download-dir "$$download_dir" >/dev/null; \
 	link_dir="$(MUJOCO_DYNAMIC_LINK_DIR)"; \
 	runtime_ld_library_path="$$link_dir:$${LD_LIBRARY_PATH:-}"; \
 	if [[ -f "$$link_dir/libmujoco.so" || -f "$$link_dir/libmujoco.dylib" || -f "$$link_dir/mujoco.lib" ]]; then \
@@ -110,9 +110,9 @@ smoke: ## Run the no-download local decoupled_wbc smoke config.
 	$(CARGO) run --bin robowbc -- run --config configs/decoupled_smoke.toml
 
 demo-keyboard: ## Run the interactive GEAR-Sonic + MuJoCo keyboard demo.
-	bash scripts/download_gear_sonic_models.sh models/gear-sonic
+	bash scripts/models/download_gear_sonic_models.sh models/gear-sonic
 	download_dir="$(abspath $(MUJOCO_DOWNLOAD_DIR))"; \
-	"$(PYTHON)" scripts/ensure_mujoco_runtime.py --download-dir "$$download_dir" >/dev/null; \
+	"$(PYTHON)" scripts/mujoco/ensure_mujoco_runtime.py --download-dir "$$download_dir" >/dev/null; \
 	link_dir="$(MUJOCO_DYNAMIC_LINK_DIR)"; \
 	MUJOCO_DOWNLOAD_DIR="$$download_dir" \
 	MUJOCO_DYNAMIC_LINK_DIR="$$link_dir" \
@@ -122,10 +122,10 @@ demo-keyboard: ## Run the interactive GEAR-Sonic + MuJoCo keyboard demo.
 		-- run --config configs/demo/gear_sonic_keyboard_mujoco.toml --teleop keyboard
 
 models-public: ## Download the public policy checkpoints used by the site and benchmarks.
-	bash scripts/download_gear_sonic_models.sh models/gear-sonic
-	bash scripts/download_decoupled_wbc_models.sh models/decoupled-wbc
-	bash scripts/download_wbc_agile_models.sh models/wbc-agile
-	bash scripts/download_bfm_zero_models.sh models/bfm_zero
+	bash scripts/models/download_gear_sonic_models.sh models/gear-sonic
+	bash scripts/models/download_decoupled_wbc_models.sh models/decoupled-wbc
+	bash scripts/models/download_wbc_agile_models.sh models/wbc-agile
+	bash scripts/models/download_bfm_zero_models.sh models/bfm_zero
 
 site-python-deps: ## Install Python dependencies required for site generation and proof-pack capture.
 	$(PYTHON) -m pip install $(SITE_PYTHON_DEPS)
@@ -133,17 +133,17 @@ site-python-deps: ## Install Python dependencies required for site generation an
 site-render-check: ## Verify the MuJoCo offscreen renderer works before building screenshot-bearing proof packs.
 	MUJOCO_GL="$(SHOWCASE_MUJOCO_GL)" \
 	PYOPENGL_PLATFORM="$(SHOWCASE_PYOPENGL_PLATFORM)" \
-	$(PYTHON) scripts/check_mujoco_headless.py
+	$(PYTHON) scripts/mujoco/check_mujoco_headless.py
 
 benchmark-robowbc: ## Regenerate normalized RoboWBC benchmark artifacts.
 	MUJOCO_DOWNLOAD_DIR="$(abspath $(MUJOCO_DOWNLOAD_DIR))" \
-	$(PYTHON) scripts/bench_robowbc_compare.py --all
+	$(PYTHON) scripts/benchmarks/bench_robowbc_compare.py --all
 
 benchmark-official: ## Regenerate normalized official NVIDIA benchmark artifacts.
-	$(PYTHON) scripts/bench_nvidia_official.py --all
+	$(PYTHON) scripts/benchmarks/bench_nvidia_official.py --all
 
 benchmark-summary: ## Render benchmark Markdown and HTML summaries from the normalized artifacts.
-	$(PYTHON) scripts/render_nvidia_benchmark_summary.py \
+	$(PYTHON) scripts/benchmarks/render_nvidia_benchmark_summary.py \
 		--root artifacts/benchmarks/nvidia \
 		--output artifacts/benchmarks/nvidia/SUMMARY.md \
 		--html-output artifacts/benchmarks/nvidia/index.html
@@ -154,7 +154,7 @@ site: ## Build the full static site bundle with policy pages, proof packs, and b
 	MUJOCO_GL="$(SHOWCASE_MUJOCO_GL)" \
 	PYOPENGL_PLATFORM="$(SHOWCASE_PYOPENGL_PLATFORM)" \
 	MUJOCO_DOWNLOAD_DIR="$(MUJOCO_DOWNLOAD_DIR)" \
-	$(PYTHON) scripts/build_site.py \
+	$(PYTHON) scripts/site/build_site.py \
 		--repo-root . \
 		--robowbc-binary "$(ROBOWBC_BINARY)" \
 		--output-dir "$(SITE_OUTPUT_DIR)"
@@ -167,10 +167,10 @@ showcase-verify: ## Run the same showcase build + bundle validation path used in
 	$(MAKE) site-smoke
 
 site-smoke: ## Validate the generated site bundle layout and embedded playback paths.
-	$(PYTHON) scripts/validate_site_bundle.py --root "$(SITE_OUTPUT_DIR)"
+	$(PYTHON) scripts/site/validate_site_bundle.py --root "$(SITE_OUTPUT_DIR)"
 
 site-browser-smoke: site-smoke ## Run the optional headless browser lag-selector smoke test for one policy page.
-	$(PYTHON) scripts/site_browser_smoke.py \
+	$(PYTHON) scripts/site/site_browser_smoke.py \
 		--root "$(SITE_OUTPUT_DIR)" \
 		--policy "$(SITE_BROWSER_POLICY)" \
 		--bind "$(SITE_BIND)"
@@ -191,7 +191,7 @@ site-serve: ## Serve the generated site bundle locally. Set SITE_OPEN=1 to open 
 	if [[ "$(SITE_OPEN)" == "1" || "$(SITE_OPEN)" == "true" ]]; then \
 		extra_args="--open"; \
 	fi; \
-	$(PYTHON) scripts/serve_showcase.py \
+	$(PYTHON) scripts/site/serve_showcase.py \
 		--dir "$(SITE_OUTPUT_DIR)" \
 		--bind "$(SITE_BIND)" \
 		--port "$(SITE_PORT)" \
@@ -213,7 +213,7 @@ python-sdk-install: python-sdk-build ## Install the freshly built local RoboWBC 
 	$(PYTHON) -m pip install --force-reinstall "$$wheel"
 
 python-sdk-smoke: ## Run the installed RoboWBC Python SDK smoke test.
-	$(PYTHON) scripts/python_sdk_smoke.py
+	$(PYTHON) scripts/sdk/python_sdk_smoke.py
 
 python-sdk-verify: ## Build, install, and smoke-test the RoboWBC Python SDK locally.
 	$(MAKE) python-sdk-install

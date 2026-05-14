@@ -983,11 +983,11 @@ mod tests {
     ///
     /// To run once weights are available:
     /// ```bash
-    /// bash scripts/download_wbc_agile_models.sh
+    /// bash scripts/models/download_wbc_agile_models.sh
     /// cargo test -p robowbc-ort -- --ignored wbc_agile_real_model_inference
     /// ```
     #[test]
-    #[ignore = "requires real WBC-AGILE G1 ONNX weights; run scripts/download_wbc_agile_models.sh first"]
+    #[ignore = "requires real WBC-AGILE G1 ONNX weights; run scripts/models/download_wbc_agile_models.sh first"]
     fn wbc_agile_real_model_inference() {
         let model_path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../models/wbc-agile/unitree_g1_velocity_e2e.onnx");

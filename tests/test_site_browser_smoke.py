@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SMOKE_PATH = ROOT / "scripts" / "site_browser_smoke.py"
+SMOKE_PATH = ROOT / "scripts" / "site" / "site_browser_smoke.py"
 
 SPEC = importlib.util.spec_from_file_location("site_browser_smoke", SMOKE_PATH)
 SMOKE = importlib.util.module_from_spec(SPEC)
