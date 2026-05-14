@@ -1,29 +1,30 @@
 # Summary
 
-[Introduction](README.md)
+# Start Here
 
----
-
-# User Guide
-
+- [Introduction](README.md)
 - [Getting Started](getting-started.md)
 - [Python SDK](python-sdk.md)
 - [Configuration Reference](configuration.md)
+- [Human Documentation Map](human/README.md)
 
-# Tutorials
+# Architecture And Runtime
+
+- [Architecture](architecture.md)
+- [Roboharness Integration](roboharness-integration.md)
+- [G1 MJCF Review](g1-mjcf-review-2026-04-24.md)
+
+# Extending RoboWBC
 
 - [Adding a New Policy](adding-a-model.md)
 - [Adding a New Robot](adding-a-robot.md)
 
-# Reference
+# Operations And Evidence
 
-- [Architecture](architecture.md)
-- [Roboharness Integration](roboharness-integration.md)
 - [Benchmarks](benchmarks/README.md)
+- [Third-Party Notices](third-party-notices.md)
 
----
-
-# Project
+# Project Direction
 
 - [Roadmap](roadmap-2026-q2.md)
 - [Ecosystem Strategy](ecosystem-strategy.md)
