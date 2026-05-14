@@ -76,10 +76,12 @@ pd_gains = [
     { kp = 16.778327, kd = 1.068142 },  # right_wrist_yaw
 ]
 
-# MuJoCo/raw-torque gains from the official GR00T G1 sim config
-# (`MOTOR_KP` / `MOTOR_KD` in g1_29dof_gear_wbc.yaml). These are intentionally
-# much stiffer than the hardware-side q_target gains above and are only used by
-# the simulation transport.
+# Alternate MuJoCo/raw-torque gains from the GR00T G1 sim config
+# (`MOTOR_KP` / `MOTOR_KD` in g1_29dof_gear_wbc.yaml). The official
+# GEAR-Sonic deploy-to-MuJoCo path sends the deployment `kps` / `kds` values
+# above in each low command, so the keyboard demo uses `gain_profile =
+# "default_pd"` for parity. These stiffer gains remain available for generic
+# simulation experiments that explicitly select `simulation_pd`.
 sim_pd_gains = [
     { kp = 150.0, kd = 2.0 },  # left_hip_pitch
     { kp = 150.0, kd = 2.0 },  # left_hip_roll
