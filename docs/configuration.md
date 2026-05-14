@@ -250,7 +250,7 @@ GR00T's G1 simulator behavior.
 enabled = true
 body_name = "pelvis"
 anchor = [0.0, 0.0, 1.0]
-anchor_from_initial_pose = true
+anchor_from_initial_pose = false
 kp_pos = 10000.0
 kd_pos = 1000.0
 kp_ang = 1000.0
@@ -258,9 +258,10 @@ kd_ang = 10.0
 ```
 
 Omit the table to run without the support band. Set
-`anchor_from_initial_pose = true` for local teleop demos where the support band
-should catch a falling humanoid without lifting it away from its initialized
-standing height.
+`anchor_from_initial_pose = false` with `anchor = [0.0, 0.0, 1.0]` to match the
+official GR00T MuJoCo support-band setup. `anchor_from_initial_pose = true` is
+available for custom local demos that need the band anchored at the model's
+initialized body position instead.
 
 ### `[report]`
 

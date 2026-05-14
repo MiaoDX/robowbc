@@ -18,6 +18,10 @@ use std::env;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+#[cfg(feature = "mujoco-viewer")]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "mujoco-viewer")]
+use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -115,6 +119,8 @@ pub struct MujocoTransport {
     prev_positions: Vec<f32>,
     #[cfg(feature = "mujoco-viewer")]
     viewer: Option<MjViewer>,
+    #[cfg(feature = "mujoco-viewer")]
+    viewer_elastic_band_toggle_requested: Option<Arc<AtomicBool>>,
 }
 
 impl MujocoTransport {
@@ -181,15 +187,25 @@ impl MujocoTransport {
             build_elastic_band(&data, elastic_band_body_id, config.elastic_band.clone());
         let prev_positions = robot_config.default_pose.clone();
         #[cfg(feature = "mujoco-viewer")]
+        let viewer_elastic_band_toggle_requested =
+            config.viewer.then(|| Arc::new(AtomicBool::new(false)));
+        #[cfg(feature = "mujoco-viewer")]
         let viewer = if config.viewer {
-            Some(
-                MjViewer::builder()
-                    .window_name("RoboWBC MuJoCo keyboard demo")
-                    .build_passive(data.model())
-                    .map_err(|error| SimError::ViewerFailed {
-                        reason: error.to_string(),
-                    })?,
-            )
+            let mut viewer = MjViewer::builder()
+                .window_name("RoboWBC MuJoCo keyboard demo")
+                .build_passive(data.model())
+                .map_err(|error| SimError::ViewerFailed {
+                    reason: error.to_string(),
+                })?;
+            if let Some(toggle_requested) = &viewer_elastic_band_toggle_requested {
+                let toggle_requested = Arc::clone(toggle_requested);
+                viewer.add_ui_callback_detached(move |ctx| {
+                    if ctx.input(|input| input.key_pressed(mujoco_rs::viewer::egui::Key::Num9)) {
+                        toggle_requested.store(true, Ordering::Relaxed);
+                    }
+                });
+            }
+            Some(viewer)
         } else {
             None
         };
@@ -214,6 +230,8 @@ impl MujocoTransport {
             prev_positions,
             #[cfg(feature = "mujoco-viewer")]
             viewer,
+            #[cfg(feature = "mujoco-viewer")]
+            viewer_elastic_band_toggle_requested,
         })
     }
 
@@ -417,16 +435,31 @@ impl MujocoTransport {
 
     #[cfg(feature = "mujoco-viewer")]
     fn render_viewer_if_enabled(&mut self) -> Result<(), SimError> {
-        let Some(viewer) = self.viewer.as_mut() else {
-            return Ok(());
-        };
-        if !viewer.running() {
-            return Ok(());
+        {
+            let Some(viewer) = self.viewer.as_mut() else {
+                return Ok(());
+            };
+            if !viewer.running() {
+                return Ok(());
+            }
+            viewer.sync_data(&mut self.data);
+            viewer.render().map_err(|error| SimError::ViewerFailed {
+                reason: error.to_string(),
+            })?;
         }
-        viewer.sync_data(&mut self.data);
-        viewer.render().map_err(|error| SimError::ViewerFailed {
-            reason: error.to_string(),
-        })
+        if self
+            .viewer_elastic_band_toggle_requested
+            .as_ref()
+            .is_some_and(|requested| requested.swap(false, Ordering::Relaxed))
+        {
+            if let Some(enabled) = self.toggle_elastic_band_enabled() {
+                println!(
+                    "elastic support band {}",
+                    if enabled { "enabled" } else { "disabled" }
+                );
+            }
+        }
+        Ok(())
     }
 
     fn joint_state_vectors(&self) -> (Vec<f32>, Vec<f32>) {

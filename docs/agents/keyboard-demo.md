@@ -6,12 +6,14 @@ that path as user-facing runtime changes.
 ## Preserve These Behaviors
 
 - `configs/demo/gear_sonic_keyboard_mujoco.toml` uses the GR00T scene wrapper.
-- The demo keeps an explicit `[sim.elastic_band]` support band anchored from the
-  initialized pose unless an equally verified upstream-style startup path
-  replaces it.
+- The demo keeps an explicit `[sim.elastic_band]` support band with the official
+  GR00T point `[0.0, 0.0, 1.0]` and spring-damper gains.
 - `[runtime].require_engage = true` stays enabled.
 - `[runtime].init_pose_secs` stays enabled so `]` engages policy only after the
   robot settles.
+- The `9` key remains the upstream-style support-band toggle from the terminal
+  and the MuJoCo viewer; the first press after engagement drops the robot toward
+  foot contact.
 - The scene remains visibly lit enough to inspect foot contact in the MuJoCo
   viewer.
 
