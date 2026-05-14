@@ -25,5 +25,14 @@ manifest-path = "crates/robowbc-py/Cargo.toml"
 module-name = "robowbc"
 
 [tool.pytest.ini_options]
+addopts = "--strict-markers"
 testpaths = ["tests"]
 norecursedirs = ["third_party", "target", ".cache"]
+markers = [
+    "unit: fast isolated behavior tests",
+    "contract: public script, schema, generated artifact, and report compatibility tests",
+    "integration: subprocess, repository, simulator, external CLI, or process-boundary tests",
+    "regression: known-bug or artifact-shape regression tests",
+    "local: requires local GPU, simulator, gateway, credentials, display, or other host-specific resource",
+    "slow: CI-safe but expensive tests excluded from tight loops",
+]

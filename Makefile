@@ -25,7 +25,7 @@ PYTHON_SDK_TARGET_DIR ?= $(CURDIR)/target/python-sdk-wheel
 
 .DEFAULT_GOAL := help
 
-.PHONY: help toolchain build build-release check test sim-feature-test clippy fmt fmt-check rust-doc mdbook-install docs-book docs verify smoke demo-keyboard models-public site-python-deps site-render-check benchmark-robowbc benchmark-official benchmark-summary benchmark-nvidia site showcase-verify site-smoke site-browser-smoke site-serve-check site-serve python-sdk-deps python-sdk-build python-sdk-install python-sdk-smoke python-sdk-verify ci
+.PHONY: help toolchain build build-release check test python-test sim-feature-test clippy fmt fmt-check rust-doc mdbook-install docs-book docs verify smoke demo-keyboard models-public site-python-deps site-render-check benchmark-robowbc benchmark-official benchmark-summary benchmark-nvidia site showcase-verify site-smoke site-browser-smoke site-serve-check site-serve python-sdk-deps python-sdk-build python-sdk-install python-sdk-smoke python-sdk-verify ci
 
 help: ## Show available targets and useful variables.
 	@awk 'BEGIN {FS = ":.*## "; print "Targets:"} /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -60,6 +60,9 @@ check: ## Run cargo check across the workspace and all targets.
 
 test: ## Run cargo test across the workspace and all targets.
 	$(CARGO) test --workspace --all-targets
+
+python-test: ## Run Python contract and integration tests.
+	$(PYTHON) -m pytest tests
 
 sim-feature-test: ## Run the feature-enabled MuJoCo sim transport tests with the runtime/plugin env wired.
 	download_dir="$(abspath $(MUJOCO_DOWNLOAD_DIR))"; \
