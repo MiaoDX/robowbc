@@ -14,7 +14,8 @@
 #     -- run --config configs/demo/gear_sonic_keyboard_mujoco.toml --teleop keyboard
 #
 # Keep your terminal focused for keyboard input and watch the MuJoCo window:
-# `]` engages policy, WASD/QE drive, `9` toggles the support band.
+# `]` engages policy, WASD/QE drive, `9` toggles the support band. Turning the
+# band off can let the robot drop.
 
 [policy]
 name = "gear_sonic"
@@ -69,9 +70,11 @@ backend = "ort"
 device = "cpu"
 
 [runtime]
-# Keyboard teleop starts in an init pose. Press `]` to engage the policy, then
-# use WASD/QE to drive. Press `9` to toggle the elastic support band. Live
-# teleop runs until Esc or Ctrl-C.
+# Keyboard teleop starts in an init pose. Press `]` to queue policy engagement
+# after the 3.0s settle window, then use WASD/QE to drive. Press `9` to toggle
+# the elastic support band; turning it off can let the robot drop. Live teleop
+# runs until Esc or Ctrl-C. A zero command after engagement keeps holding the
+# default standing pose until the first nonzero velocity command.
 velocity = [0.0, 0.0, 0.0]
 init_pose_secs = 3.0
 require_engage = true

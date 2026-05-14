@@ -932,6 +932,12 @@ enum TeleopControlRequest {
     ToggleElasticBand,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PolicyEngageRequestOutcome {
+    Immediate,
+    QueuedUntilSettled,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 struct TeleopPollOutcome {
     velocity: [f32; 3],
@@ -982,6 +988,41 @@ fn apply_teleop_events(
     }
 }
 
+fn apply_policy_engage_request(
+    startup_config: RuntimeStartupConfig,
+    policy_engaged: &mut bool,
+    pending_policy_engage: &mut bool,
+    init_pose_start: &mut Option<(Instant, Vec<f32>)>,
+) -> PolicyEngageRequestOutcome {
+    if startup_config.require_engage && startup_config.init_pose_secs > 0.0 {
+        *pending_policy_engage = true;
+        PolicyEngageRequestOutcome::QueuedUntilSettled
+    } else {
+        *policy_engaged = true;
+        *pending_policy_engage = false;
+        *init_pose_start = None;
+        PolicyEngageRequestOutcome::Immediate
+    }
+}
+
+fn pending_policy_engage_is_ready(
+    startup_config: RuntimeStartupConfig,
+    pending_policy_engage: bool,
+    elapsed: Duration,
+) -> bool {
+    startup_config.require_engage
+        && pending_policy_engage
+        && elapsed.as_secs_f32() >= startup_config.init_pose_secs
+}
+
+fn startup_settle_remaining_secs(
+    startup_config: RuntimeStartupConfig,
+    elapsed: Option<Duration>,
+) -> f32 {
+    let elapsed_secs = elapsed.map_or(0.0, |duration| duration.as_secs_f32());
+    (startup_config.init_pose_secs - elapsed_secs).max(0.0)
+}
+
 struct LiveTeleop {
     source: KeyboardTeleop,
     current_velocity: [f32; 3],
@@ -994,7 +1035,7 @@ impl LiveTeleop {
             .enable()
             .map_err(|err| format!("failed to enable keyboard teleop: {err}"))?;
         println!(
-            "keyboard teleop active: ] engages policy, WASD move, QE yaw, Space zeroes velocity, 9 toggles support band, O e-stops, Esc quits"
+            "keyboard teleop active: press ] to engage policy after settle; WASD/QE update velocity, Space zeroes, 9 toggles support band (off can drop robot), O e-stops, Esc/Ctrl-C quits"
         );
         Ok(Self {
             source,
@@ -1534,10 +1575,14 @@ fn run_control_loop_inner<T: RobotTransport + ReportTelemetryProvider>(
     let mut dropped_frames: usize = 0;
     let mut inference_total = Duration::ZERO;
     let mut policy_engaged = !startup_config.enabled();
+    let mut pending_policy_engage = false;
     let mut init_pose_start: Option<(Instant, Vec<f32>)> = None;
 
     if startup_config.require_engage {
-        println!("startup init pose active: press ] to engage policy after the robot settles");
+        println!(
+            "startup init pose active: settle window {:.1}s; press ] any time to queue policy engagement; WASD/QE commands are held until engagement",
+            startup_config.init_pose_secs
+        );
     }
 
     while running.load(Ordering::SeqCst) {
@@ -1557,14 +1602,32 @@ fn run_control_loop_inner<T: RobotTransport + ReportTelemetryProvider>(
                     TeleopControlRequest::Reset => {
                         policy.reset();
                         policy_engaged = false;
+                        pending_policy_engage = false;
                         init_pose_start = None;
                         println!("startup init pose reset: press ] to re-engage policy");
                     }
                     TeleopControlRequest::Engage => {
-                        policy.reset();
-                        policy_engaged = true;
-                        init_pose_start = None;
-                        println!("policy engaged");
+                        match apply_policy_engage_request(
+                            startup_config,
+                            &mut policy_engaged,
+                            &mut pending_policy_engage,
+                            &mut init_pose_start,
+                        ) {
+                            PolicyEngageRequestOutcome::Immediate => {
+                                policy.reset();
+                                println!("policy engaged");
+                            }
+                            PolicyEngageRequestOutcome::QueuedUntilSettled => {
+                                let elapsed = init_pose_start
+                                    .as_ref()
+                                    .map(|(start_time, _)| start_time.elapsed());
+                                let remaining_secs =
+                                    startup_settle_remaining_secs(startup_config, elapsed);
+                                println!(
+                                    "policy engagement queued; waiting for startup settle (~{remaining_secs:.1}s remaining)"
+                                );
+                            }
+                        }
                     }
                     TeleopControlRequest::ToggleElasticBand => {
                         match transport.toggle_elastic_band() {
@@ -1610,9 +1673,14 @@ fn run_control_loop_inner<T: RobotTransport + ReportTelemetryProvider>(
                 let (start_time, start_positions) = init_pose_start
                     .get_or_insert_with(|| (obs.timestamp, obs.joint_positions.clone()));
                 let elapsed = obs.timestamp.saturating_duration_since(*start_time);
-                if !startup_config.require_engage
-                    && elapsed.as_secs_f32() >= startup_config.init_pose_secs
-                {
+                let startup_settled = elapsed.as_secs_f32() >= startup_config.init_pose_secs;
+                if pending_policy_engage_is_ready(startup_config, pending_policy_engage, elapsed) {
+                    policy.reset();
+                    policy_engaged = true;
+                    pending_policy_engage = false;
+                    println!("policy engaged");
+                    policy.predict(&obs)
+                } else if !startup_config.require_engage && startup_settled {
                     policy_engaged = true;
                     policy.predict(&obs)
                 } else {
@@ -2420,6 +2488,81 @@ mod tests {
             ]
         );
         assert!(!outcome.stop_after_tick);
+    }
+
+    #[test]
+    fn engage_request_queues_until_startup_settles_when_required() {
+        let mut policy_engaged = false;
+        let mut pending_policy_engage = false;
+        let mut init_pose_start = None;
+        let startup_config = RuntimeStartupConfig {
+            init_pose_secs: 3.0,
+            require_engage: true,
+        };
+
+        let outcome = apply_policy_engage_request(
+            startup_config,
+            &mut policy_engaged,
+            &mut pending_policy_engage,
+            &mut init_pose_start,
+        );
+
+        assert_eq!(outcome, PolicyEngageRequestOutcome::QueuedUntilSettled);
+        assert!(!policy_engaged);
+        assert!(pending_policy_engage);
+        assert!(!pending_policy_engage_is_ready(
+            startup_config,
+            pending_policy_engage,
+            Duration::from_millis(2_900)
+        ));
+        assert!(pending_policy_engage_is_ready(
+            startup_config,
+            pending_policy_engage,
+            Duration::from_millis(3_000)
+        ));
+    }
+
+    #[test]
+    fn startup_settle_remaining_reports_configured_wait() {
+        let startup_config = RuntimeStartupConfig {
+            init_pose_secs: 3.0,
+            require_engage: true,
+        };
+
+        assert!((startup_settle_remaining_secs(startup_config, None) - 3.0).abs() < 1e-6);
+        assert!(
+            (startup_settle_remaining_secs(startup_config, Some(Duration::from_millis(1_250)))
+                - 1.75)
+                .abs()
+                < 1e-6
+        );
+        assert!(
+            startup_settle_remaining_secs(startup_config, Some(Duration::from_secs(5))).abs()
+                < 1e-6
+        );
+    }
+
+    #[test]
+    fn engage_request_is_immediate_without_required_startup_gate() {
+        let mut policy_engaged = false;
+        let mut pending_policy_engage = true;
+        let mut init_pose_start = Some((Instant::now(), vec![1.0, 2.0]));
+        let startup_config = RuntimeStartupConfig {
+            init_pose_secs: 3.0,
+            require_engage: false,
+        };
+
+        let outcome = apply_policy_engage_request(
+            startup_config,
+            &mut policy_engaged,
+            &mut pending_policy_engage,
+            &mut init_pose_start,
+        );
+
+        assert_eq!(outcome, PolicyEngageRequestOutcome::Immediate);
+        assert!(policy_engaged);
+        assert!(!pending_policy_engage);
+        assert!(init_pose_start.is_none());
     }
 
     #[test]
