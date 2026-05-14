@@ -11,7 +11,9 @@ Linux-only embedded runtime for humanoid whole-body-control policy inference.
   ·
   <a href="docs/getting-started.md"><strong>Getting Started</strong></a>
   ·
-  <a href="docs/architecture.md"><strong>Architecture</strong></a>
+  <a href="ARCHITECTURE.md"><strong>Architecture</strong></a>
+  ·
+  <a href="STATUS.md"><strong>Status</strong></a>
   ·
   <a href="docs/python-sdk.md"><strong>Python SDK</strong></a>
   ·
@@ -290,7 +292,9 @@ PyTorch policies. First-party embedded examples live at:
 - [Configuration Reference](docs/configuration.md)
 - [Adding a New Policy](docs/adding-a-model.md)
 - [Adding a New Robot](docs/adding-a-robot.md)
-- [Architecture](docs/architecture.md)
+- [Architecture](ARCHITECTURE.md)
+- [Current status](STATUS.md)
+- [Full docs index](docs/README.md)
 - [Founding document](docs/founding-document.md)
 - [Q2 2026 roadmap](docs/roadmap-2026-q2.md)
 

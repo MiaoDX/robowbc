@@ -1,165 +1,189 @@
 # Architecture
 
+This document is the detailed human-facing architecture map. For a shorter root
+overview, read `../ARCHITECTURE.md`.
+
 ## Overview
 
 ![RoboWBC architecture](assets/architecture.svg)
 
-The diagram below reflects the current crate split, policy backends,
-transport loop, and reporting path used by the CLI and the published HTML
-report.
+RoboWBC centers on one policy contract:
 
-```
-┌─────────────────────────────────────────────────┐
-│  robowbc-cli  — config loading → control loop    │
-└────────────────────────┬────────────────────────┘
-                         │  WbcPolicy::predict()
-           ┌─────────────┼─────────────┐
-           │             │             │
-   ┌───────▼──────┐ ┌────▼────┐ ┌─────▼──────┐
-   │robowbc-ort   │ │robowbc- │ │  (future)  │
-   │ONNX Runtime  │ │pyo3     │ │  burn / …  │
-   │CUDA/TensorRT │ │PyTorch  │ │            │
-   └──────────────┘ └─────────┘ └────────────┘
-           │
-   ┌───────▼───────┐    ┌──────────────────────┐
-   │robowbc-core   │    │  robowbc-registry     │
-   │WbcPolicy trait│    │  inventory factory    │
-   │Observation    │    │  WbcRegistry::build() │
-   │WbcCommand     │    └──────────────────────┘
-   │JointPositions │
-   └───────────────┘
-           │
-   ┌───────▼───────┐
-   │robowbc-comm   │
-   │zenoh transport│
-   │control loop   │
-   └───────────────┘
+```text
+Observation + WbcCommand
+        |
+        v
+WbcPolicy::predict
+        |
+        v
+JointPositionTargets
 ```
 
-## Crate responsibilities
+Configs and SDK calls decide which policy, robot, transport, visualization, and
+reporting path surrounds that contract. The CLI and Python SDK both exercise
+the same Rust policy implementations.
+
+## Runtime Data Flow
+
+```text
+TOML config
+  |
+  v
+robowbc-config
+  |
+  v
+robowbc-registry
+  |
+  +--> robowbc-ort policy wrappers
+  |       gear_sonic, decoupled_wbc, wbc_agile, bfm_zero, hover, wholebody_vla
+  |
+  +--> robowbc-pyo3 py_model wrapper
+  |
+  v
+robowbc-runtime / robowbc-cli
+  |
+  +--> hardware transport through robowbc-comm or robowbc-transport
+  +--> MuJoCo transport through robowbc-sim
+  +--> synthetic transport for smoke and reporting
+  |
+  v
+JSON report, replay trace, Rerun recording, generated static site
+```
+
+Transport priority in the CLI is hardware when configured, then MuJoCo when the
+feature and config are present, then synthetic execution.
+
+## Crate Responsibilities
 
 | Crate | Responsibility |
-|-------|---------------|
-| `robowbc-core` | `WbcPolicy` trait, `Observation`, `WbcCommand`, `JointPositionTargets`, `RobotConfig` |
-| `robowbc-ort` | ONNX Runtime inference backend (ort crate, CUDA/TensorRT support) |
-| `robowbc-pyo3` | PyTorch inference backend via PyO3 (Python GIL-aware) |
-| `robowbc-registry` | `inventory`-based compile-time policy registration and factory |
-| `robowbc-comm` | zenoh communication layer, control loop tick runner |
-| `robowbc-cli` | CLI entry point: config parsing, backend selection, control loop |
-| `robowbc-sim` | MuJoCo simulation transport for hardware-free testing |
-| `robowbc-vis` | Rerun visualization integration |
+|-------|----------------|
+| `robowbc-core` | Core types: `WbcPolicy`, `Observation`, `WbcCommand`, `JointPositionTargets`, `RobotConfig`, `PolicyCapabilities`, and target validation |
+| `robowbc-config` | TOML config structures, defaults, robot/policy path resolution, and config validation |
+| `robowbc-registry` | `inventory`-based policy registration and construction from config |
+| `robowbc-ort` | ONNX Runtime backend, execution-provider config, and first-party policy wrappers |
+| `robowbc-pyo3` | Runtime backend for user-supplied Python or PyTorch policy modules |
+| `robowbc-py` | Standalone Python SDK exposing registry, policy, observation, command, target, and MuJoCo session types |
+| `robowbc-runtime` | Finite-state runtime coordination around policy execution, validator decisions, teleop requests, and control outputs |
+| `robowbc-comm` | Communication-oriented control-loop helpers, wire helpers, zenoh helpers, and Unitree G1 wiring |
+| `robowbc-transport` | Pluggable transport trait plus in-memory and CycloneDDS-oriented backends |
+| `robowbc-sim` | MuJoCo config and transport for hardware-free execution |
+| `robowbc-teleop` | Keyboard teleop source, keymap config, and teleop events |
+| `robowbc-vis` | Rerun visualizer and robot scene logging |
+| `robowbc-cli` | `robowbc` binary, config validation, policy runs, policy helpers, reports, teleop, and visualization wiring |
+| `unitree-hg-idl` | CDR serialization and CRC helpers for Unitree HG message families |
 
-## The `WbcPolicy` trait
+## Core Policy Contract
 
-```rust
-pub trait WbcPolicy: Send + Sync {
-    fn predict(&self, obs: &Observation) -> Result<JointPositionTargets>;
-    fn reset(&self) {}
-    fn control_frequency_hz(&self) -> u32;
-    fn supported_robots(&self) -> &[RobotConfig];
-}
-```
+`WbcPolicy` is implemented by every policy backend. Policies are `Send + Sync`
+so they can be called from runtime loops. Implementations are responsible for
+serializing access to any backend state that is not internally thread-safe.
 
-`Send + Sync` is required because the control loop runs the policy from a
-dedicated thread. `predict` takes a shared reference — concurrency protection
-(typically a `Mutex` around the ONNX session) lives inside the implementation.
+Important caller-facing types:
 
-## Observation and command types
+- `Observation`: proprioception, gravity vector, command, and timestamp.
+- `WbcCommand`: velocity, motion tokens, joint targets, kinematic pose, and
+  other command variants.
+- `JointPositionTargets`: output joint targets plus timestamp.
+- `PolicyCapabilities`: supported command kinds and declared limits.
+- `RobotConfig`: joint names, default pose, gains, and limits.
 
-```rust
-pub struct Observation {
-    pub joint_positions: Vec<f32>,   // radians
-    pub joint_velocities: Vec<f32>,  // rad/s
-    pub gravity_vector: [f32; 3],    // in robot body frame
-    pub command: WbcCommand,
-    pub timestamp: Instant,
-}
+Policies should reject unsupported command variants explicitly. A wrapper that
+cannot serve a public checkpoint should say so clearly instead of pretending to
+be runnable.
 
-pub enum WbcCommand {
-    Velocity(Twist),                     // vx, vy, yaw_rate
-    EndEffectorPoses(Vec<SE3>),          // hand/wrist SE3 targets
-    MotionTokens(Vec<f32>),              // GEAR-SONIC style tokens
-    JointTargets(Vec<f32>),              // direct joint targets
-    KinematicPose(BodyPose),             // full-body kinematic pose
-}
-```
+## Registry And Model Switching
 
-Policies declare which `WbcCommand` variant they accept and return
-`WbcError::UnsupportedCommand` for anything else.
-
-## Policy registry
-
-Policies register themselves at compile time using the `inventory` crate:
-
-```rust
-inventory::submit! {
-    WbcRegistration::new::<MyPolicy>("my_policy")
-}
-```
-
-The CLI then builds any registered policy by name:
-
-```rust
-let policy = WbcRegistry::build("my_policy", &config_toml_value)?;
-```
-
-`WbcRegistry::build` iterates `inventory::iter::<WbcRegistration>()` at
-runtime and calls the matching `RegistryPolicy::from_config` constructor.
-The policy name is the same string used in `[policy] name = "..."` in the
-TOML config.
-
-> **Gotcha**: All registered types must be in crates linked into the final
-> binary. `inventory` uses linker sections — dynamic loading is not supported.
-
-## Config-driven instantiation
-
-The CLI reads a TOML file, extracts `[policy.config]`, and passes it to the
-registry. Switching models means changing `policy.name` in the TOML:
+Policies register themselves at compile time through `inventory`. Runtime model
+selection is config-driven:
 
 ```toml
 [policy]
-name = "decoupled_wbc"   # change this to switch policies
-
-[policy.config.rl_model]
-model_path = "models/decoupled-wbc/GR00T-WholeBodyControl-Walk.onnx"
-execution_provider = { type = "cpu" }
+name = "decoupled_wbc"
 ```
 
-## Inference backends
+The registry name is the public switch. Current registry names include:
 
-### ONNX Runtime (`robowbc-ort`)
+| Name | State |
+|------|-------|
+| `gear_sonic` | Live public G1 planner velocity path and narrower tracking paths |
+| `decoupled_wbc` | Live public G1 balance and walk paths |
+| `wbc_agile` | Live public G1 recurrent checkpoint path |
+| `bfm_zero` | Live public G1 policy plus tracking context bundle |
+| `hover` | Wrapper present, blocked on user-exported checkpoint |
+| `wholebody_vla` | Experimental contract wrapper, no runnable public release |
+| `py_model` | User-supplied Python or PyTorch policy |
 
-Wraps the [`ort`](https://github.com/pykeio/ort) crate. Each policy holds a
-`Mutex<OrtBackend>` to serialize session execution across threads.
+All registered policy crates must be linked into the final binary. Dynamic
+loading does not make `inventory` registrations appear.
 
-Supported execution providers:
-- `{ type = "cpu" }` — always available
-- `{ type = "cuda", device_id = 0 }` — NVIDIA GPU
-- `{ type = "tensor_rt", device_id = 0 }` — NVIDIA TensorRT (requires matching toolkit)
+## Configuration Layers
 
-### PyO3 / PyTorch (`robowbc-pyo3`)
+Configs are split by purpose:
 
-Loads a Python module containing a `predict(obs) -> targets` function. The
-GIL is acquired per-call. Intended for development and non-exported models.
+- top-level policy configs under `configs/*.toml`
+- robot configs under `configs/robots/*.toml`
+- showcase configs under `configs/showcase/*.toml`
+- demo and teleop configs under `configs/demo/` and `configs/teleop/`
 
-## Control loop
+The smoke config, `configs/decoupled_smoke.toml`, uses a checked-in dynamic
+identity ONNX fixture and is the no-download local path.
 
-```
-tick N:
-  1. recv joint_state + imu  (zenoh / MuJoCo / synthetic)
-  2. build Observation
-  3. policy.predict(&obs)    ← your model runs here
-  4. send JointPositionTargets
-  5. sleep until next tick
-```
+## Inference Backends
 
-`run_control_tick` in `robowbc-comm` handles steps 1, 2, 4, and 5. Step 3
-is the policy call. The loop runs at `control_frequency_hz` (typically 50 Hz).
+### ONNX Runtime
 
-## Error handling
+`robowbc-ort` wraps ONNX Runtime and supports CPU, CUDA, and TensorRT execution
+providers when the host runtime matches. The checked-in public configs default
+to CPU unless the user opts into accelerator-specific settings.
 
-- Library crates (`robowbc-core`, `robowbc-ort`, …) use `thiserror`.
-- The CLI (`robowbc-cli`) uses `anyhow` for rich error context.
-- `WbcPolicy::predict` returns `Result<JointPositionTargets, WbcError>`.
-  A control loop receiving `WbcError` should log it and continue rather than
-  crash — hardware safety layers (PD controllers) handle the gap.
+### PyO3 / Python
+
+`robowbc-pyo3` loads user-supplied Python modules and calls them through PyO3.
+`robowbc-py` is the user-facing Python SDK package and exposes Rust-backed
+policies, observations, commands, targets, capabilities, and `MujocoSession`.
+
+## Runtime, Transport, And Teleop
+
+The runtime builds observations from transport state, applies the selected
+command source, calls the policy, validates targets, and sends the result toward
+the active transport.
+
+Supported execution modes include:
+
+- hardware-oriented Unitree G1 communication paths
+- CycloneDDS-oriented transport work
+- MuJoCo-backed transport for local simulation
+- synthetic transport for smoke runs and report generation
+- keyboard teleop for the protected demo path
+
+`make demo-keyboard` is the public interactive MuJoCo path and has additional
+guardrails in `docs/agents/keyboard-demo.md`.
+
+## Reports And Showcase
+
+The CLI can write runtime reports, replay traces, and Rerun recordings. Python
+scripts under `scripts/` normalize benchmark output, generate policy showcase
+pages, validate static site bundles, and build the published GitHub Pages site.
+
+The public site and proof-pack artifacts are evidence surfaces. They should
+remain tied to reproducible configs and generated machine-readable output.
+
+## Error Handling
+
+- Library crates use typed errors where callers need to distinguish failure
+  modes.
+- CLI paths add user-facing context to failed config, model, transport, and
+  report operations.
+- Missing model assets, unsupported commands, unsupported execution providers,
+  and platform limitations should fail explicitly.
+
+## Extension Points
+
+To add a policy, implement the core policy contract, register the wrapper, add a
+config, and provide a smoke or blocked-state proof. See `docs/adding-a-model.md`.
+
+To add a robot, define the robot config, joint order, limits, gains, and any
+transport or visualization mapping. See `docs/adding-a-robot.md`.
+
+To add a public report path, keep the JSON/report contract machine-readable and
+update the site validation tests that consume it.

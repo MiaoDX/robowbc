@@ -1,171 +1,92 @@
 # AGENTS.md
 
-This file defines the default operating playbook for coding agents working in this repository.
-Its scope is the entire repo tree rooted at this directory.
+Repository-wide instructions for coding agents working in this tree.
 
-## 0) First-read policy (mandatory)
+## Read First
 
-Before running any command, read in this order:
+Before commands or edits, read:
 
-1. `AGENTS.md` (this file)
-2. `CLAUDE.md`
-3. `Cargo.toml` (workspace root) — workspace members, dependencies
-4. `docs/founding-document.md` — project research, design decisions, architecture
+1. `AGENTS.md`
+2. `Cargo.toml`
+3. `docs/founding-document.md`
+4. `docs/agents/domain.md`
 
-If instructions conflict, priority is:
-**system/developer/user prompt > AGENTS.md > CLAUDE.md > inferred defaults**.
+Claude Code agents should also read `CLAUDE.md` for Claude-specific deltas.
 
----
+Instruction priority is:
+system/developer/user prompt > `AGENTS.md` > tool-specific files > inferred defaults.
 
-## Agent skills
+## Project Context
 
-### Issue tracker
+RoboWBC is a Linux-first Rust workspace for humanoid whole-body-control policy
+inference, with PyO3/Python surfaces for users who do not own the Rust host
+loop directly. Preserve explicit diagnostics, runtime safety, reproducible
+commands, and the registry-driven `WbcPolicy` architecture.
 
-Issues and PRDs are tracked in GitHub Issues for `MiaoDX/robowbc` using GitHub MCP tools. See `docs/agents/issue-tracker.md`.
+Use these orientation surfaces:
 
-### Triage labels
+- Human overview: `README.md`, `ARCHITECTURE.md`, `STATUS.md`, `docs/human/`
+- Domain and design context: `docs/founding-document.md`, `docs/architecture.md`
+- Agent runbooks: `docs/agents/README.md`
 
-Use the default five-label triage vocabulary. See `docs/agents/triage-labels.md`.
+## Verification
 
-### Domain docs
+Do not run tests first in a fresh environment. Complete the Rust preflight in
+`docs/agents/rust-workflow.md`: toolchain, build, then check.
 
-Single-context repo; read the root project docs as the canonical domain context. See `docs/agents/domain.md`.
-
----
-
-## 1) Environment preflight (mandatory before tests)
-
-Do not run tests immediately on a fresh environment.
-Always complete dependency preflight first.
-
-### 1.1 Rust toolchain
+For Rust changes, normally run:
 
 ```bash
-rustc --version        # expect 1.75+
-cargo --version
+make test
+make clippy
+make fmt-check
 ```
 
-If the Rust toolchain is not installed:
+Run `make rust-doc` when public Rust APIs or doc links change. For Python,
+site, benchmark, MuJoCo, or SDK changes, use the focused commands in
+`docs/agents/testing.md`.
 
-```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-source "$HOME/.cargo/env"
+Do not claim a command passed unless it ran in the current environment. If a
+check is blocked by CUDA, MuJoCo, protobuf, model downloads, display/OpenGL, or
+other system dependencies, report the exact blocker and the skipped command.
+
+## Protected Demo Path
+
+`make demo-keyboard` is the "git clone and see it work" path. Do not weaken the
+GR00T scene wrapper, support band, engage guard, init-pose settle window, or
+viewer lighting without equivalent verification. See
+`docs/agents/keyboard-demo.md`.
+
+## GitHub And Commits
+
+Use GitHub MCP tools for issues, PRDs, PRs, comments, and labels. Do not assume
+the `gh` CLI is installed.
+
+This repository uses rebase-only merges. Keep commits scoped and descriptive.
+Codex-authored commits must include:
+
+```text
+Co-authored-by: Codex <codex@users.noreply.github.com>
 ```
 
-### 1.2 Build verification
+Read `docs/agents/github-workflow.md` before PR review, CI triage, or commit
+work.
 
-```bash
-cargo build 2>&1
-```
+## Working Tree Safety
 
-If build fails due to missing system dependencies (e.g., CUDA, protobuf), report the exact blocker.
+The worktree may contain user changes. Do not revert changes you did not make.
+If existing changes affect your task, inspect them and work with them; ask only
+when they make the task impossible.
 
-### 1.3 Fast sanity check before tests
+Do not add generated models, MuJoCo downloads, benchmark output, site bundles,
+or caches unless the repository already tracks that exact artifact type.
 
-```bash
-cargo check 2>&1
-```
+## Preferred Skill Routing
 
----
-
-## 2) Standard test workflow
-
-### 2.1 Full tests (default)
-
-```bash
-cargo test
-```
-
-### 2.2 Focused debugging loop
-
-```bash
-cargo test -p robowbc-core -- test_name
-```
-
-### 2.3 Lint and format
-
-```bash
-cargo clippy -- -D warnings
-cargo fmt --check
-```
-
-Before finishing work, run full `cargo test` + `cargo clippy` at least once.
-
----
-
-## 3) Lint/format checks for code changes
-
-Run when Rust code changes are made:
-
-```bash
-cargo clippy -- -D warnings      # lint
-cargo fmt --check                 # format check
-cargo doc --no-deps 2>&1         # doc generation (catch broken doc links)
-```
-
-If a check cannot run because of environment limits, report the exact blocker.
-
----
-
-## 4) Operational best practices
-
-1. **Fail fast with clear diagnostics**: prefer explicit errors over silent fallbacks.
-2. **No hidden dependency assumptions**: always derive requirements from `Cargo.toml`.
-3. **Reproducible command logs**: report exact commands and outcomes.
-4. **Small, verifiable steps**: build → check → test → lint.
-5. **No dependency drift in fixes**: avoid ad-hoc single-crate installs unless doing triage.
-
-### 4.1 Keyboard demo guardrail
-
-`make demo-keyboard` is the "git clone and see it work" path. Keep
-`configs/demo/gear_sonic_keyboard_mujoco.toml` on the GR00T scene wrapper and
-the explicit `[sim.elastic_band]` support band anchored from the initialized
-pose unless replacing them with an equally verified upstream-style startup
-path. Keep `[runtime].require_engage = true` and `[runtime].init_pose_secs`
-enabled so `]` engages policy only after the robot settles. Keep the demo
-scene visibly lit enough to inspect foot contact in the MuJoCo viewer. For
-MuJoCo demo changes, run the targeted stability test:
-
-```bash
-MUJOCO_DOWNLOAD_DIR="$(pwd)/.cache/mujoco" \
-MUJOCO_DYNAMIC_LINK_DIR="$(pwd)/.cache/mujoco/mujoco-3.6.0/lib" \
-LD_LIBRARY_PATH="$(pwd)/.cache/mujoco/mujoco-3.6.0/lib:${LD_LIBRARY_PATH:-}" \
-cargo test -p robowbc-sim --features mujoco-auto-download \
-  gear_sonic_demo_model_holds_default_pose_for_startup_window
-```
-
----
-
-## 5) Quick command checklist (copy/paste)
-
-```bash
-# 1) Verify Rust toolchain
-rustc --version && cargo --version
-
-# 2) Build
-cargo build
-
-# 3) Run all tests
-cargo test
-
-# 4) Lint + format
-cargo clippy -- -D warnings && cargo fmt --check
-```
-
----
-
-## 6) Commit hygiene
-
-- Keep commits scoped and descriptive (`docs: ...`, `fix: ...`, etc.).
-- This repository only allows **rebase merge** — squash and merge commits are disabled.
-- When changing workflow/docs, ensure instructions match actual repo configuration.
-- Do not claim UT success unless the relevant test command (for example
-  `cargo test` or `pytest -q`) has been run in the current environment.
-- If a commit is created by Codex, include the Git trailer
-  `Co-authored-by: Codex <codex@users.noreply.github.com>` in the commit message.
-- If a commit is created by another AI coding agent, include a corresponding
-  co-author trailer so agent usage can be tracked later.
-- If you maintain a dedicated bot/user account, prefer that account's verified
-  noreply email for the relevant agent trailer.
-
----
+- `$intuitive-init` refreshes agent guidance.
+- `$intuitive-doc` maintains the human documentation surface.
+- `$intuitive-layout` proposes bounded repository layout improvements.
+- `$intuitive-tests` improves test organization and behavior quality.
+- `$intuitive-flow` turns fuzzy ideas into planned execution.
+- `$intuitive-refactor` sets a bounded refactor goal before broad cleanup.
+- `$intuitive-squash` cleans local agent commit history before handoff.
