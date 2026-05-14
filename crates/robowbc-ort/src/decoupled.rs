@@ -933,11 +933,11 @@ mod tests {
     ///
     /// To run once weights are available:
     /// ```bash
-    /// bash scripts/download_decoupled_wbc_models.sh
+    /// bash scripts/models/download_decoupled_wbc_models.sh
     /// cargo test -p robowbc-ort -- --ignored decoupled_wbc_real_model_inference
     /// ```
     #[test]
-    #[ignore = "requires real GR00T WholeBodyControl ONNX weights; run scripts/download_decoupled_wbc_models.sh first"]
+    #[ignore = "requires real GR00T WholeBodyControl ONNX weights; run scripts/models/download_decoupled_wbc_models.sh first"]
     fn decoupled_wbc_real_model_inference() {
         let walk_model = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../models/decoupled-wbc/GR00T-WholeBodyControl-Walk.onnx");

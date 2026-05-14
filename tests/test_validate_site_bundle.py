@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VALIDATOR_PATH = ROOT / "scripts" / "validate_site_bundle.py"
+VALIDATOR_PATH = ROOT / "scripts" / "site" / "validate_site_bundle.py"
 
 SPEC = importlib.util.spec_from_file_location("validate_site_bundle", VALIDATOR_PATH)
 VALIDATOR = importlib.util.module_from_spec(SPEC)

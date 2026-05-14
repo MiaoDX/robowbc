@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-REPORT_PATH = ROOT / "scripts" / "roboharness_report.py"
+REPORT_PATH = ROOT / "scripts" / "reports" / "roboharness_report.py"
 
 SPEC = importlib.util.spec_from_file_location("roboharness_report", REPORT_PATH)
 REPORT = importlib.util.module_from_spec(SPEC)

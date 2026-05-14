@@ -118,7 +118,7 @@ It is not an NVIDIA product.
 ```bash
 git clone https://github.com/MiaoDX/robowbc
 cd robowbc
-bash scripts/download_gear_sonic_models.sh
+bash scripts/models/download_gear_sonic_models.sh
 # Downloads model_encoder.onnx, model_decoder.onnx, planner_sonic.onnx
 # into models/gear-sonic/
 ```
@@ -177,9 +177,9 @@ Run the artifact-backed comparison suite:
 
 ```bash
 git submodule update --init --recursive third_party/GR00T-WholeBodyControl
-python3 scripts/bench_robowbc_compare.py --all
-python3 scripts/bench_nvidia_official.py --all
-python3 scripts/render_nvidia_benchmark_summary.py --output artifacts/benchmarks/nvidia/SUMMARY.md
+python3 scripts/benchmarks/bench_robowbc_compare.py --all
+python3 scripts/benchmarks/bench_nvidia_official.py --all
+python3 scripts/benchmarks/render_nvidia_benchmark_summary.py --output artifacts/benchmarks/nvidia/SUMMARY.md
 ```
 
 See the benchmark registry in `artifacts/benchmarks/nvidia/cases.json` and the

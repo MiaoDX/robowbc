@@ -110,7 +110,7 @@ directly from the CI artifact bundle:
 | `gear_sonic` | Live | Yes | [configs/sonic_g1.toml](configs/sonic_g1.toml) | Uses the published `planner_sonic.onnx` velocity path by default; supports `cpu`, `cuda`, and `tensor_rt` when the host ORT/NVIDIA runtime matches, but the shipped config stays on CPU until you opt in |
 | `decoupled_wbc` | Live | Yes | [configs/decoupled_g1.toml](configs/decoupled_g1.toml) | Public G1 balance and walk checkpoints; [configs/decoupled_smoke.toml](configs/decoupled_smoke.toml) stays as the no-download smoke path |
 | `wbc_agile` | Live | Yes | [configs/wbc_agile_g1.toml](configs/wbc_agile_g1.toml) | Published G1 recurrent checkpoint is wired; the T1 path still expects a user export |
-| `bfm_zero` | Live | Yes | [configs/bfm_zero_g1.toml](configs/bfm_zero_g1.toml) | Public ONNX plus tracking context bundle is normalized by `scripts/download_bfm_zero_models.sh` |
+| `bfm_zero` | Live | Yes | [configs/bfm_zero_g1.toml](configs/bfm_zero_g1.toml) | Public ONNX plus tracking context bundle is normalized by `scripts/models/download_bfm_zero_models.sh` |
 | `hover` | Blocked | No | [configs/hover_h1.toml](configs/hover_h1.toml) | Wrapper exists, but the public upstream repo does not ship a pretrained checkpoint |
 | `wholebody_vla` | Experimental | No | [configs/wholebody_vla_x2.toml](configs/wholebody_vla_x2.toml) | Contract wrapper only; the public upstream repo does not yet expose a runnable inference release |
 | `py_model` | User supplied | N/A | user TOML | Loads Python modules or PyTorch checkpoints through `robowbc-pyo3` |
@@ -164,16 +164,16 @@ cargo run --release -p robowbc-cli \
 <summary><strong>Run the live public policies</strong></summary>
 
 ```bash
-bash scripts/download_gear_sonic_models.sh
+bash scripts/models/download_gear_sonic_models.sh
 cargo run --release --bin robowbc -- run --config configs/sonic_g1.toml
 
-bash scripts/download_decoupled_wbc_models.sh
+bash scripts/models/download_decoupled_wbc_models.sh
 cargo run --release --bin robowbc -- run --config configs/decoupled_g1.toml
 
-bash scripts/download_wbc_agile_models.sh
+bash scripts/models/download_wbc_agile_models.sh
 cargo run --release --bin robowbc -- run --config configs/wbc_agile_g1.toml
 
-bash scripts/download_bfm_zero_models.sh
+bash scripts/models/download_bfm_zero_models.sh
 cargo run --release --bin robowbc -- run --config configs/bfm_zero_g1.toml
 ```
 
@@ -200,7 +200,7 @@ make showcase-verify
 make site-serve SITE_OPEN=1
 ```
 
-`make site` wraps `scripts/build_site.py` and now owns the full local/CI site
+`make site` wraps `scripts/site/build_site.py` and now owns the full local/CI site
 build. It picks `./.cache/mujoco` by default, downloads MuJoCo there when
 needed, rebuilds the `robowbc` binary with
 `robowbc-cli/sim-auto-download,robowbc-cli/vis`, runs the benchmark
@@ -232,16 +232,16 @@ playback. Pull requests keep the downloadable `robowbc-site` artifact, and
 <summary><strong>Manual real-model verification</strong></summary>
 
 ```bash
-bash scripts/download_gear_sonic_models.sh
+bash scripts/models/download_gear_sonic_models.sh
 cargo test -p robowbc-ort -- --ignored gear_sonic_real_model_inference
 
-bash scripts/download_decoupled_wbc_models.sh
+bash scripts/models/download_decoupled_wbc_models.sh
 cargo test -p robowbc-ort -- --ignored decoupled_wbc_real_model_inference
 
-bash scripts/download_wbc_agile_models.sh
+bash scripts/models/download_wbc_agile_models.sh
 cargo test -p robowbc-ort -- --ignored wbc_agile_real_model_inference
 
-bash scripts/download_bfm_zero_models.sh
+bash scripts/models/download_bfm_zero_models.sh
 BFM_ZERO_MODEL_PATH=models/bfm_zero/bfm_zero_g1.onnx \
 BFM_ZERO_CONTEXT_PATH=models/bfm_zero/zs_walking.npy \
 cargo test -p robowbc-ort bfm_zero_real_model_inference -- --ignored --nocapture

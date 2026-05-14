@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SHOWCASE_PATH = ROOT / "scripts" / "generate_policy_showcase.py"
+SHOWCASE_PATH = ROOT / "scripts" / "site" / "generate_policy_showcase.py"
 
 SHOWCASE_SPEC = importlib.util.spec_from_file_location(
     "generate_policy_showcase", SHOWCASE_PATH

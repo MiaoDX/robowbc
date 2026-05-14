@@ -14,11 +14,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 REGISTRY_PATH = ROOT / "benchmarks/nvidia/cases.json"
-NORMALIZER_PATH = ROOT / "scripts/normalize_nvidia_benchmarks.py"
-RENDER_PATH = ROOT / "scripts/render_nvidia_benchmark_summary.py"
-ROBOHARNESS_REPORT_PATH = ROOT / "scripts/roboharness_report.py"
-ROBOWBC_COMPARE_PATH = ROOT / "scripts/bench_robowbc_compare.py"
-OFFICIAL_COMPARE_PATH = ROOT / "scripts/bench_nvidia_official.py"
+NORMALIZER_PATH = ROOT / "scripts/benchmarks/normalize_nvidia_benchmarks.py"
+RENDER_PATH = ROOT / "scripts/benchmarks/render_nvidia_benchmark_summary.py"
+ROBOHARNESS_REPORT_PATH = ROOT / "scripts/reports/roboharness_report.py"
+ROBOWBC_COMPARE_PATH = ROOT / "scripts/benchmarks/bench_robowbc_compare.py"
+OFFICIAL_COMPARE_PATH = ROOT / "scripts/benchmarks/bench_nvidia_official.py"
 
 SPEC = importlib.util.spec_from_file_location("normalize_nvidia_benchmarks", NORMALIZER_PATH)
 NORMALIZER = importlib.util.module_from_spec(SPEC)
@@ -406,7 +406,7 @@ class NvidiaBenchmarkTests(unittest.TestCase):
         )
         self.assertEqual(
             command,
-            "python3 scripts/bench_robowbc_compare.py --case "
+            "python3 scripts/benchmarks/bench_robowbc_compare.py --case "
             "gear_sonic/full_velocity_tick_steady_state --provider cuda "
             "--output-root /tmp/robowbc-bench-out",
         )
@@ -425,7 +425,7 @@ class NvidiaBenchmarkTests(unittest.TestCase):
         )
         self.assertEqual(
             command,
-            "python3 scripts/bench_nvidia_official.py --case "
+            "python3 scripts/benchmarks/bench_nvidia_official.py --case "
             "gear_sonic/planner_only_cold_start --provider tensor_rt "
             "--repo-dir /tmp/official-src --output-root /tmp/official-bench-out "
             "--samples 9 --ticks 17 --control-frequency-hz 60",
@@ -647,7 +647,7 @@ class NvidiaBenchmarkTests(unittest.TestCase):
             subprocess.run(
                 [
                     "python3",
-                    str(ROOT / "scripts/bench_nvidia_official.py"),
+                    str(ROOT / "scripts/benchmarks/bench_nvidia_official.py"),
                     "--case",
                     "decoupled_wbc/walk_predict",
                     "--repo-dir",
@@ -667,7 +667,7 @@ class NvidiaBenchmarkTests(unittest.TestCase):
             self.assertEqual(artifact["status"], "blocked")
             self.assertEqual(artifact["implementation"], "ort-cpp-sonic")
             self.assertEqual(artifact["variant_label"], "cpu-baseline")
-            self.assertIn("scripts/download_decoupled_wbc_models.sh", artifact["notes"])
+            self.assertIn("scripts/models/download_decoupled_wbc_models.sh", artifact["notes"])
 
     def test_official_wrapper_blocks_decoupled_non_cpu_provider_without_relabeling(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -677,7 +677,7 @@ class NvidiaBenchmarkTests(unittest.TestCase):
             subprocess.run(
                 [
                     "python3",
-                    str(ROOT / "scripts/bench_nvidia_official.py"),
+                    str(ROOT / "scripts/benchmarks/bench_nvidia_official.py"),
                     "--case",
                     "decoupled_wbc/walk_predict",
                     "--provider",
@@ -714,7 +714,7 @@ class NvidiaBenchmarkTests(unittest.TestCase):
             subprocess.run(
                 [
                     "python3",
-                    str(ROOT / "scripts/bench_nvidia_official.py"),
+                    str(ROOT / "scripts/benchmarks/bench_nvidia_official.py"),
                     "--all",
                     "--repo-dir",
                     str(repo_dir),
@@ -779,7 +779,7 @@ class NvidiaBenchmarkTests(unittest.TestCase):
                 subprocess.run(
                     [
                         "python3",
-                        str(ROOT / "scripts/bench_robowbc_compare.py"),
+                        str(ROOT / "scripts/benchmarks/bench_robowbc_compare.py"),
                         "--case",
                         case_id,
                         "--output-root",
@@ -808,7 +808,7 @@ class NvidiaBenchmarkTests(unittest.TestCase):
             subprocess.run(
                 [
                     "python3",
-                    str(ROOT / "scripts/bench_robowbc_compare.py"),
+                    str(ROOT / "scripts/benchmarks/bench_robowbc_compare.py"),
                     "--case",
                     "decoupled_wbc/walk_predict",
                     "--provider",
@@ -843,7 +843,7 @@ class NvidiaBenchmarkTests(unittest.TestCase):
             subprocess.run(
                 [
                     "python3",
-                    str(ROOT / "scripts/bench_robowbc_compare.py"),
+                    str(ROOT / "scripts/benchmarks/bench_robowbc_compare.py"),
                     "--case",
                     "gear_sonic/planner_only_cold_start",
                     "--provider",
@@ -887,7 +887,7 @@ class NvidiaBenchmarkTests(unittest.TestCase):
             subprocess.run(
                 [
                     "python3",
-                    str(ROOT / "scripts/bench_nvidia_official.py"),
+                    str(ROOT / "scripts/benchmarks/bench_nvidia_official.py"),
                     "--case",
                     "gear_sonic/planner_only_cold_start",
                     "--provider",

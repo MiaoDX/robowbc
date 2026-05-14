@@ -40,7 +40,7 @@ motion.
 ## Running a proof pack
 
 ```bash
-python3 scripts/roboharness_report.py \
+python3 scripts/reports/roboharness_report.py \
   --robowbc-binary target/release/robowbc \
   --config configs/sonic_g1.toml \
   --output-dir artifacts/roboharness-reports/sonic_g1 \
@@ -128,10 +128,10 @@ The authority chain is intentionally one-way:
    semantic phases once in the authored config
 2. the Rust CLI emits that data as authoritative `phase_timeline` metadata in
    the run artifacts
-3. `scripts/roboharness_report.py` copies the contract into
+3. `scripts/reports/roboharness_report.py` copies the contract into
    `proof_pack_manifest.json`
-4. `scripts/generate_policy_showcase.py` and
-   `scripts/validate_site_bundle.py` consume only the manifest contract
+4. `scripts/site/generate_policy_showcase.py` and
+   `scripts/site/validate_site_bundle.py` consume only the manifest contract
 
 When `phase_review.enabled = true`, the manifest adds these fields:
 
@@ -231,7 +231,7 @@ outside `0..5`.
 
 ## Replay behavior
 
-`scripts/roboharness_report.py` now prefers the canonical replay trace when it
+`scripts/reports/roboharness_report.py` now prefers the canonical replay trace when it
 exists and only falls back to `run_report.json.frames` for backward
 compatibility with older CLI artifacts.
 
@@ -248,7 +248,7 @@ For MuJoCo replay:
 The showcase and benchmark pages remain overview surfaces. Proof packs are the
 drill-down layer.
 
-`scripts/generate_policy_showcase.py` can render optional proof-pack links when
+`scripts/site/generate_policy_showcase.py` can render optional proof-pack links when
 a proof-pack artifact is co-located beside the showcase output. The simplest
 convention is to copy the proof-pack directory next to the showcase as:
 
