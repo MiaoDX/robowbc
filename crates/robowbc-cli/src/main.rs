@@ -759,11 +759,34 @@ struct ReportBasePose {
 }
 
 #[derive(Debug, Clone, Serialize)]
+struct ReportPlannerStatus {
+    mode_id: i64,
+    mode_name: String,
+    target_vel_mps: Option<f32>,
+    planar_speed_mps: f32,
+}
+
+#[derive(Debug, Clone, Serialize)]
 struct VelocityTrackingMetrics {
     sample_count: usize,
+    sim_elapsed_secs: f64,
+    wall_elapsed_secs: f64,
+    real_time_factor: f64,
+    commanded_vx_mean_mps: f64,
+    commanded_vy_mean_mps: f64,
+    commanded_yaw_rate_mean_rad_s: f64,
+    actual_vx_mean_mps: f64,
+    actual_vy_mean_mps: f64,
+    actual_yaw_rate_mean_rad_s: f64,
+    actual_wall_vx_mean_mps: f64,
+    actual_wall_vy_mean_mps: f64,
+    actual_wall_yaw_rate_mean_rad_s: f64,
     vx_rmse_mps: f64,
     vy_rmse_mps: f64,
     yaw_rate_rmse_rad_s: f64,
+    wall_vx_rmse_mps: f64,
+    wall_vy_rmse_mps: f64,
+    wall_yaw_rate_rmse_rad_s: f64,
     vx_mean_abs_error_mps: f64,
     vy_mean_abs_error_mps: f64,
     yaw_rate_mean_abs_error_rad_s: f64,
@@ -778,11 +801,16 @@ struct VelocityTrackingMetrics {
 #[derive(Debug, Clone, Serialize)]
 struct ReportFrame {
     tick: usize,
+    wall_time_secs: f64,
     command_data: Vec<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     phase_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     base_pose: Option<ReportBasePose>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    elastic_band_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    planner_status: Option<ReportPlannerStatus>,
     actual_positions: Vec<f32>,
     actual_velocities: Vec<f32>,
     target_positions: Vec<f32>,
@@ -793,11 +821,16 @@ struct ReportFrame {
 struct ReplayFrame {
     tick: usize,
     sim_time_secs: f64,
+    wall_time_secs: f64,
     command_data: Vec<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     phase_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     base_pose: Option<ReportBasePose>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    elastic_band_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    planner_status: Option<ReportPlannerStatus>,
     actual_positions: Vec<f32>,
     actual_velocities: Vec<f32>,
     target_positions: Vec<f32>,
@@ -812,9 +845,12 @@ impl From<&ReplayFrame> for ReportFrame {
     fn from(frame: &ReplayFrame) -> Self {
         Self {
             tick: frame.tick,
+            wall_time_secs: frame.wall_time_secs,
             command_data: frame.command_data.clone(),
             phase_name: frame.phase_name.clone(),
             base_pose: frame.base_pose,
+            elastic_band_enabled: frame.elastic_band_enabled,
+            planner_status: frame.planner_status.clone(),
             actual_positions: frame.actual_positions.clone(),
             actual_velocities: frame.actual_velocities.clone(),
             target_positions: frame.target_positions.clone(),
@@ -1361,6 +1397,10 @@ trait ReportTelemetryProvider {
     fn report_mujoco_state(&self) -> Option<ReplayMujocoState> {
         None
     }
+
+    fn report_elastic_band_enabled(&self) -> Option<bool> {
+        None
+    }
 }
 
 impl ReportTelemetryProvider for SyntheticTransport {}
@@ -1387,14 +1427,91 @@ impl ReportTelemetryProvider for MujocoTransport {
             qvel: self.qvel_snapshot(),
         })
     }
+
+    fn report_elastic_band_enabled(&self) -> Option<bool> {
+        self.elastic_band_enabled()
+    }
 }
 
-#[derive(Default)]
+const VELOCITY_MONITOR_PRINT_INTERVAL_SECS: f64 = 1.0;
+const NONZERO_PLANAR_COMMAND_EPS_MPS: f64 = 0.05;
+const GEAR_SONIC_PLANNER_MODE_IDLE: i64 = 0;
+const GEAR_SONIC_PLANNER_MODE_SLOW_WALK: i64 = 1;
+const GEAR_SONIC_PLANNER_MODE_WALK: i64 = 2;
+const GEAR_SONIC_PLANNER_MODE_RUN: i64 = 3;
+const GEAR_SONIC_MIN_MOVING_SPEED_MPS: f32 = 0.2;
+const GEAR_SONIC_WALK_COMMAND_MIN_MPS: f32 = 0.8;
+const GEAR_SONIC_RUN_COMMAND_MIN_MPS: f32 = 1.5;
+const GEAR_SONIC_RUN_COMMAND_MAX_MPS: f32 = 3.0;
+
+#[derive(Debug, Clone)]
+struct VelocityTrackingFrame {
+    sim_time_secs: f64,
+    wall_time_secs: f64,
+    command: [f32; 3],
+    base_pose: Option<ReportBasePose>,
+    elastic_band_enabled: Option<bool>,
+    planner_status: Option<ReportPlannerStatus>,
+}
+
+impl VelocityTrackingFrame {
+    fn from_replay_frame(frame: &ReplayFrame) -> Option<Self> {
+        if frame.command_data.len() < 3 {
+            return None;
+        }
+
+        Some(Self {
+            sim_time_secs: frame.sim_time_secs,
+            wall_time_secs: frame.wall_time_secs,
+            command: [
+                frame.command_data[0],
+                frame.command_data[1],
+                frame.command_data[2],
+            ],
+            base_pose: frame.base_pose,
+            elastic_band_enabled: frame.elastic_band_enabled,
+            planner_status: frame.planner_status.clone(),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct VelocityTrackingSample {
+    command: [f32; 3],
+    actual_vx_mps: f64,
+    actual_vy_mps: f64,
+    actual_yaw_rate_rad_s: f64,
+    actual_wall_vx_mps: f64,
+    actual_wall_vy_mps: f64,
+    actual_wall_yaw_rate_rad_s: f64,
+    sim_dt_secs: f64,
+    wall_dt_secs: f64,
+    body_displacement: [f32; 2],
+    yaw_delta_rad: f32,
+    elastic_band_enabled: Option<bool>,
+    planner_status: Option<ReportPlannerStatus>,
+}
+
+#[derive(Default, Clone)]
 struct VelocityTrackingAccumulator {
     sample_count: usize,
+    sim_elapsed_secs: f64,
+    wall_elapsed_secs: f64,
+    commanded_vx_sum: f64,
+    commanded_vy_sum: f64,
+    commanded_yaw_sum: f64,
+    actual_vx_sum: f64,
+    actual_vy_sum: f64,
+    actual_yaw_sum: f64,
+    actual_wall_vx_sum: f64,
+    actual_wall_vy_sum: f64,
+    actual_wall_yaw_sum: f64,
     vx_sq_error_sum: f64,
     vy_sq_error_sum: f64,
     yaw_sq_error_sum: f64,
+    wall_vx_sq_error_sum: f64,
+    wall_vy_sq_error_sum: f64,
+    wall_yaw_sq_error_sum: f64,
     vx_abs_error_sum: f64,
     vy_abs_error_sum: f64,
     yaw_abs_error_sum: f64,
@@ -1407,49 +1524,81 @@ struct VelocityTrackingAccumulator {
 }
 
 impl VelocityTrackingAccumulator {
-    fn update(
-        &mut self,
-        command: [f32; 3],
-        actual_body_displacement: [f32; 2],
-        actual_yaw_delta_rad: f32,
-        dt_secs: f64,
-    ) {
-        let actual_forward_velocity = f64::from(actual_body_displacement[0]) / dt_secs;
-        let actual_lateral_velocity = f64::from(actual_body_displacement[1]) / dt_secs;
-        let actual_yaw_rate = f64::from(actual_yaw_delta_rad) / dt_secs;
+    #[allow(clippy::similar_names)]
+    fn update(&mut self, sample: &VelocityTrackingSample) {
+        let command_vx = f64::from(sample.command[0]);
+        let command_vy = f64::from(sample.command[1]);
+        let command_yaw = f64::from(sample.command[2]);
 
-        let forward_velocity_error = actual_forward_velocity - f64::from(command[0]);
-        let lateral_velocity_error = actual_lateral_velocity - f64::from(command[1]);
-        let yaw_error = actual_yaw_rate - f64::from(command[2]);
+        let forward_velocity_error = sample.actual_vx_mps - command_vx;
+        let lateral_velocity_error = sample.actual_vy_mps - command_vy;
+        let yaw_error = sample.actual_yaw_rate_rad_s - command_yaw;
+        let wall_forward_velocity_error = sample.actual_wall_vx_mps - command_vx;
+        let wall_lateral_velocity_error = sample.actual_wall_vy_mps - command_vy;
+        let wall_yaw_error = sample.actual_wall_yaw_rate_rad_s - command_yaw;
 
         self.sample_count = self.sample_count.saturating_add(1);
+        self.sim_elapsed_secs += sample.sim_dt_secs;
+        self.wall_elapsed_secs += sample.wall_dt_secs;
+        self.commanded_vx_sum += command_vx;
+        self.commanded_vy_sum += command_vy;
+        self.commanded_yaw_sum += command_yaw;
+        self.actual_vx_sum += sample.actual_vx_mps;
+        self.actual_vy_sum += sample.actual_vy_mps;
+        self.actual_yaw_sum += sample.actual_yaw_rate_rad_s;
+        self.actual_wall_vx_sum += sample.actual_wall_vx_mps;
+        self.actual_wall_vy_sum += sample.actual_wall_vy_mps;
+        self.actual_wall_yaw_sum += sample.actual_wall_yaw_rate_rad_s;
         self.vx_sq_error_sum += forward_velocity_error * forward_velocity_error;
         self.vy_sq_error_sum += lateral_velocity_error * lateral_velocity_error;
         self.yaw_sq_error_sum += yaw_error * yaw_error;
+        self.wall_vx_sq_error_sum += wall_forward_velocity_error * wall_forward_velocity_error;
+        self.wall_vy_sq_error_sum += wall_lateral_velocity_error * wall_lateral_velocity_error;
+        self.wall_yaw_sq_error_sum += wall_yaw_error * wall_yaw_error;
         self.vx_abs_error_sum += forward_velocity_error.abs();
         self.vy_abs_error_sum += lateral_velocity_error.abs();
         self.yaw_abs_error_sum += yaw_error.abs();
         self.vx_peak_abs_error = self.vx_peak_abs_error.max(forward_velocity_error.abs());
         self.vy_peak_abs_error = self.vy_peak_abs_error.max(lateral_velocity_error.abs());
         self.yaw_peak_abs_error = self.yaw_peak_abs_error.max(yaw_error.abs());
-        self.forward_distance_m += f64::from(actual_body_displacement[0]);
-        self.lateral_distance_m += f64::from(actual_body_displacement[1]);
-        self.heading_change_rad += f64::from(actual_yaw_delta_rad);
+        self.forward_distance_m += f64::from(sample.body_displacement[0]);
+        self.lateral_distance_m += f64::from(sample.body_displacement[1]);
+        self.heading_change_rad += f64::from(sample.yaw_delta_rad);
     }
 
-    fn finish(self) -> Option<VelocityTrackingMetrics> {
+    fn finish(&self) -> Option<VelocityTrackingMetrics> {
         if self.sample_count == 0 {
             return None;
         }
 
         #[allow(clippy::cast_precision_loss)]
         let sample_count = self.sample_count as f64;
+        let real_time_factor = if self.wall_elapsed_secs > f64::EPSILON {
+            self.sim_elapsed_secs / self.wall_elapsed_secs
+        } else {
+            0.0
+        };
 
         Some(VelocityTrackingMetrics {
             sample_count: self.sample_count,
+            sim_elapsed_secs: self.sim_elapsed_secs,
+            wall_elapsed_secs: self.wall_elapsed_secs,
+            real_time_factor,
+            commanded_vx_mean_mps: self.commanded_vx_sum / sample_count,
+            commanded_vy_mean_mps: self.commanded_vy_sum / sample_count,
+            commanded_yaw_rate_mean_rad_s: self.commanded_yaw_sum / sample_count,
+            actual_vx_mean_mps: self.actual_vx_sum / sample_count,
+            actual_vy_mean_mps: self.actual_vy_sum / sample_count,
+            actual_yaw_rate_mean_rad_s: self.actual_yaw_sum / sample_count,
+            actual_wall_vx_mean_mps: self.actual_wall_vx_sum / sample_count,
+            actual_wall_vy_mean_mps: self.actual_wall_vy_sum / sample_count,
+            actual_wall_yaw_rate_mean_rad_s: self.actual_wall_yaw_sum / sample_count,
             vx_rmse_mps: (self.vx_sq_error_sum / sample_count).sqrt(),
             vy_rmse_mps: (self.vy_sq_error_sum / sample_count).sqrt(),
             yaw_rate_rmse_rad_s: (self.yaw_sq_error_sum / sample_count).sqrt(),
+            wall_vx_rmse_mps: (self.wall_vx_sq_error_sum / sample_count).sqrt(),
+            wall_vy_rmse_mps: (self.wall_vy_sq_error_sum / sample_count).sqrt(),
+            wall_yaw_rate_rmse_rad_s: (self.wall_yaw_sq_error_sum / sample_count).sqrt(),
             vx_mean_abs_error_mps: self.vx_abs_error_sum / sample_count,
             vy_mean_abs_error_mps: self.vy_abs_error_sum / sample_count,
             yaw_rate_mean_abs_error_rad_s: self.yaw_abs_error_sum / sample_count,
@@ -1463,10 +1612,136 @@ impl VelocityTrackingAccumulator {
     }
 }
 
+struct VelocityTrackingMonitor {
+    enabled: bool,
+    previous_frame: Option<VelocityTrackingFrame>,
+    accumulator: VelocityTrackingAccumulator,
+    next_print_wall_time_secs: f64,
+    support_band_hint_printed: bool,
+}
+
+struct VelocityMonitorSnapshot {
+    sample: VelocityTrackingSample,
+    metrics: VelocityTrackingMetrics,
+    support_band_hint: bool,
+}
+
+impl VelocityTrackingMonitor {
+    fn new(runtime_command: &ParsedRuntimeCommand) -> Self {
+        Self {
+            enabled: matches!(
+                runtime_command,
+                ParsedRuntimeCommand::Velocity(_) | ParsedRuntimeCommand::VelocitySchedule(_)
+            ),
+            previous_frame: None,
+            accumulator: VelocityTrackingAccumulator::default(),
+            next_print_wall_time_secs: VELOCITY_MONITOR_PRINT_INTERVAL_SECS,
+            support_band_hint_printed: false,
+        }
+    }
+
+    fn observe(&mut self, frame: &ReplayFrame) -> Option<VelocityMonitorSnapshot> {
+        if !self.enabled {
+            return None;
+        }
+
+        let current = VelocityTrackingFrame::from_replay_frame(frame)?;
+        let sample = self
+            .previous_frame
+            .take()
+            .and_then(|previous| velocity_tracking_sample(previous, &current));
+        self.previous_frame = Some(current);
+
+        let sample = sample?;
+        self.accumulator.update(&sample);
+        let metrics = self.accumulator.finish()?;
+        let support_band_hint = !self.support_band_hint_printed
+            && sample.elastic_band_enabled == Some(true)
+            && planar_command_speed_mps(sample.command) > NONZERO_PLANAR_COMMAND_EPS_MPS;
+        if support_band_hint {
+            self.support_band_hint_printed = true;
+        }
+
+        if support_band_hint || frame.wall_time_secs >= self.next_print_wall_time_secs {
+            self.next_print_wall_time_secs =
+                frame.wall_time_secs + VELOCITY_MONITOR_PRINT_INTERVAL_SECS;
+            Some(VelocityMonitorSnapshot {
+                sample,
+                metrics,
+                support_band_hint,
+            })
+        } else {
+            None
+        }
+    }
+
+    fn finish(&self) -> Option<VelocityTrackingMetrics> {
+        self.accumulator.finish()
+    }
+}
+
+fn planar_command_speed_mps(command: [f32; 3]) -> f64 {
+    f64::from(command[0]).hypot(f64::from(command[1]))
+}
+
+#[allow(clippy::similar_names)]
+fn velocity_tracking_sample(
+    previous: VelocityTrackingFrame,
+    current: &VelocityTrackingFrame,
+) -> Option<VelocityTrackingSample> {
+    let sim_dt_secs = current.sim_time_secs - previous.sim_time_secs;
+    if sim_dt_secs <= f64::EPSILON {
+        return None;
+    }
+
+    let wall_dt_secs = match current.wall_time_secs - previous.wall_time_secs {
+        dt if dt > f64::EPSILON => dt,
+        _ => sim_dt_secs,
+    };
+
+    let (Some(previous_pose), Some(current_pose)) = (previous.base_pose, current.base_pose) else {
+        return None;
+    };
+
+    let body_displacement = world_to_body_planar_delta(
+        previous_pose.position_world,
+        previous_pose.rotation_xyzw,
+        current_pose.position_world,
+    );
+    let yaw_delta_rad = wrap_angle_rad(
+        yaw_from_rotation_xyzw(current_pose.rotation_xyzw)
+            - yaw_from_rotation_xyzw(previous_pose.rotation_xyzw),
+    );
+
+    let actual_vx_mps = f64::from(body_displacement[0]) / sim_dt_secs;
+    let actual_vy_mps = f64::from(body_displacement[1]) / sim_dt_secs;
+    let actual_yaw_rate_rad_s = f64::from(yaw_delta_rad) / sim_dt_secs;
+    let actual_wall_vx_mps = f64::from(body_displacement[0]) / wall_dt_secs;
+    let actual_wall_vy_mps = f64::from(body_displacement[1]) / wall_dt_secs;
+    let actual_wall_yaw_rate_rad_s = f64::from(yaw_delta_rad) / wall_dt_secs;
+
+    Some(VelocityTrackingSample {
+        command: previous.command,
+        actual_vx_mps,
+        actual_vy_mps,
+        actual_yaw_rate_rad_s,
+        actual_wall_vx_mps,
+        actual_wall_vy_mps,
+        actual_wall_yaw_rate_rad_s,
+        sim_dt_secs,
+        wall_dt_secs,
+        body_displacement,
+        yaw_delta_rad,
+        elastic_band_enabled: previous.elastic_band_enabled,
+        planner_status: previous.planner_status,
+    })
+}
+
+#[cfg(test)]
 fn compute_velocity_tracking_metrics(
     frames: &[ReplayFrame],
     runtime_command: &ParsedRuntimeCommand,
-    frequency_hz: u32,
+    _frequency_hz: u32,
 ) -> Option<VelocityTrackingMetrics> {
     if !matches!(
         runtime_command,
@@ -1475,46 +1750,116 @@ fn compute_velocity_tracking_metrics(
         return None;
     }
 
-    if frequency_hz == 0 || frames.len() < 2 {
+    if frames.len() < 2 {
         return None;
     }
 
-    let dt_secs = 1.0 / f64::from(frequency_hz);
     let mut accumulator = VelocityTrackingAccumulator::default();
 
     for pair in frames.windows(2) {
-        let previous = &pair[0];
-        let current = &pair[1];
-
-        if previous.command_data.len() < 3 {
-            continue;
-        }
-
-        let (Some(previous_pose), Some(current_pose)) = (previous.base_pose, current.base_pose)
-        else {
+        let Some(previous) = VelocityTrackingFrame::from_replay_frame(&pair[0]) else {
             continue;
         };
-
-        let command = [
-            previous.command_data[0],
-            previous.command_data[1],
-            previous.command_data[2],
-        ];
-
-        let body_displacement = world_to_body_planar_delta(
-            previous_pose.position_world,
-            previous_pose.rotation_xyzw,
-            current_pose.position_world,
-        );
-        let yaw_delta = wrap_angle_rad(
-            yaw_from_rotation_xyzw(current_pose.rotation_xyzw)
-                - yaw_from_rotation_xyzw(previous_pose.rotation_xyzw),
-        );
-
-        accumulator.update(command, body_displacement, yaw_delta, dt_secs);
+        let Some(current) = VelocityTrackingFrame::from_replay_frame(&pair[1]) else {
+            continue;
+        };
+        if let Some(sample) = velocity_tracking_sample(previous, &current) {
+            accumulator.update(&sample);
+        }
     }
 
     accumulator.finish()
+}
+
+fn gear_sonic_mode_name(mode_id: i64) -> &'static str {
+    match mode_id {
+        GEAR_SONIC_PLANNER_MODE_IDLE => "idle",
+        GEAR_SONIC_PLANNER_MODE_SLOW_WALK => "slow_walk",
+        GEAR_SONIC_PLANNER_MODE_WALK => "walk",
+        GEAR_SONIC_PLANNER_MODE_RUN => "run",
+        _ => "unknown",
+    }
+}
+
+fn gear_sonic_planner_status_from_command(command_data: &[f32]) -> Option<ReportPlannerStatus> {
+    if command_data.len() < 2 {
+        return None;
+    }
+
+    let planar_speed_mps = command_data[0].hypot(command_data[1]);
+    let (mode_id, target_vel_mps) = if planar_speed_mps <= 0.01 {
+        (GEAR_SONIC_PLANNER_MODE_IDLE, None)
+    } else {
+        let target_vel_mps = planar_speed_mps.clamp(
+            GEAR_SONIC_MIN_MOVING_SPEED_MPS,
+            GEAR_SONIC_RUN_COMMAND_MAX_MPS,
+        );
+        let mode_id = if target_vel_mps < GEAR_SONIC_WALK_COMMAND_MIN_MPS {
+            GEAR_SONIC_PLANNER_MODE_SLOW_WALK
+        } else if target_vel_mps < GEAR_SONIC_RUN_COMMAND_MIN_MPS {
+            GEAR_SONIC_PLANNER_MODE_WALK
+        } else {
+            GEAR_SONIC_PLANNER_MODE_RUN
+        };
+        (mode_id, Some(target_vel_mps))
+    };
+
+    Some(ReportPlannerStatus {
+        mode_id,
+        mode_name: gear_sonic_mode_name(mode_id).to_owned(),
+        target_vel_mps,
+        planar_speed_mps,
+    })
+}
+
+fn planner_status_for_command(
+    policy_name: &str,
+    runtime_command: &ParsedRuntimeCommand,
+    command_data: &[f32],
+) -> Option<ReportPlannerStatus> {
+    if policy_name == "gear_sonic"
+        && matches!(
+            runtime_command,
+            ParsedRuntimeCommand::Velocity(_) | ParsedRuntimeCommand::VelocitySchedule(_)
+        )
+    {
+        gear_sonic_planner_status_from_command(command_data)
+    } else {
+        None
+    }
+}
+
+fn print_velocity_monitor(snapshot: &VelocityMonitorSnapshot) {
+    let band_state = match snapshot.sample.elastic_band_enabled {
+        Some(true) => "enabled",
+        Some(false) => "disabled",
+        None => "n/a",
+    };
+    let planner_mode = snapshot
+        .sample
+        .planner_status
+        .as_ref()
+        .map_or("n/a", |status| status.mode_name.as_str());
+    let planner_target = snapshot
+        .sample
+        .planner_status
+        .as_ref()
+        .and_then(|status| status.target_vel_mps)
+        .map_or_else(|| "n/a".to_owned(), |target| format!("{target:.2}"));
+    println!(
+        "velocity monitor: planner_mode={planner_mode}, planner_target={planner_target} m/s, cmd_vx={:.2} m/s, actual_vx_sim={:.2} m/s, actual_vx_wall={:.2} m/s, rt={:.2}x, vx_rmse={:.2} m/s, wall_vx_rmse={:.2} m/s, support_band={band_state}",
+        snapshot.sample.command[0],
+        snapshot.sample.actual_vx_mps,
+        snapshot.sample.actual_wall_vx_mps,
+        snapshot.metrics.real_time_factor,
+        snapshot.metrics.vx_rmse_mps,
+        snapshot.metrics.wall_vx_rmse_mps,
+    );
+    if snapshot.support_band_hint {
+        println!(
+            "velocity monitor: support band is enabled while a nonzero planar velocity is commanded; press 9 before judging walking speed"
+        );
+    }
 }
 
 fn yaw_from_rotation_xyzw(rotation_xyzw: [f32; 4]) -> f32 {
@@ -1557,6 +1902,7 @@ fn world_to_body_planar_delta(
 fn run_control_loop_inner<T: RobotTransport + ReportTelemetryProvider>(
     transport: &mut T,
     policy: &dyn WbcPolicy,
+    policy_name: &str,
     robot: &RobotConfig,
     comm: &CommConfig,
     runtime_command: &ParsedRuntimeCommand,
@@ -1568,8 +1914,9 @@ fn run_control_loop_inner<T: RobotTransport + ReportTelemetryProvider>(
     report_frames: &mut Vec<ReportFrame>,
     report_max_frames: Option<usize>,
     #[cfg(feature = "vis")] visualizer: &mut Option<RerunVisualizer>,
-) -> Result<(usize, usize, Duration), String> {
+) -> Result<(usize, usize, Duration, Option<VelocityTrackingMetrics>), String> {
     let period = Duration::from_secs_f64(1.0 / f64::from(comm.frequency_hz));
+    let loop_started_at = Instant::now();
 
     let mut ticks: usize = 0;
     let mut dropped_frames: usize = 0;
@@ -1577,6 +1924,7 @@ fn run_control_loop_inner<T: RobotTransport + ReportTelemetryProvider>(
     let mut policy_engaged = !startup_config.enabled();
     let mut pending_policy_engage = false;
     let mut init_pose_start: Option<(Instant, Vec<f32>)> = None;
+    let mut velocity_monitor = VelocityTrackingMonitor::new(runtime_command);
 
     if startup_config.require_engage {
         println!(
@@ -1662,7 +2010,9 @@ fn run_control_loop_inner<T: RobotTransport + ReportTelemetryProvider>(
         };
         let base_pose = transport.report_base_pose();
         let sim_time_secs = transport.report_sim_time_secs(tick_index, comm.frequency_hz);
+        let wall_time_secs = loop_started_at.elapsed().as_secs_f64();
         let replay_state = transport.report_mujoco_state();
+        let elastic_band_enabled = transport.report_elastic_band_enabled();
         let mut captured_tick: Option<ReplayFrame> = None;
 
         run_control_tick(transport, command.clone(), |obs| {
@@ -1701,9 +2051,16 @@ fn run_control_loop_inner<T: RobotTransport + ReportTelemetryProvider>(
             captured_tick = Some(ReplayFrame {
                 tick: tick_index,
                 sim_time_secs,
+                wall_time_secs,
                 command_data: tick_command_data.clone(),
                 phase_name: runtime_command.phase_name_for_tick(tick_index, comm.frequency_hz),
                 base_pose,
+                elastic_band_enabled,
+                planner_status: planner_status_for_command(
+                    policy_name,
+                    runtime_command,
+                    &tick_command_data,
+                ),
                 actual_positions: obs.joint_positions.clone(),
                 actual_velocities: obs.joint_velocities.clone(),
                 target_positions: output
@@ -1722,6 +2079,10 @@ fn run_control_loop_inner<T: RobotTransport + ReportTelemetryProvider>(
         let cycle_elapsed = cycle_start.elapsed();
 
         if let Some(frame) = captured_tick {
+            if let Some(snapshot) = velocity_monitor.observe(&frame) {
+                print_velocity_monitor(&snapshot);
+            }
+
             #[cfg(feature = "vis")]
             if let Some(vis) = visualizer.as_mut() {
                 vis.advance_frame();
@@ -1770,7 +2131,12 @@ fn run_control_loop_inner<T: RobotTransport + ReportTelemetryProvider>(
         }
     }
 
-    Ok((ticks, dropped_frames, inference_total))
+    Ok((
+        ticks,
+        dropped_frames,
+        inference_total,
+        velocity_monitor.finish(),
+    ))
 }
 
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
@@ -1819,15 +2185,16 @@ fn run_control_loop(
 
     // Transport priority: hardware → sim (if feature enabled) → synthetic.
     #[cfg(feature = "sim")]
-    let (ticks, dropped_frames, inference_total, sent_count, replay_transport) = {
+    let (ticks, dropped_frames, inference_total, velocity_tracking, sent_count, replay_transport) = {
         if let Some(hw_cfg) = hardware {
             let mut transport =
                 UnitreeG1Transport::connect(hw_cfg, robot.clone(), comm.frequency_hz)
                     .map_err(|e| format!("hardware transport connect failed: {e}"))?;
             println!("unitree g1 hardware transport active");
-            let (ticks, dropped, inf) = run_control_loop_inner(
+            let (ticks, dropped, inf, velocity_tracking) = run_control_loop_inner(
                 &mut transport,
                 policy,
+                policy_name,
                 robot,
                 comm,
                 runtime_command,
@@ -1845,6 +2212,7 @@ fn run_control_loop(
                 ticks,
                 dropped,
                 inf,
+                velocity_tracking,
                 ticks,
                 ReplayTransportMetadata::hardware("unitree_g1"),
             )
@@ -1860,9 +2228,10 @@ fn run_control_loop(
                 transport.model_variant(),
                 transport.uses_meshless_public_fallback()
             );
-            let (ticks, dropped, inf) = run_control_loop_inner(
+            let (ticks, dropped, inf, velocity_tracking) = run_control_loop_inner(
                 &mut transport,
                 policy,
+                policy_name,
                 robot,
                 comm,
                 runtime_command,
@@ -1880,6 +2249,7 @@ fn run_control_loop(
                 ticks,
                 dropped,
                 inf,
+                velocity_tracking,
                 ticks,
                 ReplayTransportMetadata {
                     kind: "mujoco".to_owned(),
@@ -1894,9 +2264,10 @@ fn run_control_loop(
             )
         } else {
             let mut transport = SyntheticTransport::new(robot.default_pose.clone());
-            let (ticks, dropped, inf) = run_control_loop_inner(
+            let (ticks, dropped, inf, velocity_tracking) = run_control_loop_inner(
                 &mut transport,
                 policy,
+                policy_name,
                 robot,
                 comm,
                 runtime_command,
@@ -1914,6 +2285,7 @@ fn run_control_loop(
                 ticks,
                 dropped,
                 inf,
+                velocity_tracking,
                 transport.sent_commands(),
                 ReplayTransportMetadata::synthetic(),
             )
@@ -1921,15 +2293,16 @@ fn run_control_loop(
     };
 
     #[cfg(not(feature = "sim"))]
-    let (ticks, dropped_frames, inference_total, sent_count, replay_transport) = {
+    let (ticks, dropped_frames, inference_total, velocity_tracking, sent_count, replay_transport) = {
         if let Some(hw_cfg) = hardware {
             let mut transport =
                 UnitreeG1Transport::connect(hw_cfg, robot.clone(), comm.frequency_hz)
                     .map_err(|e| format!("hardware transport connect failed: {e}"))?;
             println!("unitree g1 hardware transport active");
-            let (ticks, dropped, inf) = run_control_loop_inner(
+            let (ticks, dropped, inf, velocity_tracking) = run_control_loop_inner(
                 &mut transport,
                 policy,
+                policy_name,
                 robot,
                 comm,
                 runtime_command,
@@ -1947,14 +2320,16 @@ fn run_control_loop(
                 ticks,
                 dropped,
                 inf,
+                velocity_tracking,
                 ticks,
                 ReplayTransportMetadata::hardware("unitree_g1"),
             )
         } else {
             let mut transport = SyntheticTransport::new(robot.default_pose.clone());
-            let (ticks, dropped, inf) = run_control_loop_inner(
+            let (ticks, dropped, inf, velocity_tracking) = run_control_loop_inner(
                 &mut transport,
                 policy,
+                policy_name,
                 robot,
                 comm,
                 runtime_command,
@@ -1972,6 +2347,7 @@ fn run_control_loop(
                 ticks,
                 dropped,
                 inf,
+                velocity_tracking,
                 transport.sent_commands(),
                 ReplayTransportMetadata::synthetic(),
             )
@@ -1991,18 +2367,17 @@ fn run_control_loop(
     let achieved_frequency_hz = (ticks as f64) / run_time_secs;
     #[allow(clippy::cast_precision_loss)]
     let average_inference_ms = (inference_total.as_secs_f64() * 1_000.0) / (ticks as f64);
-    let velocity_tracking =
-        compute_velocity_tracking_metrics(&replay_frames, runtime_command, comm.frequency_hz);
-
     println!(
         "runtime metrics: ticks={ticks}, sent_commands={sent_count}, avg_inference_ms={average_inference_ms:.3}, achieved_hz={achieved_frequency_hz:.2}, dropped_frames={dropped_frames}",
     );
     if let Some(tracking) = &velocity_tracking {
         println!(
-            "velocity tracking: vx_rmse={:.3} m/s, vy_rmse={:.3} m/s, yaw_rmse={:.3} rad/s, forward_distance={:.3} m, heading_change={:.1} deg",
+            "velocity tracking: vx_rmse={:.3} m/s, wall_vx_rmse={:.3} m/s, actual_vx_mean={:.3} m/s, actual_vx_wall_mean={:.3} m/s, real_time_factor={:.2}x, forward_distance={:.3} m, heading_change={:.1} deg",
             tracking.vx_rmse_mps,
-            tracking.vy_rmse_mps,
-            tracking.yaw_rate_rmse_rad_s,
+            tracking.wall_vx_rmse_mps,
+            tracking.actual_vx_mean_mps,
+            tracking.actual_wall_vx_mean_mps,
+            tracking.real_time_factor,
             tracking.forward_distance_m,
             tracking.heading_change_deg,
         );
@@ -2255,9 +2630,12 @@ mod tests {
         ReplayFrame {
             tick,
             sim_time_secs: f64::from(tick_u32) * 0.02,
+            wall_time_secs: f64::from(tick_u32) * 0.02,
             command_data,
             phase_name: None,
             base_pose,
+            elastic_band_enabled: None,
+            planner_status: None,
             actual_positions: vec![],
             actual_velocities: vec![],
             target_positions: vec![],
@@ -2602,6 +2980,7 @@ mod tests {
         let metrics = run_control_loop_inner(
             &mut transport,
             &policy,
+            "test_policy",
             &robot,
             &comm,
             &runtime_command,
@@ -2657,6 +3036,7 @@ mod tests {
         let metrics = run_control_loop_inner(
             &mut transport,
             &policy,
+            "test_policy",
             &robot,
             &comm,
             &runtime_command,
@@ -3328,9 +3708,12 @@ standing_placeholder_tracking = true
             },
             frames: vec![ReportFrame {
                 tick: 0,
+                wall_time_secs: 0.0,
                 command_data: vec![0.2, 0.0, 0.1],
                 phase_name: None,
                 base_pose: None,
+                elastic_band_enabled: None,
+                planner_status: None,
                 actual_positions: vec![0.1],
                 actual_velocities: vec![0.0],
                 target_positions: vec![0.1],
@@ -3453,6 +3836,132 @@ standing_placeholder_tracking = true
         assert_f64_approx_eq(metrics.forward_distance_m, 0.02);
         assert_f64_approx_eq(metrics.lateral_distance_m, 0.0);
         assert_f64_approx_eq(metrics.heading_change_deg, 0.0);
+    }
+
+    #[test]
+    fn compute_velocity_tracking_metrics_uses_recorded_sim_time() {
+        let runtime_command = ParsedRuntimeCommand::Velocity([1.0, 0.0, 0.0]);
+        let mut frames = vec![
+            replay_frame(
+                0,
+                vec![1.0, 0.0, 0.0],
+                Some(ReportBasePose {
+                    position_world: [0.0, 0.0, 0.0],
+                    rotation_xyzw: [0.0, 0.0, 0.0, 1.0],
+                }),
+            ),
+            replay_frame(
+                1,
+                vec![1.0, 0.0, 0.0],
+                Some(ReportBasePose {
+                    position_world: [0.01, 0.0, 0.0],
+                    rotation_xyzw: [0.0, 0.0, 0.0, 1.0],
+                }),
+            ),
+            replay_frame(
+                2,
+                vec![1.0, 0.0, 0.0],
+                Some(ReportBasePose {
+                    position_world: [0.02, 0.0, 0.0],
+                    rotation_xyzw: [0.0, 0.0, 0.0, 1.0],
+                }),
+            ),
+        ];
+        frames[0].sim_time_secs = 0.0;
+        frames[1].sim_time_secs = 0.01;
+        frames[2].sim_time_secs = 0.02;
+
+        let metrics = compute_velocity_tracking_metrics(&frames, &runtime_command, 50)
+            .expect("forward-motion metrics should be computed");
+        assert_eq!(metrics.sample_count, 2);
+        assert_f64_approx_eq(metrics.vx_rmse_mps, 0.0);
+        assert_f64_approx_eq(metrics.forward_distance_m, 0.02);
+    }
+
+    #[test]
+    fn gear_sonic_planner_status_reports_mode_bands() {
+        let idle = gear_sonic_planner_status_from_command(&[0.0, 0.0, 0.0])
+            .expect("idle velocity should have planner status");
+        assert_eq!(idle.mode_id, GEAR_SONIC_PLANNER_MODE_IDLE);
+        assert_eq!(idle.mode_name, "idle");
+        assert_eq!(idle.target_vel_mps, None);
+
+        let slow_walk = gear_sonic_planner_status_from_command(&[0.6, 0.0, 0.0])
+            .expect("slow walk velocity should have planner status");
+        assert_eq!(slow_walk.mode_id, GEAR_SONIC_PLANNER_MODE_SLOW_WALK);
+        assert_eq!(slow_walk.mode_name, "slow_walk");
+        assert_eq!(slow_walk.target_vel_mps, Some(0.6));
+
+        let walk = gear_sonic_planner_status_from_command(&[1.0, 0.0, 0.0])
+            .expect("walk velocity should have planner status");
+        assert_eq!(walk.mode_id, GEAR_SONIC_PLANNER_MODE_WALK);
+        assert_eq!(walk.mode_name, "walk");
+        assert_eq!(walk.target_vel_mps, Some(1.0));
+
+        let run = gear_sonic_planner_status_from_command(&[1.6, 0.0, 0.0])
+            .expect("run velocity should have planner status");
+        assert_eq!(run.mode_id, GEAR_SONIC_PLANNER_MODE_RUN);
+        assert_eq!(run.mode_name, "run");
+        assert_eq!(run.target_vel_mps, Some(1.6));
+    }
+
+    #[test]
+    fn planner_status_is_only_reported_for_gear_sonic_velocity_commands() {
+        let velocity_command = ParsedRuntimeCommand::Velocity([1.0, 0.0, 0.0]);
+        assert!(
+            planner_status_for_command("gear_sonic", &velocity_command, &[1.0, 0.0, 0.0]).is_some()
+        );
+        assert!(
+            planner_status_for_command("decoupled_wbc", &velocity_command, &[1.0, 0.0, 0.0])
+                .is_none()
+        );
+
+        let motion_tokens = ParsedRuntimeCommand::MotionTokens(vec![0.0]);
+        assert!(
+            planner_status_for_command("gear_sonic", &motion_tokens, &[1.0, 0.0, 0.0]).is_none()
+        );
+    }
+
+    #[test]
+    fn velocity_monitor_collects_without_report_capture() {
+        let runtime_command = ParsedRuntimeCommand::Velocity([1.0, 0.0, 0.0]);
+        let mut monitor = VelocityTrackingMonitor::new(&runtime_command);
+        let mut previous = replay_frame(
+            0,
+            vec![1.0, 0.0, 0.0],
+            Some(ReportBasePose {
+                position_world: [0.0, 0.0, 0.0],
+                rotation_xyzw: [0.0, 0.0, 0.0, 1.0],
+            }),
+        );
+        previous.elastic_band_enabled = Some(true);
+        let mut current = replay_frame(
+            1,
+            vec![1.0, 0.0, 0.0],
+            Some(ReportBasePose {
+                position_world: [0.02, 0.0, 0.0],
+                rotation_xyzw: [0.0, 0.0, 0.0, 1.0],
+            }),
+        );
+        current.sim_time_secs = 0.02;
+        current.wall_time_secs = 0.04;
+        current.elastic_band_enabled = Some(true);
+
+        assert!(monitor.observe(&previous).is_none());
+        let snapshot = monitor
+            .observe(&current)
+            .expect("support-band hint should force a live monitor sample");
+        assert!(snapshot.support_band_hint);
+
+        let metrics = monitor
+            .finish()
+            .expect("monitor should compute metrics without replay capture");
+        assert_eq!(metrics.sample_count, 1);
+        assert_f64_approx_eq(metrics.vx_rmse_mps, 0.0);
+        assert_f64_approx_eq(metrics.wall_vx_rmse_mps, 0.5);
+        assert_f64_approx_eq(metrics.real_time_factor, 0.5);
+        assert_f64_approx_eq(metrics.actual_vx_mean_mps, 1.0);
+        assert_f64_approx_eq(metrics.actual_wall_vx_mean_mps, 0.5);
     }
 
     #[test]
