@@ -1,0 +1,12 @@
+Component: epaint_default_fonts - default egui font assets
+Upstream:  https://github.com/emilk/egui/tree/main/crates/epaint_default_fonts
+SPDX-License-Identifier: OFL-1.1
+Used by:   robowbc-sim through mujoco-rs / egui viewer dependencies.
+
+epaint_default_fonts bundles NotoEmoji-Regular.ttf under the SIL Open Font
+License 1.1. The full canonical OFL-1.1 text is in ./OFL-1.1.txt in this
+directory.
+
+Copyright notice from upstream font metadata:
+
+   Copyright 2013 Google Inc. All Rights Reserved.

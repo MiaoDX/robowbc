@@ -8,9 +8,10 @@ runtime.
 The layout follows SPDX / [REUSE](https://reuse.software/) convention:
 one file per `<component>-<SPDX-license-id>.txt`, plus shared canonical
 license texts (`Apache-2.0.txt`, `MIT.txt`, `BSD-3-Clause.txt`,
-`EPL-2.0.txt`) that the per-component files reference. Per-component
-files document the upstream URL, the consuming robowbc crate, and the
-SPDX identifier for that component.
+`EPL-2.0.txt`, `OFL-1.1.txt`, `Ubuntu-font-1.0.txt`) that the
+per-component files reference. Per-component files document the upstream
+URL, the consuming robowbc crate, and the SPDX identifier for that
+component.
 
 ## Index
 
@@ -25,6 +26,8 @@ SPDX identifier for that component.
 | crossterm                | [`crossterm-MIT.txt`](crossterm-MIT.txt)                           | https://github.com/crossterm-rs/crossterm                      | Cross-platform terminal input, MIT.                                                                 |
 | rerun (Apache)           | [`rerun-Apache-2.0.txt`](rerun-Apache-2.0.txt)                     | https://github.com/rerun-io/rerun                              | Visualization SDK + viewer, dual licensed `Apache-2.0 OR MIT`.                                      |
 | rerun (MIT)              | [`rerun-MIT.txt`](rerun-MIT.txt)                                   | https://github.com/rerun-io/rerun                              | MIT branch of the dual license.                                                                     |
+| epaint default fonts (OFL) | [`epaint_default_fonts-OFL-1.1.txt`](epaint_default_fonts-OFL-1.1.txt) | https://github.com/emilk/egui/tree/main/crates/epaint_default_fonts | Default egui viewer font assets pulled transitively through mujoco-rs.                              |
+| epaint default fonts (Ubuntu) | [`epaint_default_fonts-Ubuntu-font-1.0.txt`](epaint_default_fonts-Ubuntu-font-1.0.txt) | https://github.com/emilk/egui/tree/main/crates/epaint_default_fonts | Ubuntu Light font asset pulled transitively through mujoco-rs.                                      |
 | unitree_sdk2 IDL types   | [`unitree_sdk2-BSD-3-Clause.txt`](unitree_sdk2-BSD-3-Clause.txt)   | https://github.com/unitreerobotics/unitree_sdk2                | Source of the IDL message shapes ported into `crates/unitree-hg-idl/`.                              |
 | NVIDIA Open Model License| [`nvidia-open-model-license.txt`](nvidia-open-model-license.txt)   | https://developer.download.nvidia.com/licenses/                | Governs the GEAR-SONIC weights — fetched at runtime from HuggingFace, **never bundled in this repo**. |
 
@@ -43,7 +46,7 @@ When you add a third-party dependency in a PR:
 3. If the SPDX expression is not already represented (no
    `LICENSES/<SPDX>.txt`), add the canonical text for it.
 4. Add a row to the index table above.
-5. Update the allowlist in `.github/workflows/license.yml` if the new
+5. Update the allowlist in [`../deny.toml`](../deny.toml) if the new
    SPDX identifier is not already accepted.
 6. If the new dependency is **strong-copyleft** (GPL-3.0-only,
    AGPL-3.0-only, etc.), pause and consult a human reviewer — robowbc
@@ -57,6 +60,8 @@ When you add a third-party dependency in a PR:
 * Weak copyleft (EPL-2.0, MPL-2.0, LGPL-3.0): accepted with attribution.
   CycloneDDS is the most prominent example; dual-licensed under
   `EPL-2.0 OR BSD-3-Clause`, redistributors may pick the BSD branch.
+* Font licenses (OFL-1.1, Ubuntu-font-1.0): accepted for bundled UI font
+  assets with attribution and license text preservation.
 * Strong copyleft (GPL, AGPL): rejected by CI.
 * Model licenses (NVIDIA Open Model License, etc.): governed
   per-bundle; weights are fetched at runtime, not redistributed.

@@ -1,0 +1,12 @@
+Component: epaint_default_fonts - default egui font assets
+Upstream:  https://github.com/emilk/egui/tree/main/crates/epaint_default_fonts
+SPDX-License-Identifier: Ubuntu-font-1.0
+Used by:   robowbc-sim through mujoco-rs / egui viewer dependencies.
+
+epaint_default_fonts bundles Ubuntu-Light.ttf under the Ubuntu Font Licence
+1.0. The full canonical Ubuntu Font Licence 1.0 text is in
+./Ubuntu-font-1.0.txt in this directory.
+
+Copyright notice from upstream font metadata:
+
+   Copyright 2011 Canonical Ltd.

@@ -53,6 +53,10 @@ jobs:
             "LICENSES/crossterm-MIT.txt"
             "LICENSES/rerun-Apache-2.0.txt"
             "LICENSES/rerun-MIT.txt"
+            "LICENSES/OFL-1.1.txt"
+            "LICENSES/Ubuntu-font-1.0.txt"
+            "LICENSES/epaint_default_fonts-OFL-1.1.txt"
+            "LICENSES/epaint_default_fonts-Ubuntu-font-1.0.txt"
             "LICENSES/unitree_sdk2-BSD-3-Clause.txt"
             "LICENSES/nvidia-open-model-license.txt"
           )
