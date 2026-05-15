@@ -54,7 +54,18 @@ licensed code is fine — the obligation only attaches to changed files.
   source-disclosure obligation is satisfied by linking back to
   upstream.
 
-### 3. Model licenses
+### 3. Bundled UI font licenses
+
+SIL Open Font License 1.1 and Ubuntu Font Licence 1.0 apply to default
+font assets pulled in by egui through the MuJoCo viewer stack. These
+licenses allow bundling and redistribution with robowbc binaries as long
+as the license text and notices are preserved.
+
+* **epaint_default_fonts** (`OFL-1.1`, `Ubuntu-font-1.0`, plus
+  `MIT OR Apache-2.0`) — default egui fonts used by the viewer path
+  behind `mujoco-rs`.
+
+### 4. Model licenses
 
 These govern *trained model weights*, not source code. They are
 distinct from any of robowbc's software licenses and have their own

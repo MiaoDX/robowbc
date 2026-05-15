@@ -67,6 +67,9 @@ allow = [
     "CDLA-Permissive-2.0",
     "BSL-1.0",
     "OpenSSL",
+    # Font licenses pulled by egui's default viewer fonts through mujoco-rs.
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
 ]
 confidence-threshold = 0.8
 exceptions = []

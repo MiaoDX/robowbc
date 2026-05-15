@@ -2905,7 +2905,7 @@ mod tests {
         assert!(pending_policy_engage_is_ready(
             startup_config,
             pending_policy_engage,
-            Duration::from_millis(3_000)
+            Duration::from_secs(3)
         ));
     }
 
