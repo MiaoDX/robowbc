@@ -32,6 +32,26 @@ cargo test -p robowbc-sim --features mujoco-auto-download \
 Report the exact blocker if MuJoCo download, dynamic linking, EGL/OpenGL, or
 display access prevents this test from running.
 
+## Speed Monitor
+
+The CLI prints a live `velocity monitor` line for velocity-command runs. The
+line includes `planner_mode` and `planner_target` for GEAR-Sonic, then the
+commanded-vs-actual velocity metrics. Read `actual_vx_sim` as policy tracking
+in simulated time and `actual_vx_wall` plus `rt` as what a human sees in real
+time. If `rt` is well below `1.0x`, the control/viewer loop is running slower
+than real time even if simulated-time tracking is correct.
+
+If `support_band=enabled` while a nonzero planar velocity is commanded, press
+`9` before judging walking speed. The protected demo intentionally starts with
+the fixed GR00T support band enabled, and that band can resist translational
+motion until it is toggled off.
+
+GEAR-Sonic still uses one controller stack for these commands. The live planner
+is conditioned by mode plus `target_vel`, movement direction, and facing
+direction. RoboWBC maps `0.2..0.8 m/s` to slow-walk mode, `0.8..1.5 m/s` to
+walk mode, and `1.5..3.0 m/s` to run mode while passing the requested planar
+speed as `target_vel`.
+
 ## Manual Demo Command
 
 The stable public entry point is:
